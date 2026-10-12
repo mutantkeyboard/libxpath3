@@ -256,7 +256,7 @@ int  xp3DeclareNamespace(xp3StaticContext *sctx, const xmlChar *prefix, const xm
 int  xp3DeclareVariable(xp3StaticContext *sctx, const xmlChar *nsUri, const xmlChar *localName);
 int  xp3RegisterFunction(xp3StaticContext *sctx, const char *signature,
                          xp3FunctionImpl impl, void *userData);
-int  xp3SetLanguageLevel(xp3StaticContext *sctx, xp3LanguageLevel level);  /* XP3_XPATH_20, _30, _31 (default) */
+int  xp3SetStaticContextLanguageLevel(xp3StaticContext *sctx, xp3LanguageLevel level);  /* XP3_XPATH_20, _30, _31 (default) */
 xp3Expr *xp3Compile(xp3StaticContext *sctx, const xmlChar *expr, xp3Error **err);
 void xp3FreeExpr(xp3Expr *expr);
 

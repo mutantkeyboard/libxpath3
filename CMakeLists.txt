@@ -28,6 +28,7 @@ configure_file(
 )
 
 set(XP3_SOURCES
+    xp3context.c
     xp3error.c
     xpath3.c
 )
@@ -60,14 +61,16 @@ if(XP3_BUILD_TESTS)
 
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
-    add_executable(testerror test/testerror.c ${XP3_SOURCES})
-    target_compile_definitions(testerror PRIVATE XP3_STATIC)
-    target_include_directories(testerror PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_BINARY_DIR}/include
-    )
-    target_link_libraries(testerror PRIVATE LibXml2::LibXml2)
-    add_test(NAME error COMMAND testerror)
+    foreach(name error context)
+        add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
+        target_compile_definitions(test${name} PRIVATE XP3_STATIC)
+        target_include_directories(test${name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_BINARY_DIR}/include
+        )
+        target_link_libraries(test${name} PRIVATE LibXml2::LibXml2)
+        add_test(NAME ${name} COMMAND test${name})
+    endforeach()
 endif()
 
 if(XP3_BUILD_DOCS)
