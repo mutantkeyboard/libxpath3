@@ -1,0 +1,91 @@
+# CI for libxpath3.
+#
+# All jobs use the public Fedora image, so no project-specific image is needed.
+# Windows jobs (MSVC, MinGW) are added once it is clear whether this project
+# can use GNOME's Windows runners (tag "win32-ps").
+
+stages:
+  - build
+  - docs
+
+default:
+  image: fedora:latest
+  before_script:
+    - >
+      dnf install -y --setopt=install_weak_deps=False
+      gcc clang compiler-rt libasan libubsan
+      meson ninja-build cmake pkgconf-pkg-config
+      libxml2-devel doxygen git
+
+variables:
+  UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+
+.meson:
+  stage: build
+  script:
+    - meson setup build --werror $MESON_ARGS
+    - meson compile -C build
+    - meson test -C build --print-errorlogs
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+    paths:
+      - build/meson-logs/
+
+# Default configuration: C99, warning level 3, warnings as errors.
+gcc:
+  extends: .meson
+  variables:
+    CC: gcc
+
+# Strict C99: no extensions, no VLAs.
+gcc:c99:
+  extends: .meson
+  variables:
+    CC: gcc
+    MESON_ARGS: "-Dc_std=c99"
+    CFLAGS: "-pedantic-errors -Werror=vla"
+
+clang:asan:
+  extends: .meson
+  variables:
+    CC: clang
+    MESON_ARGS: "-Db_sanitize=address,undefined -Db_lundef=false"
+    ASAN_OPTIONS: "detect_leaks=1"
+
+cmake:
+  stage: build
+  script:
+    - cmake -S . -B build-cmake -G Ninja -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+    - cmake --build build-cmake
+    - ctest --test-dir build-cmake --output-on-failure
+
+# Build and test against libxml2 master, to catch upstream changes early.
+libxml2:master:
+  stage: build
+  variables:
+    CC: gcc
+    LIBXML2_PREFIX: "$CI_PROJECT_DIR/libxml2-install"
+  script:
+    - git clone --depth 1 https://gitlab.gnome.org/GNOME/libxml2.git libxml2-src
+    - meson setup libxml2-build libxml2-src --prefix="$LIBXML2_PREFIX" --libdir=lib -Dpython=disabled -Ddocs=disabled
+    - meson install -C libxml2-build
+    - export PKG_CONFIG_PATH="$LIBXML2_PREFIX/lib/pkgconfig"
+    - export LD_LIBRARY_PATH="$LIBXML2_PREFIX/lib"
+    - meson setup build --werror
+    - meson compile -C build
+    - meson test -C build --print-errorlogs
+    - ./build/test/testbasic
+
+docs:
+  stage: docs
+  needs: []
+  variables:
+    DOXYGEN_WARN_AS_ERROR: "FAIL_ON_WARNINGS"
+  script:
+    - meson setup build -Ddocs=enabled
+    - meson compile -C build
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - build/doc/html/

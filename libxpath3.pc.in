@@ -1,0 +1,10 @@
+prefix=@prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: libxpath3
+Description: XPath 3.1 for libxml2 documents
+Version: @PROJECT_VERSION@
+Requires: libxml-2.0
+Libs: -L${libdir} -lxpath3
+Cflags: -I${includedir}

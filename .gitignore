@@ -1,0 +1,8 @@
+/build*/
+/_build*/
+.cache/
+compile_commands.json
+.DS_Store
+
+# Editor setup stays local
+.vscode/

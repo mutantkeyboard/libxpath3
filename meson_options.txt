@@ -1,0 +1,5 @@
+option('docs',
+  type: 'feature',
+  value: 'auto',
+  description: 'Build API documentation with Doxygen'
+)
