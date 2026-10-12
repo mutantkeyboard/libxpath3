@@ -16,9 +16,11 @@
 #define XP3_XPATH3_H
 
 #include <libxpath3/xp3version.h>
+#include <libxml/tree.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -28,22 +30,48 @@ extern "C" {
  * marked with this macro are exported.
  */
 #if defined(_WIN32) && !defined(XP3_STATIC)
-  #ifdef IN_LIBXPATH3
-    #define XP3PUBFUN __declspec(dllexport)
-  #else
-    #define XP3PUBFUN __declspec(dllimport)
-  #endif
-#elif defined(__GNUC__) && defined(IN_LIBXPATH3)
-  #define XP3PUBFUN __attribute__((visibility("default")))
+#ifdef IN_LIBXPATH3
+#define XP3PUBFUN __declspec(dllexport)
 #else
-  #define XP3PUBFUN
+#define XP3PUBFUN __declspec(dllimport)
+#endif
+#elif defined(__GNUC__) && defined(IN_LIBXPATH3)
+#define XP3PUBFUN __attribute__((visibility("default")))
+#else
+#define XP3PUBFUN
 #endif
 
-XP3PUBFUN const char *
-xp3GetVersion(void);
+  typedef struct _xp3Error xp3Error;
+  typedef struct _xp3StaticContext xp3StaticContext;
 
-XP3PUBFUN int
-xp3GetVersionNumber(void);
+  // Specify the language level of the XPath expression. The default is XP3_XPATH_31.
+  typedef enum
+  {
+    XP3_XPATH_20 = 20,
+    XP3_XPATH_30 = 30,
+    XP3_XPATH_31 = 31
+  } xp3LanguageLevel;
+
+  /* Version */
+  XP3PUBFUN const char *
+  xp3GetVersion(void);
+
+  XP3PUBFUN int
+  xp3GetVersionNumber(void);
+
+  /* Errors */
+  XP3PUBFUN const xmlChar *xp3ErrorCode(const xp3Error *error);
+  XP3PUBFUN const xmlChar *xp3ErrorNamespace(const xp3Error *error);
+  XP3PUBFUN const xmlChar *xp3ErrorMessage(const xp3Error *error);
+  XP3PUBFUN int xp3ErrorLine(const xp3Error *error);
+  XP3PUBFUN int xp3ErrorColumn(const xp3Error *error);
+  XP3PUBFUN void xp3ErrorFree(xp3Error *error);
+
+  /* Static context */
+  XP3PUBFUN xp3StaticContext *xp3NewStaticContext(void);
+  XP3PUBFUN void xp3FreeStaticContext(xp3StaticContext *ctx);
+  XP3PUBFUN int xp3SetStaticContextLanguageLevel(xp3StaticContext *ctx, xp3LanguageLevel level);
+  XP3PUBFUN int xp3DeclareNamespace(xp3StaticContext *ctx, const xmlChar *prefix, const xmlChar *uri);
 
 #ifdef __cplusplus
 }

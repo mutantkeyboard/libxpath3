@@ -27,9 +27,12 @@ configure_file(
     @ONLY
 )
 
-add_library(xpath3
+set(XP3_SOURCES
+    xp3error.c
     xpath3.c
 )
+
+add_library(xpath3 ${XP3_SOURCES})
 target_include_directories(xpath3 PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
@@ -54,6 +57,17 @@ if(XP3_BUILD_TESTS)
     add_executable(testbasic test/testbasic.c)
     target_link_libraries(testbasic PRIVATE xpath3)
     add_test(NAME basic COMMAND testbasic)
+
+    # Tests of internal functions compile the library sources directly,
+    # because the shared library only exports the public API.
+    add_executable(testerror test/testerror.c ${XP3_SOURCES})
+    target_compile_definitions(testerror PRIVATE XP3_STATIC)
+    target_include_directories(testerror PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+    )
+    target_link_libraries(testerror PRIVATE LibXml2::LibXml2)
+    add_test(NAME error COMMAND testerror)
 endif()
 
 if(XP3_BUILD_DOCS)
