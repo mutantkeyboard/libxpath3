@@ -105,29 +105,29 @@ lexIsDigit(int b) {
  */
 static int
 lexCharAt(const xp3Lexer *lex, size_t pos, int *len) {
-    int c;
-    int n;
+    int codePoint;
+    int byteLen;
 
     *len = 0;
     if (pos >= lex->length)
         return(LEX_END);
 
     if (lex->input[pos] < 0x80) {
-        c = lex->input[pos];
-        n = 1;
+        codePoint = lex->input[pos];
+        byteLen = 1;
     } else {
         size_t avail = lex->length - pos;
 
-        n = (avail > 4) ? 4 : (int) avail;
-        c = xmlGetUTF8Char(lex->input + pos, &n);
-        if (c < 0)
+        byteLen = (avail > 4) ? 4 : (int) avail;
+        codePoint = xmlGetUTF8Char(lex->input + pos, &byteLen);
+        if (codePoint < 0)
             return(LEX_INVALID);
     }
 
-    if (!xp3IsXmlChar(c))
+    if (!xp3IsXmlChar(codePoint))
         return(LEX_INVALID);
-    *len = n;
-    return(c);
+    *len = byteLen;
+    return(codePoint);
 }
 
 /* Advance over bytes that contain no line end, chars characters long. */

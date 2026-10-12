@@ -155,7 +155,12 @@ static void
 testAllocationFailures(void) {
     int i;
 
-    xp3TestAllocInstall();
+    if (!xp3TestAllocInstall()) {
+        printf("testcontext: allocation-failure tests skipped: this libxml2 "
+               "ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        return;
+    }
 
     /* Creating a context: every failure must return NULL without leaks. */
     for (i = 0; i < 1000; i++) {

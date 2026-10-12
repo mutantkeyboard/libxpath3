@@ -17,8 +17,13 @@
  */
 
 /* Install the failing allocator in libxml2. Nothing fails until
- * xp3TestAllocFailAt() is called. */
-void
+ * xp3TestAllocFailAt() is called.
+ *
+ * Returns 1 if libxml2 uses the allocator, 0 if it ignores
+ * xmlMemSetup(), as Apple's system libxml2 does. Tests should skip
+ * their allocation-failure part when it returns 0, and still call
+ * xp3TestAllocRestore(). */
+int
 xp3TestAllocInstall(void);
 
 /* Restore the allocator that was active before xp3TestAllocInstall(). */

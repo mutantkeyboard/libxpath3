@@ -20,6 +20,7 @@ WARN_AS_ERROR          = $(DOXYGEN_WARN_AS_ERROR)
 INPUT                  = $(SOURCE_ROOT)doc/mainpage.md \
                          $(SOURCE_ROOT)include/libxpath3/xpath3.h \
                          $(BUILD_ROOT)include/libxpath3/xp3version.h \
+                         $(SOURCE_ROOT)xp3ast.c \
                          $(SOURCE_ROOT)xp3chars.c \
                          $(SOURCE_ROOT)xp3context.c \
                          $(SOURCE_ROOT)xp3error.c \
