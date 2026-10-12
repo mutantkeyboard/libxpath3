@@ -8,14 +8,13 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include <libxml/xmlmemory.h>
 #include <libxml/xmlerror.h>
 
 #include <libxpath3/xpath3.h>
 #include "private/xp3error.h"
+#include "testalloc.h"
 
 static int failures = 0;
 
@@ -32,38 +31,6 @@ strEq(const xmlChar *a, const char *b) {
     if ((a == NULL) || (b == NULL))
         return((a == NULL) && (b == NULL));
     return(strcmp((const char *) a, b) == 0);
-}
-
-/*
- * Allocator that fails the n-th allocation, to test the out-of-memory
- * paths. failAt < 0 means never fail.
- */
-static int allocCount;
-static int failAt = -1;
-
-static void *
-failingMalloc(size_t size) {
-    if ((failAt >= 0) && (allocCount++ == failAt))
-        return(NULL);
-    return(malloc(size));
-}
-
-static void *
-failingRealloc(void *ptr, size_t size) {
-    if ((failAt >= 0) && (allocCount++ == failAt))
-        return(NULL);
-    return(realloc(ptr, size));
-}
-
-static char *
-failingStrdup(const char *str) {
-    char *copy;
-    size_t len = strlen(str) + 1;
-
-    copy = failingMalloc(len);
-    if (copy != NULL)
-        memcpy(copy, str, len);
-    return(copy);
 }
 
 static void
@@ -140,44 +107,55 @@ testNoMemoryAndNull(void) {
 
 static void
 testAllocationFailures(void) {
-    xmlFreeFunc oldFree;
-    xmlMallocFunc oldMalloc;
-    xmlReallocFunc oldRealloc;
-    xmlStrdupFunc oldStrdup;
     int i;
 
-    xmlMemGet(&oldFree, &oldMalloc, &oldRealloc, &oldStrdup);
-    xmlMemSetup(free, failingMalloc, failingRealloc, failingStrdup);
+    xp3TestAllocInstall();
 
-    /* Fail each allocation in turn. Every call must return either a
-     * complete error or the shared out-of-memory error, without leaks. */
-    for (i = 0; i < 6; i++) {
+    /* Fail the 1st, 2nd, ... allocation until a run completes without
+     * an injected failure. Every run must return either a complete
+     * error or the shared out-of-memory error, without leaks. */
+    for (i = 0; i < 100; i++) {
         xp3Error *err;
         char expected[32];
 
         snprintf(expected, sizeof(expected), "message %d", i);
-        allocCount = 0;
-        failAt = i;
+        xp3TestAllocFailAt(i);
         err = xp3ErrorNew(XP3_ERR_XPST0003, 1, 1, "message %d", i);
-        check(err == xp3ErrorNoMemory() ||
-              (strEq(xp3ErrorCode(err), "XPST0003") &&
-               strEq(xp3ErrorMessage(err), expected)),
-              "xp3ErrorNew under allocation failure");
-        xp3ErrorFree(err);
-
-        allocCount = 0;
-        failAt = i;
-        err = xp3ErrorNewUser(BAD_CAST "urn:x", BAD_CAST "E1", BAD_CAST "m");
-        check(err == xp3ErrorNoMemory() ||
-              (strEq(xp3ErrorCode(err), "E1") &&
-               strEq(xp3ErrorNamespace(err), "urn:x") &&
-               strEq(xp3ErrorMessage(err), "m")),
-              "xp3ErrorNewUser under allocation failure");
+        if (xp3TestAllocFailed()) {
+            check(err == xp3ErrorNoMemory(),
+                  "xp3ErrorNew returns out-of-memory on failure");
+        } else {
+            check(strEq(xp3ErrorCode(err), "XPST0003") &&
+                  strEq(xp3ErrorMessage(err), expected),
+                  "xp3ErrorNew complete after allocation failures");
+            xp3ErrorFree(err);
+            break;
+        }
         xp3ErrorFree(err);
     }
-    failAt = -1;
+    check(i > 0 && i < 100, "xp3ErrorNew failure points exercised");
 
-    xmlMemSetup(oldFree, oldMalloc, oldRealloc, oldStrdup);
+    for (i = 0; i < 100; i++) {
+        xp3Error *err;
+
+        xp3TestAllocFailAt(i);
+        err = xp3ErrorNewUser(BAD_CAST "urn:x", BAD_CAST "E1", BAD_CAST "m");
+        if (xp3TestAllocFailed()) {
+            check(err == xp3ErrorNoMemory(),
+                  "xp3ErrorNewUser returns out-of-memory on failure");
+        } else {
+            check(strEq(xp3ErrorCode(err), "E1") &&
+                  strEq(xp3ErrorNamespace(err), "urn:x") &&
+                  strEq(xp3ErrorMessage(err), "m"),
+                  "xp3ErrorNewUser complete after allocation failures");
+            xp3ErrorFree(err);
+            break;
+        }
+        xp3ErrorFree(err);
+    }
+    check(i > 0 && i < 100, "xp3ErrorNewUser failure points exercised");
+
+    xp3TestAllocRestore();
 }
 
 static int reportCalls;

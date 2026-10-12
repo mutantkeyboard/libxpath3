@@ -19,12 +19,12 @@
 
 #include <libxpath3/xpath3.h>
 
-/** Namespace for the WC error codes */
+/** Namespace of the W3C error codes */
 #define XP3_ERR_NS "http://www.w3.org/2005/xqt-errors"
 
 /**
  * Built-in error codes. Raising an error uses the enum, and the API
- * exposes the QName (for example XP3_ERR_XPTY0004) and the namespace (XP3_ERR_NS) for the error.
+ * exposes the QName (for example "XPTY0004") and the namespace (XP3_ERR_NS) for the error.
  */
 
 typedef enum
@@ -45,8 +45,8 @@ typedef enum
 struct _xp3Error
 {
     xp3ErrCode code;
-    xmlChar *codeNs;    /* only for XP3_err_USER, otherwise NULL */
-    xmlChar *codeLocal; /* only for XP3_err_USER, otherwise NULL */
+    xmlChar *codeNs;    /* only for XP3_ERR_USER, otherwise NULL */
+    xmlChar *codeLocal; /* only for XP3_ERR_USER, otherwise NULL */
     xmlChar *message;   /* may be NULL */
     int line;
     int column;
