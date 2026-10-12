@@ -14,10 +14,15 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-option(XP3_BUILD_TESTS "Build tests" ON)
 option(XP3_BUILD_DOCS "Build API documentation with Doxygen" OFF)
 
 include(GNUInstallDirs)
+
+# include(CTest) defines the standard BUILD_TESTING option and writes
+# DartConfiguration.tcl, which "ctest -T" (used by IDEs) looks for.
+# CTEST_TARGETS_ADDED keeps it from adding the CDash dashboard targets.
+set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
+include(CTest)
 
 find_package(LibXml2 2.9.0 REQUIRED)
 
@@ -28,6 +33,7 @@ configure_file(
 )
 
 set(XP3_SOURCES
+    xp3ast.c
     xp3chars.c
     xp3context.c
     xp3error.c
@@ -55,15 +61,14 @@ set_target_properties(xpath3 PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
-if(XP3_BUILD_TESTS)
-    enable_testing()
+if(BUILD_TESTING)
     add_executable(testbasic test/testbasic.c)
     target_link_libraries(testbasic PRIVATE xpath3)
     add_test(NAME basic COMMAND testbasic)
 
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
-    foreach(name error context lexer)
+    foreach(name error context lexer ast)
         add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
         target_include_directories(test${name} PRIVATE

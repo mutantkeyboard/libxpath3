@@ -14,6 +14,17 @@
 
 #include "testalloc.h"
 
+/*
+ * Apple's libxml2 (macOS 15.4 and later) marks the allocator functions
+ * as deprecated, and ignores xmlMemSetup() anyway, which
+ * xp3TestAllocInstall() detects. Upstream libxml2 does not deprecate
+ * them, so the warning is silenced for this test-only file.
+ */
+#if defined(__GNUC__)
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 static xmlFreeFunc oldFree;
 static xmlMallocFunc oldMalloc;
 static xmlReallocFunc oldRealloc;
@@ -22,9 +33,11 @@ static xmlStrdupFunc oldStrdup;
 static int failAt = -1;
 static int allocCount;
 static int failed;
+static int calls;   /* every call, to detect whether libxml2 uses us */
 
 static int
 shouldFail(void) {
+    calls++;
     if (failAt < 0)
         return(0);
     if (allocCount++ == failAt) {
@@ -59,11 +72,20 @@ testStrdup(const char *str) {
     return(copy);
 }
 
-void
+int
 xp3TestAllocInstall(void) {
+    void *probe;
+
     xmlMemGet(&oldFree, &oldMalloc, &oldRealloc, &oldStrdup);
     xmlMemSetup(free, testMalloc, testRealloc, testStrdup);
     failAt = -1;
+
+    /* Some builds of libxml2 ignore xmlMemSetup(). Check that an
+     * allocation through xmlMalloc() actually reaches testMalloc(). */
+    calls = 0;
+    probe = xmlMalloc(1);
+    xmlFree(probe);
+    return(calls > 0);
 }
 
 void
@@ -83,3 +105,7 @@ int
 xp3TestAllocFailed(void) {
     return(failed);
 }
+
+#if defined(__GNUC__)
+  #pragma GCC diagnostic pop
+#endif

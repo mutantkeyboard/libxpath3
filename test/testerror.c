@@ -109,7 +109,12 @@ static void
 testAllocationFailures(void) {
     int i;
 
-    xp3TestAllocInstall();
+    if (!xp3TestAllocInstall()) {
+        printf("testerror: allocation-failure tests skipped: this libxml2 "
+               "ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        return;
+    }
 
     /* Fail the 1st, 2nd, ... allocation until a run completes without
      * an injected failure. Every run must return either a complete
