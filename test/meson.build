@@ -9,7 +9,7 @@ test('basic', testbasic)
 # because the shared library only exports the public API.
 internal_test_args = ['-DXP3_STATIC']
 
-foreach name : ['error', 'context']
+foreach name : ['error', 'context', 'lexer']
     exe = executable(
         'test' + name,
         'test' + name + '.c',
