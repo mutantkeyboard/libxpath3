@@ -35,7 +35,7 @@ The code is C99, with no variable-length arrays and no compiler extensions.
 Install the tools and a current libxml2 with Homebrew:
 
 ```sh
-brew install meson ninja libxml2 doxygen
+`brew install meson ninja libxml2 doxygen`
 ```
 
 Then build and test:

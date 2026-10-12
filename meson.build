@@ -27,6 +27,7 @@ inc = include_directories('include')
 subdir('include/libxpath3')
 
 xpath3_src = files(
+    'xp3error.c',
     'xpath3.c',
 )
 

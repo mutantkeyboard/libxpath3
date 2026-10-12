@@ -20,6 +20,7 @@ WARN_AS_ERROR          = $(DOXYGEN_WARN_AS_ERROR)
 INPUT                  = $(SOURCE_ROOT)doc/mainpage.md \
                          $(SOURCE_ROOT)include/libxpath3/xpath3.h \
                          $(BUILD_ROOT)include/libxpath3/xp3version.h \
+                         $(SOURCE_ROOT)xp3error.c \
                          $(SOURCE_ROOT)xpath3.c
 EXCLUDE_SYMLINKS       = YES
 USE_MDFILE_AS_MAINPAGE = $(SOURCE_ROOT)doc/mainpage.md

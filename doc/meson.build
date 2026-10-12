@@ -4,7 +4,7 @@ custom_target(
     'Doxygen documentation',
     input: [
         xpath3_src,
-        files('../include/libxpath3/xpath3.h', 'mainpage.md'),
+        files('../include/libxpath3/xpath3.h', 'mainpage.md', 'Doxyfile'),
         xp3version_h,
     ],
     output: 'html',
