@@ -32,6 +32,7 @@ xpath3_src = files(
     'xp3context.c',
     'xp3error.c',
     'xp3lexer.c',
+    'xp3parser.c',
     'xpath3.c',
 )
 
