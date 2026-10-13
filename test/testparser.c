@@ -421,11 +421,16 @@ static const struct {
     { "f#0, f#00001, f#2147483647",
       "(sequence (function-ref f#0) (function-ref f#1) "
       "(function-ref f#2147483647))" },
+    /* Larger arities are not a syntax error: fn:concat is variadic */
+    { "f#2147483648, concat#340282366920938463463374607431768211456",
+      "(sequence (function-ref f#overflow) "
+      "(function-ref concat#overflow))" },
     /* Braced URIs are whitespace normalized (section 2 and 2.4.5) */
     { "Q{ urn:x }a", P("Q{urn:x}a") },
     { "Q{urn:\n  a\t\r\nb}x", P("Q{urn: a b}x") },
     { "Q{   }a", P("Q{}a") },
     { "Q{ urn:x }*", P("Q{urn:x}*") },
+    { "Q{}*", P("Q{}*") },
     { "$Q{ urn:x }v", "(var Q{urn:x}v)" },
     { "Q{ urn:x }f(), Q{ urn:x }f#1",
       "(sequence (call Q{urn:x}f) (function-ref Q{urn:x}f#1))" },
@@ -518,7 +523,6 @@ static const struct {
 
     /* Function items, maps, arrays and lookups */
     { "f#",                   "XPST0003", 1, 3 },
-    { "f#99999999999",        "XPST0017", 1, 3 },
     { "if#1",                 "XPST0003", 1, 1 },
     { "$x => 1",              "XPST0003", 1, 7 },
     { "$x => f",              "XPST0003", 1, 8 },
@@ -570,7 +574,6 @@ static const struct {
     { "a !",                  "XPST0003", 1, 4 },
     { "if $x then 1 else 2",  "XPST0003", 1, 4 },
     { "let $x : = 1 return $x", "XPST0003", 1, 8 },
-    { "f#2147483648",         "XPST0017", 1, 3 },
     { "a\r\n+ )",             "XPST0003", 2, 3 },
 
     /* Lexical errors, also when found while peeking */

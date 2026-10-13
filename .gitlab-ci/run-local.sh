@@ -4,14 +4,14 @@
 #
 # Usage: sh .gitlab-ci/run-local.sh [job...]
 #
-# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master docs (default: all)
+# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 docs (default: all)
 # Set IMAGE to use a different image than fedora:latest.
 #
 # Keep the jobs in sync with .gitlab-ci.yml.
 
 set -u
 
-ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master docs"
+ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 docs"
 
 # On the host: start the container and run this script inside it.
 if [ "${1:-}" != "--inside" ]; then
@@ -75,6 +75,21 @@ job_libxml2_master() {
     ./build/test/testbasic
 }
 
+job_qt3() {
+    export CC=clang ASAN_OPTIONS="detect_leaks=1"
+    export QT3_COMMIT=201a6e466940cdfc727f4babfedcde5332b9f578
+    git init -q qt3tests &&
+    git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git \
+        "$QT3_COMMIT" &&
+    git -C qt3tests checkout -q FETCH_HEAD &&
+    meson setup build --werror -Db_sanitize=address,undefined -Db_lundef=false &&
+    meson compile -C build &&
+    for spec in XP20 XP30 XP31; do
+        ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt \
+            qt3tests/catalog.xml || return 1
+    done
+}
+
 job_docs() {
     export DOXYGEN_WARN_AS_ERROR="FAIL_ON_WARNINGS"
     meson setup build -Ddocs=enabled &&
@@ -95,7 +110,7 @@ for job in "$@"; do
 
     # Fresh copy of the sources for every job, without local build directories.
     rm -rf /work && cp -r /src /work && cd /work &&
-        rm -rf build build-* libxml2-src libxml2-build libxml2-install
+        rm -rf build build-* libxml2-src libxml2-build libxml2-install qt3tests
 
     log="/tmp/$fn.log"
     if ( "$fn" ) >"$log" 2>&1; then

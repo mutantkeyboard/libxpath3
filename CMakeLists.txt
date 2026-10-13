@@ -79,6 +79,23 @@ if(BUILD_TESTING)
         target_link_libraries(test${name} PRIVATE LibXml2::LibXml2)
         add_test(NAME ${name} COMMAND test${name})
     endforeach()
+
+    # QT3 runner, and the QT3 tests if XP3_QT3_DIR points to a checkout
+    add_executable(qt3run qt3/qt3run.c ${XP3_SOURCES})
+    target_compile_definitions(qt3run PRIVATE XP3_STATIC)
+    target_include_directories(qt3run PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+    )
+    target_link_libraries(qt3run PRIVATE LibXml2::LibXml2)
+    set(XP3_QT3_DIR "" CACHE PATH "Directory of a QT3 test suite checkout")
+    if(XP3_QT3_DIR)
+        foreach(spec XP20 XP30 XP31)
+            add_test(NAME qt3-${spec} COMMAND qt3run -s ${spec}
+                -k ${CMAKE_CURRENT_SOURCE_DIR}/qt3/known-failures-${spec}.txt
+                ${XP3_QT3_DIR}/catalog.xml)
+        endforeach()
+    endif()
 endif()
 
 if(XP3_BUILD_DOCS)
