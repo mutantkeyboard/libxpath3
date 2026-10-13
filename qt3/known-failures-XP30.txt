@@ -1,0 +1,1 @@
+# Known parse-only failures for XP30, one test-set/test-case per line.

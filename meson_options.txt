@@ -3,3 +3,9 @@ option('docs',
   value: 'auto',
   description: 'Build API documentation with Doxygen'
 )
+
+option('qt3',
+  type: 'string',
+  value: '',
+  description: 'Directory of a QT3 test suite checkout, to run it as the qt3 test suite'
+)

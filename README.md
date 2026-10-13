@@ -24,6 +24,29 @@ Not in scope:
 
 Conformance is measured against the W3C [QT3 test suite](https://github.com/w3c/qt3tests), and the pass rate is published here with each release. Fuzzers with allocation-failure injection run in the same style as libxml2's.
 
+Only the parser exists so far, so QT3 runs in parse-only mode: a test passes if its expression parses when the expected result allows that, or fails with the expected error code. Tests that need features outside the scope above (schema awareness, the namespace axis, XQuery, XSLT) are not applicable. Against QT3 commit `201a6e4`:
+
+| Spec | Passed | Failed | Not applicable |
+|---|---|---|---|
+| XPath 2.0 | 15,293 | 0 | 16,528 |
+| XPath 3.0 | 19,373 | 0 | 12,448 |
+| XPath 3.1 | 22,031 | 0 | 9,790 |
+
+To run it yourself, check out the test suite at the same commit and pass its directory to Meson. `meson test --suite qt3` then runs all three levels:
+
+```sh
+git clone https://github.com/w3c/qt3tests.git
+git -C qt3tests checkout 201a6e466940cdfc727f4babfedcde5332b9f578
+meson setup build -Dqt3=$PWD/qt3tests
+meson test -C build --suite qt3
+```
+
+`build/qt3/qt3run -s XP31 -v qt3tests/catalog.xml` shows each failing expression with the expected and actual result, and `-t PREFIX` limits the run to test sets whose name starts with `PREFIX`. With CMake, set `-DXP3_QT3_DIR=...`.
+
+Failures that are accepted for now are listed in `qt3/known-failures-XP20.txt`, `-XP30.txt` and `-XP31.txt`, one `test-set/test-case` per line. Any failure not listed there fails the run. So does a listed test that now passes, which must then be removed from the list, so the lists stay accurate.
+
+Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and GitLab shows the XPath 3.1 pass rate on the pipeline and the merge request. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
+
 ## Building the project
 
 Requirements: Meson 1.3 or later, Ninja, a C99 compiler and libxml2 2.9 or later. Doxygen is optional, for the API documentation. CMake 3.18 or later can be used instead of Meson.

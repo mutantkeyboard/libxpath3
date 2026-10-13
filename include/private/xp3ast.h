@@ -71,7 +71,8 @@ typedef enum {
     XP3_AST_FUNCTION_CALL,      /* name, children: arguments */
     XP3_AST_ARG_PLACEHOLDER,    /* ? as an argument */
     XP3_AST_DYNAMIC_CALL,       /* postfix (args): children: arguments */
-    XP3_AST_NAMED_FUNCTION_REF, /* name#arity: name, op: arity */
+    XP3_AST_NAMED_FUNCTION_REF, /* name#arity: name, op: arity or
+                                 * XP3_ARITY_OVERFLOW */
     XP3_AST_INLINE_FUNCTION,    /* children: PARAM..., optional
                                  * SEQUENCE_TYPE (return type), body */
     XP3_AST_PARAM,              /* $name: name, optional child:
@@ -100,6 +101,14 @@ typedef enum {
     XP3_AST_ARRAY_TEST          /* op: 0 for array(*), 1 typed:
                                  * child: member type */
 } xp3AstKind;
+
+/*
+ * Arity of a NAMED_FUNCTION_REF that does not fit in an int, as in
+ * concat#340282366920938463463374607431768211456. Variadic functions
+ * such as fn:concat accept any arity, so this is not a syntax error:
+ * static analysis raises FOAR0002 for it, as QT3 expects.
+ */
+#define XP3_ARITY_OVERFLOW (-1)
 
 /* Operators of BINARY and UNARY nodes */
 typedef enum {

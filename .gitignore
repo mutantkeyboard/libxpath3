@@ -4,5 +4,11 @@
 compile_commands.json
 .DS_Store
 
+# Checkouts the README and CI jobs create next to the build directory
+/qt3tests/
+/libxml2-src/
+/libxml2-build/
+/libxml2-install/
+
 # Editor setup stays local
 .vscode/

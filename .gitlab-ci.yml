@@ -77,6 +77,29 @@ libxml2:master:
     - meson test -C build --print-errorlogs
     - ./build/test/testbasic
 
+# Parse-only QT3 conformance, against a pinned commit of the test suite.
+# The coverage regex shows the XP31 pass rate on pipelines and MRs. Known
+# failures are listed in qt3/known-failures-*.txt; any other failure, or a
+# known failure that now passes, fails the job. It runs under ASan and
+# UBSan, so every QT3 expression is also a memory-safety test.
+qt3:
+  stage: build
+  variables:
+    CC: clang
+    ASAN_OPTIONS: "detect_leaks=1"
+    QT3_COMMIT: 201a6e466940cdfc727f4babfedcde5332b9f578
+  script:
+    - git init -q qt3tests
+    - git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git "$QT3_COMMIT"
+    - git -C qt3tests checkout -q FETCH_HEAD
+    - meson setup build --werror -Db_sanitize=address,undefined -Db_lundef=false
+    - meson compile -C build
+    - >
+      for spec in XP20 XP30 XP31; do
+      ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt qt3tests/catalog.xml || exit 1;
+      done
+  coverage: '/XP31 parse-only: .*\((\d+\.\d+)%\)/'
+
 docs:
   stage: docs
   needs: []

@@ -1021,8 +1021,9 @@ parseFunctionCall(xp3Parser *p) {
 /*
  * NamedFunctionRef ::= EQName "#" IntegerLiteral
  *
- * An arity that does not fit in an int cannot match any function, so
- * it is reported as XPST0017 right away.
+ * An arity that does not fit in an int is stored as
+ * XP3_ARITY_OVERFLOW. It is not a syntax error, because variadic
+ * functions such as fn:concat accept any arity.
  */
 static xp3AstNode *
 parseNamedFunctionRef(xp3Parser *p) {
@@ -1046,9 +1047,10 @@ parseNamedFunctionRef(xp3Parser *p) {
     for (i = 0; i < p->tok.length; i++) {
         int digit = digits[i] - '0';
 
-        if (arity > (INT_MAX - digit) / 10)
-            return(parserError(p, XP3_ERR_XPST0017, &p->tok,
-                               "function arity is too large"));
+        if (arity > (INT_MAX - digit) / 10) {
+            arity = XP3_ARITY_OVERFLOW;
+            break;
+        }
         arity = arity * 10 + digit;
     }
     ref->op = arity;

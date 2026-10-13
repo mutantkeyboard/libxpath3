@@ -459,8 +459,12 @@ bufNode(xp3AstBuf *buf, const xp3AstNode *node) {
         case XP3_AST_NAMED_FUNCTION_REF:
             bufStr(buf, " ");
             bufName(buf, node, NULL);
-            snprintf(num, sizeof(num), "#%d", node->op);
-            bufStr(buf, num);
+            if (node->op == XP3_ARITY_OVERFLOW) {
+                bufStr(buf, "#overflow");
+            } else {
+                snprintf(num, sizeof(num), "#%d", node->op);
+                bufStr(buf, num);
+            }
             break;
         case XP3_AST_NAME_TEST:
             bufStr(buf, " ");

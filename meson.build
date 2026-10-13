@@ -65,6 +65,7 @@ pkg.generate(
 )
 
 subdir('test')
+subdir('qt3')
 
 doxygen = find_program('doxygen', required: get_option('docs'))
 if doxygen.found()
