@@ -4,14 +4,14 @@
 #
 # Usage: sh .gitlab-ci/run-local.sh [job...]
 #
-# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 docs (default: all)
+# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 fuzz docs (default: all)
 # Set IMAGE to use a different image than fedora:latest.
 #
 # Keep the jobs in sync with .gitlab-ci.yml.
 
 set -u
 
-ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 docs"
+ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 fuzz docs"
 
 # On the host: start the container and run this script inside it.
 if [ "${1:-}" != "--inside" ]; then
@@ -88,6 +88,16 @@ job_qt3() {
         ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt \
             qt3tests/catalog.xml || return 1
     done
+}
+
+job_fuzz() {
+    export CC=clang ASAN_OPTIONS="detect_leaks=1"
+    meson setup build --werror -Dfuzzer=true \
+        -Db_sanitize=address,undefined -Db_lundef=false &&
+    meson compile -C build &&
+    mkdir corpus && cp fuzz/seed/* corpus/ &&
+    ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 \
+        -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 corpus
 }
 
 job_docs() {

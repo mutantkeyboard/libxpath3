@@ -45,6 +45,27 @@ meson test -C build --suite qt3
 
 Failures that are accepted for now are listed in `qt3/known-failures-XP20.txt`, `-XP30.txt` and `-XP31.txt`, one `test-set/test-case` per line. Any failure not listed there fails the run. So does a listed test that now passes, which must then be removed from the list, so the lists stay accurate.
 
+### Fuzzing
+
+`fuzz/xp3parse.c` is a libFuzzer target: the input's first byte selects the language level, the next two inject an allocation failure at that position, and the rest is parsed as an expression. The target aborts when a library contract breaks (no tree and no error, or an injected failure not reported as `NO_MEMORY`); the sanitizers catch the rest. The same file builds as a replay driver with any compiler, so `meson test` runs the seed corpus in `fuzz/seed/` as regression tests everywhere, and every crash the fuzzer finds becomes a seed.
+
+Apple's clang ships without the libFuzzer runtime, so real fuzzing runs on Linux. Locally:
+
+```sh
+sh .gitlab-ci/run-local.sh fuzz        # 2 minutes; FUZZ_SECONDS=3600 for longer
+```
+
+or natively with clang and compiler-rt:
+
+```sh
+CC=clang meson setup build-fuzz -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
+meson compile -C build-fuzz
+mkdir corpus && cp fuzz/seed/* corpus
+./build-fuzz/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 corpus
+```
+
+The `fuzz` CI job does the same for two minutes on every pipeline, and keeps any crash inputs as artifacts.
+
 Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and GitLab shows the XPath 3.1 pass rate on the pipeline and the merge request. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
 
 ## Building the project
