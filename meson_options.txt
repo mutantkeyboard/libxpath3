@@ -4,6 +4,12 @@ option('docs',
   description: 'Build API documentation with Doxygen'
 )
 
+option('fuzzer',
+  type: 'boolean',
+  value: false,
+  description: 'Build the libFuzzer targets (requires clang with compiler-rt)'
+)
+
 option('qt3',
   type: 'string',
   value: '',

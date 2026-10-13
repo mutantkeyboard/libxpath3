@@ -80,6 +80,19 @@ if(BUILD_TESTING)
         add_test(NAME ${name} COMMAND test${name})
     endforeach()
 
+    # Replay the fuzz seed corpus as regression tests
+    add_executable(xp3parse-replay fuzz/xp3parse.c test/testalloc.c
+        ${XP3_SOURCES})
+    target_compile_definitions(xp3parse-replay PRIVATE XP3_STATIC
+        XP3_FUZZ_DRIVER)
+    target_include_directories(xp3parse-replay PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+    )
+    target_link_libraries(xp3parse-replay PRIVATE LibXml2::LibXml2)
+    file(GLOB XP3_FUZZ_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed/*)
+    add_test(NAME fuzz-replay COMMAND xp3parse-replay ${XP3_FUZZ_SEED})
+
     # QT3 runner, and the QT3 tests if XP3_QT3_DIR points to a checkout
     add_executable(qt3run qt3/qt3run.c ${XP3_SOURCES})
     target_compile_definitions(qt3run PRIVATE XP3_STATIC)

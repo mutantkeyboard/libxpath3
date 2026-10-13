@@ -100,6 +100,28 @@ qt3:
       done
   coverage: '/XP31 parse-only: .*\((\d+\.\d+)%\)/'
 
+# Fuzzing smoke test: two minutes of libFuzzer on the parser, with ASan
+# and UBSan, seeded with the corpus and the dictionary. Long runs happen
+# outside CI; this catches regressions that the replayed corpus misses.
+fuzz:
+  stage: build
+  variables:
+    CC: clang
+    ASAN_OPTIONS: "detect_leaks=1"
+  script:
+    - meson setup build --werror -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
+    - meson compile -C build
+    - mkdir corpus && cp fuzz/seed/* corpus/
+    - ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+    paths:
+      - crash-*
+      - leak-*
+      - timeout-*
+      - oom-*
+
 docs:
   stage: docs
   needs: []

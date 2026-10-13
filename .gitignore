@@ -4,6 +4,17 @@
 compile_commands.json
 .DS_Store
 
+# Where a manual "doxygen doc/Doxyfile" from the repo root lands,
+# because $(BUILD_ROOT) is then empty; Meson builds into build*/doc
+/doc/html/
+
+# What a local fuzzing run leaves behind
+/fuzz/corpus/
+crash-*
+leak-*
+timeout-*
+oom-*
+
 # Checkouts the README and CI jobs create next to the build directory
 /qt3tests/
 /libxml2-src/
