@@ -230,7 +230,7 @@ static const struct {
     { "$x instance of xs:integer and $y",
       "(binary and (instance-of (var x) (type (atomic xs:integer))) "
       "(var y))" },
-    /* An occurrence indicator binds to the type (A.2.1.3) */
+    /* An occurrence indicator binds to the type (A.1.2) */
     { "4 treat as item() + - 5",
       "(binary - (treat-as (integer 4) (type + (item))) (integer 5))" },
 
@@ -244,7 +244,196 @@ static const struct {
     { "instance instance of instance",
       "(instance-of " P("instance") " (type (atomic instance)))" },
     { "a-b", P("a-b") },
-    { "a - b", "(binary - " P("a") " " P("b") ")" }
+    { "a - b", "(binary - " P("a") " " P("b") ")" },
+
+    /* for, let, some, every, if */
+    { "for $x in 1 to 3 return $x * 2",
+      "(for (bind x (binary to (integer 1) (integer 3))) "
+      "(binary * (var x) (integer 2)))" },
+    { "for $x in $a, $y in $b return ($x, $y)",
+      "(for (bind x (var a)) (bind y (var b)) "
+      "(sequence (var x) (var y)))" },
+    { "for $x in 1 return for $y in 2 return $x",
+      "(for (bind x (integer 1)) (for (bind y (integer 2)) (var x)))" },
+    { "let $x := 1, $y := $x + 1 return $y",
+      "(let (bind x (integer 1)) (bind y (binary + (var x) (integer 1))) "
+      "(var y))" },
+    { "some $x in $s satisfies $x > 1",
+      "(some (bind x (var s)) (binary > (var x) (integer 1)))" },
+    { "every $x in $s, $y in $t satisfies $x = $y",
+      "(every (bind x (var s)) (bind y (var t)) "
+      "(binary = (var x) (var y)))" },
+    { "if ($a) then 1 else 2", "(if (var a) (integer 1) (integer 2))" },
+    { "if (1, 2) then () else 3",
+      "(if (sequence (integer 1) (integer 2)) (empty) (integer 3))" },
+    { "if ($a) then 1 else if ($b) then 2 else 3",
+      "(if (var a) (integer 1) (if (var b) (integer 2) (integer 3)))" },
+    { "1 + (if ($a) then 1 else 2)",
+      "(binary + (integer 1) (if (var a) (integer 1) (integer 2)))" },
+    { "for $x in in return return",
+      "(for (bind x " P("in") ") " P("return") ")" },
+    { "some + every", "(binary + " P("some") " " P("every") ")" },
+    { "if/then", "(path (step child (name if)) (step child (name then)))" },
+    { "let", P("let") },
+
+    /* ||, ! and => */
+    { "'a' || 'b' || 'c'",
+      "(binary || (binary || (string \"a\") (string \"b\")) "
+      "(string \"c\"))" },
+    { "1 to 2 || 3",
+      "(binary || (binary to (integer 1) (integer 2)) (integer 3))" },
+    { "$a || $b = 'ab'",
+      "(binary = (binary || (var a) (var b)) (string \"ab\"))" },
+    { "a ! b ! c",
+      "(binary ! (binary ! " P("a") " " P("b") ") " P("c") ")" },
+    { "a/b ! c/d",
+      "(binary ! (path (step child (name a)) (step child (name b))) "
+      "(path (step child (name c)) (step child (name d))))" },
+    { "-a!b", "(unary - (binary ! " P("a") " " P("b") "))" },
+    { "$x => f()", "(arrow f (var x))" },
+    { "$x => f(1) => g()", "(arrow g (arrow f (var x) (integer 1)))" },
+    { "$x => $f(1)", "(arrow (var x) (var f) (integer 1))" },
+    { "$x => (f#1)()", "(arrow (var x) (function-ref f#1))" },
+    { "$x => fn:f(?)", "(arrow fn:f (var x) (placeholder))" },
+    { "-$x => abs()", "(arrow abs (unary - (var x)))" },
+    { "$x => f() cast as xs:int",
+      "(cast-as (arrow f (var x)) (type (atomic xs:int)))" },
+
+    /* Function items and dynamic calls */
+    { "f#2", "(function-ref f#2)" },
+    { "fn:concat#3", "(function-ref fn:concat#3)" },
+    { "Q{urn:x}f#0", "(function-ref Q{urn:x}f#0)" },
+    { "f(?, 1)", "(call f (placeholder) (integer 1))" },
+    { "f(?a)", "(call f (unary-lookup a))" },
+    { "function($x as xs:integer) as xs:integer { $x + 1 }",
+      "(function (param x (type (atomic xs:integer))) "
+      "(type (atomic xs:integer)) (binary + (var x) (integer 1)))" },
+    { "function($a, $b) { $a }", "(function (param a) (param b) (var a))" },
+    { "function() {}", "(function (empty))" },
+    { "$f(1)", "(filter (var f) (dynamic-call (integer 1)))" },
+    { "(1)(2)", "(filter (integer 1) (dynamic-call (integer 2)))" },
+    { "f(1)(2)[3]", "(filter (call f (integer 1)) (dynamic-call "
+                    "(integer 2)) (predicate (integer 3)))" },
+
+    /* Maps, arrays and lookups */
+    { "map {}", "(map)" },
+    { "map{'a': 1, 'b': 2}", "(map (entry (string \"a\") (integer 1)) "
+                             "(entry (string \"b\") (integer 2)))" },
+    { "map{a : b}", "(map (entry " P("a") " " P("b") "))" },
+    { "map{1: map{2: 3}}",
+      "(map (entry (integer 1) (map (entry (integer 2) (integer 3)))))" },
+    { "[]", "(array-square)" },
+    { "[1, (2, 3)]",
+      "(array-square (integer 1) (sequence (integer 2) (integer 3)))" },
+    { "array{}", "(array-curly)" },
+    { "array{1, 2}", "(array-curly (sequence (integer 1) (integer 2)))" },
+    { "$m?a", "(filter (var m) (lookup a))" },
+    { "$m?1?*?($k)",
+      "(filter (var m) (lookup 1) (lookup *) (lookup (var k)))" },
+    { "[1, 2]?2",
+      "(filter (array-square (integer 1) (integer 2)) (lookup 2))" },
+    { "$a[?x = 1]", "(filter (var a) (predicate (binary = (unary-lookup x) "
+                    "(integer 1))))" },
+    { "?*", "(unary-lookup *)" },
+    { "map/array", "(path (step child (name map)) (step child (name array)))" },
+
+    /* Function, map and array types */
+    { "$f instance of function(*)",
+      "(instance-of (var f) (type (function-test *)))" },
+    { "$f instance of function(xs:int, item()*) as xs:string?",
+      "(instance-of (var f) (type (function-test (type (atomic xs:int)) "
+      "(type * (item)) (type ? (atomic xs:string)))))" },
+    { "$f instance of function() as item()",
+      "(instance-of (var f) (type (function-test (type (item)))))" },
+    { "$m instance of map(*)", "(instance-of (var m) (type (map-test *)))" },
+    { "$m instance of map(xs:string, item()*)+",
+      "(instance-of (var m) (type + (map-test (atomic xs:string) "
+      "(type * (item)))))" },
+    { "$a instance of array(*)",
+      "(instance-of (var a) (type (array-test *)))" },
+    { "$a instance of array(xs:int)",
+      "(instance-of (var a) (type (array-test (type (atomic xs:int)))))" },
+    { "$x instance of (xs:int)?",
+      "(instance-of (var x) (type ? (atomic xs:int)))" },
+    { "$x treat as (function(*))*",
+      "(treat-as (var x) (type * (function-test *)))" },
+
+    /* Corner cases: string and number literals */
+    { "''''", "(string \"'\")" },
+    { "\"\"\"\"", "(string \"\\\"\")" },
+    { "'a\"\"b'", "(string \"a\\\"\\\"b\")" },
+    { "'(: x :)'", "(string \"(: x :)\")" },
+    { "99999999999999999999999", "(integer 99999999999999999999999)" },
+
+    /* Corner cases: names next to operators */
+    { "$x-1", "(var x-1)" },
+    { "$x - 1", "(binary - (var x) (integer 1))" },
+    { "--1", "(unary - (unary - (integer 1)))" },
+    { "1!2", "(binary ! (integer 1) (integer 2))" },
+    { "for(1)", "(call for (integer 1))" },
+    { "let(1), some(2)", "(sequence (call let (integer 1)) "
+                         "(call some (integer 2)))" },
+    { "function", P("function") },
+    { "fn:item(), fn:map(1)",
+      "(sequence (call fn:item) (call fn:map (integer 1)))" },
+    { "xs:integer('1')", "(call xs:integer (string \"1\"))" },
+
+    /* Corner cases: comments inside constructs */
+    { "for (: c :) $i in 1 return $i", "(for (bind i (integer 1)) (var i))" },
+    { "if (: c :) (1) then 2 else 3", "(if (integer 1) (integer 2) "
+                                      "(integer 3))" },
+    { "$x instance (: c :) of xs:int",
+      "(instance-of (var x) (type (atomic xs:int)))" },
+    { "child (: c :) :: a", P("a") },
+
+    /* Corner cases: "*", "+" and "?" after types */
+    { "$x cast as xs:int * 2",
+      "(binary * (cast-as (var x) (type (atomic xs:int))) (integer 2))" },
+    { "$x instance of xs:int? and $y",
+      "(binary and (instance-of (var x) (type ? (atomic xs:int))) "
+      "(var y))" },
+
+    /* Corner cases: slashes */
+    { "/ | /", "(binary union (path root) (path root))" },
+    { "/*", "(path root (step child (name *)))" },
+    { "/@a", "(path root (step attribute (name a)))" },
+    { "//*", "(path root (step descendant-or-self (kind node)) "
+             "(step child (name *)))" },
+    { "a//@b", "(path (step child (name a)) (step descendant-or-self "
+               "(kind node)) (step attribute (name b)))" },
+    { "a/..", "(path (step child (name a)) (step parent (kind node)))" },
+    { "/ ?a", "(path root (unary-lookup a))" },
+    { "attribute::attribute()", "(path (step attribute (kind attribute)))" },
+    { "namespace::*", "(path (step namespace (name *)))" },
+
+    /* Corner cases: postfixes, placeholders and lookups */
+    { "$x[1](2)?a[3]", "(filter (var x) (predicate (integer 1)) "
+                       "(dynamic-call (integer 2)) (lookup a) "
+                       "(predicate (integer 3)))" },
+    { "f(?,?)", "(call f (placeholder) (placeholder))" },
+    { "f( ? )", "(call f (placeholder))" },
+    { "f(?(1), ?*)", "(call f (unary-lookup (integer 1)) "
+                     "(unary-lookup *))" },
+    { "$m ? a", "(filter (var m) (lookup a))" },
+    { "$m?()", "(filter (var m) (lookup (empty)))" },
+    { "function($x){$x}(1)", "(filter (function (param x) (var x)) "
+                             "(dynamic-call (integer 1)))" },
+    { "f#0, f#00001, f#2147483647",
+      "(sequence (function-ref f#0) (function-ref f#1) "
+      "(function-ref f#2147483647))" },
+    /* Braced URIs are whitespace normalized (section 2 and 2.4.5) */
+    { "Q{ urn:x }a", P("Q{urn:x}a") },
+    { "Q{urn:\n  a\t\r\nb}x", P("Q{urn: a b}x") },
+    { "Q{   }a", P("Q{}a") },
+    { "Q{ urn:x }*", P("Q{urn:x}*") },
+    { "$Q{ urn:x }v", "(var Q{urn:x}v)" },
+    { "Q{ urn:x }f(), Q{ urn:x }f#1",
+      "(sequence (call Q{urn:x}f) (function-ref Q{urn:x}f#1))" },
+    { "$x instance of Q{ urn:x }t",
+      "(instance-of (var x) (type (atomic Q{urn:x}t)))" },
+    { "a[for $x in 1 return $x]",
+      "(path (step child (name a) (predicate (for (bind x (integer 1)) "
+      "(var x)))))" }
 };
 
 static void
@@ -284,7 +473,6 @@ static const struct {
     { "1 +",                  "XPST0003", 1, 4 },
     { "(1",                   "XPST0003", 1, 3 },
     { "1 2",                  "XPST0003", 1, 3 },
-    { "(1)(2)",               "XPST0003", 1, 4 },
     { "a[1",                  "XPST0003", 1, 4 },
     { "f(1,)",                "XPST0003", 1, 5 },
     { "$",                    "XPST0003", 1, 2 },
@@ -310,7 +498,7 @@ static const struct {
     { "attribute(a, xs:int?)", "XPST0003", 1, 20 },
 
     /* Reserved function names */
-    { "if(1)",                "XPST0003", 1, 1 },
+    { "item()",               "XPST0003", 1, 1 },
     { "item()",               "XPST0003", 1, 1 },
     { "a/empty-sequence()",   "XPST0003", 1, 3 },
 
@@ -319,6 +507,71 @@ static const struct {
     { "$x cast as item()",    "XPST0003", 1, 16 },
     { "$x instance xs:integer", "XPST0003", 1, 13 },
     { "1 instance of",        "XPST0003", 1, 14 },
+
+    /* for, let, some, every, if */
+    { "if(1)",                "XPST0003", 1, 6 },
+    { "if (1) then 2",        "XPST0003", 1, 14 },
+    { "for $x return 1",      "XPST0003", 1, 8 },
+    { "for $x in 1, 2 return $x", "XPST0003", 1, 14 },
+    { "let $x = 1 return $x", "XPST0003", 1, 8 },
+    { "some $x in 1 return 2", "XPST0003", 1, 14 },
+
+    /* Function items, maps, arrays and lookups */
+    { "f#",                   "XPST0003", 1, 3 },
+    { "f#99999999999",        "XPST0017", 1, 3 },
+    { "if#1",                 "XPST0003", 1, 1 },
+    { "$x => 1",              "XPST0003", 1, 7 },
+    { "$x => f",              "XPST0003", 1, 8 },
+    { "function($x) $x",      "XPST0003", 1, 14 },
+    { "function(1) {1}",      "XPST0003", 1, 10 },
+    { "map{a:b}",             "XPST0003", 1, 8 },
+    { "map{1: 2",             "XPST0003", 1, 9 },
+    { "[1, 2",                "XPST0003", 1, 6 },
+    { "$m?",                  "XPST0003", 1, 4 },
+    { "$m?1.5",               "XPST0003", 1, 4 },
+    { "a?b",                  "XPST0003", 1, 2 },
+    { "$f instance of function(xs:int)", "XPST0003", 1, 32 },
+    { "$m instance of map(xs:int)", "XPST0003", 1, 26 },
+
+    /* Corner cases: punctuation */
+    { ",",                    "XPST0003", 1, 1 },
+    { ")",                    "XPST0003", 1, 1 },
+    { "]",                    "XPST0003", 1, 1 },
+    { "}",                    "XPST0003", 1, 1 },
+    { "-",                    "XPST0003", 1, 2 },
+    { "(1,)",                 "XPST0003", 1, 4 },
+    { "((1)",                 "XPST0003", 1, 5 },
+    { "f(,)",                 "XPST0003", 1, 3 },
+    { "f(1,,2)",              "XPST0003", 1, 5 },
+    { "a[]",                  "XPST0003", 1, 3 },
+    { "[1,]",                 "XPST0003", 1, 4 },
+    { "map{1:2,}",            "XPST0003", 1, 9 },
+    { "map{'a':1 'b':2}",     "XPST0003", 1, 11 },
+    { "function($a,){}",      "XPST0003", 1, 13 },
+    { "(: only a comment :)", "XPST0003", 1, 21 },
+    { "  \n  ",               "XPST0003", 2, 3 },
+
+    /* Corner cases: operators that do not repeat */
+    { "1 eq 2 eq 3",          "XPST0003", 1, 8 },
+    { "a is b is c",          "XPST0003", 1, 8 },
+    { "a instance of b instance of c", "XPST0003", 1, 17 },
+    { "a treat as b treat as c", "XPST0003", 1, 14 },
+    { "a cast as b cast as c", "XPST0003", 1, 13 },
+    { "$x cast as xs:int+",   "XPST0003", 1, 19 },
+
+    /* Corner cases: steps and names */
+    { "a/-1",                 "XPST0003", 1, 3 },
+    { "@@a",                  "XPST0003", 1, 2 },
+    { "@..",                  "XPST0003", 1, 2 },
+    { "..a",                  "XPST0003", 1, 3 },
+    { "p:child::a",           "XPST0003", 1, 8 },
+    { "document-node(text())", "XPST0003", 1, 15 },
+    { "! a",                  "XPST0003", 1, 1 },
+    { "a !",                  "XPST0003", 1, 4 },
+    { "if $x then 1 else 2",  "XPST0003", 1, 4 },
+    { "let $x : = 1 return $x", "XPST0003", 1, 8 },
+    { "f#2147483648",         "XPST0017", 1, 3 },
+    { "a\r\n+ )",             "XPST0003", 2, 3 },
 
     /* Lexical errors, also when found while peeking */
     { "1 + 'abc",             "XPST0003", 1, 5 },
@@ -378,8 +631,10 @@ testMessages(const xp3StaticContext *ctx) {
     expectMessage(ctx, "1 2", "unexpected '2'");
     expectMessage(ctx, "(1", "expected ')', found end of expression");
     expectMessage(ctx, "foo::a", "unknown axis 'foo'");
-    expectMessage(ctx, "if(1)",
-                  "'if' is reserved and cannot be a function name");
+    expectMessage(ctx, "item()",
+                  "'item' is reserved and cannot be a function name");
+    expectMessage(ctx, "if (1) then 2",
+                  "expected 'else', found end of expression");
     expectMessage(ctx, "1 abcdefghijklmnopqrstuvwxyzabcdefghij",
                   "unexpected 'abcdefghijklmnopqrstuvwxyzabcdef...'");
     /* Shortened at a character boundary: "ä" is two bytes */
@@ -404,6 +659,37 @@ static const struct {
     { XP3_XPATH_31, "map(1)", NULL },
     { XP3_XPATH_30, "array(1)", "(call array (integer 1))" },
     { XP3_XPATH_31, "array(1)", NULL },
+
+    /* XPath 3.0 syntax */
+    { XP3_XPATH_20, "for $x in 1 return $x", "(for (bind x (integer 1)) (var x))" },
+    { XP3_XPATH_20, "let $x := 1 return $x", NULL },
+    { XP3_XPATH_30, "let $x := 1 return $x", "(let (bind x (integer 1)) (var x))" },
+    { XP3_XPATH_20, "'a' || 'b'", NULL },
+    { XP3_XPATH_30, "'a' || 'b'", "(binary || (string \"a\") (string \"b\"))" },
+    { XP3_XPATH_20, "a ! b", NULL },
+    { XP3_XPATH_20, "f#1", NULL },
+    { XP3_XPATH_30, "f#1", "(function-ref f#1)" },
+    { XP3_XPATH_20, "function($x) {$x}", NULL },
+    { XP3_XPATH_30, "function($x) {$x}", "(function (param x) (var x))" },
+    { XP3_XPATH_20, "f(?)", NULL },
+    { XP3_XPATH_30, "f(?)", "(call f (placeholder))" },
+    { XP3_XPATH_20, "$f(1)", NULL },
+    { XP3_XPATH_30, "$f(1)", "(filter (var f) (dynamic-call (integer 1)))" },
+    { XP3_XPATH_20, "$x instance of function(*)", NULL },
+    { XP3_XPATH_30, "$x instance of function(*)",
+      "(instance-of (var x) (type (function-test *)))" },
+    { XP3_XPATH_20, "$x instance of (xs:int)", NULL },
+
+    /* XPath 3.1 syntax */
+    { XP3_XPATH_30, "$x => f()", NULL },
+    { XP3_XPATH_30, "function() {}", NULL },
+    { XP3_XPATH_30, "map{}", NULL },
+    { XP3_XPATH_30, "[1]", NULL },
+    { XP3_XPATH_30, "array{1}", NULL },
+    { XP3_XPATH_30, "$m?a", NULL },
+    { XP3_XPATH_30, "?a", NULL },
+    { XP3_XPATH_30, "$x instance of map(*)", NULL },
+    { XP3_XPATH_30, "$x instance of array(*)", NULL },
 
     /* Q{} names are XPath 3.0 */
     { XP3_XPATH_20, "Q{urn:x}a", NULL },
@@ -441,6 +727,12 @@ testLevels(void) {
         xp3ErrorFree(err);
     }
 
+    xp3SetStaticContextLanguageLevel(ctx, XP3_XPATH_20);
+    expectMessage(ctx, "let $x := 1 return $x",
+                  "XPath 3.0 is required for let expressions");
+    xp3SetStaticContextLanguageLevel(ctx, XP3_XPATH_30);
+    expectMessage(ctx, "$x => f()", "XPath 3.1 is required for '=>'");
+
     xp3FreeStaticContext(ctx);
 }
 
@@ -470,6 +762,13 @@ testArguments(const xp3StaticContext *ctx) {
     xp3Error *err = NULL;
     xp3Ast *ast;
     xmlChar *tree;
+
+    /* The length can end inside a token */
+    ast = xp3Parse(ctx, BAD_CAST "'abc'", 3, &err);
+    check(ast == NULL && err != NULL &&
+          strcmp((const char *) xp3ErrorCode(err), "XPST0003") == 0,
+          "length ends inside a string literal");
+    xp3ErrorFree(err);
 
     /* Only length bytes are parsed */
     ast = xp3Parse(ctx, BAD_CAST "1 + 2junk", 5, &err);
@@ -507,6 +806,23 @@ repeat(const char *str, int n, const char *tail) {
     for (i = 0; i < n; i++)
         memcpy(ret + len * (size_t) i, str, len);
     memcpy(ret + len * (size_t) n, tail, tailLen + 1);
+    return(ret);
+}
+
+/* Put pre before and post after a malloc'ed string. Frees str. */
+static char *
+wrap(const char *pre, char *str, const char *post) {
+    char *ret;
+
+    if (str == NULL)
+        return(NULL);
+    ret = malloc(strlen(pre) + strlen(str) + strlen(post) + 1);
+    if (ret != NULL) {
+        strcpy(ret, pre);
+        strcat(ret, str);
+        strcat(ret, post);
+    }
+    free(str);
     return(ret);
 }
 
@@ -549,6 +865,31 @@ testLimits(const xp3StaticContext *defaultCtx) {
     expectLimit(ctx, repeat("-", 21, "1"), 21, "21 signs");
     expectLimit(ctx, repeat("1+", 20, "1"), 0, "20 additions");
     expectLimit(ctx, repeat("1+", 21, "1"), 42, "21 additions");
+    expectLimit(ctx, repeat("a!", 20, "a"), 0, "20 simple maps");
+    expectLimit(ctx, repeat("a!", 21, "a"), 42, "21 simple maps");
+    expectLimit(ctx, wrap("$x", repeat("=>f()", 20, ""), ""), 0,
+                "20 arrows");
+    expectLimit(ctx, wrap("$x", repeat("=>f()", 21, ""), ""), 103,
+                "21 arrows");
+    /* Each item type counts 1: 19 parentheses and the name make 20 */
+    expectLimit(ctx, wrap("$x instance of ", repeat("(", 19, "xs:int"),
+                          ")))))))))))))))))))"),
+                0, "19 parenthesized item types");
+    expectLimit(ctx, wrap("$x instance of ", repeat("(", 20, "xs:int"), ""),
+                36, "20 parenthesized item types");
+    expectLimit(ctx, wrap("", repeat("[", 3, "1"), "]]]"), 4,
+                "nested arrays");
+    expectLimit(ctx, wrap("", repeat("map{1:", 3, "1"), "}}}"), 17,
+                "nested maps");
+    expectLimit(ctx, wrap("", repeat("function(){", 3, "1"), "}}}"), 34,
+                "nested inline functions");
+    /* 19 function tests and item() make 20 item types */
+    expectLimit(ctx, wrap("$x instance of ",
+                          repeat("function() as ", 19, "item()"), ""),
+                0, "function types nested 19 deep");
+    expectLimit(ctx, wrap("$x instance of ",
+                          repeat("function() as ", 20, "item()"), ""),
+                296, "function types nested 20 deep");
     expectLimit(ctx, repeat("1,", 1000, "1"), 0, "sequences are flat");
     expectLimit(ctx, repeat("a/", 1000, "a"), 0, "paths are flat");
     xp3FreeStaticContext(ctx);
@@ -570,7 +911,10 @@ parseLarge(const xp3StaticContext *ctx, xp3Error **err) {
     static const char expr[] =
         "fn:concat('it''s', $p:x)[1]/child::a[@b = 1] | "
         "//c instance of element(d, xs:string?)*, "
-        "-Q{urn:x}e cast as xs:integer?, document-node(element(*))";
+        "-Q{urn:x}e cast as xs:integer?, document-node(element(*)), "
+        "let $m := map{'k': [1, ?a]} return $m?k => f(?), "
+        "function($x as map(*)) as item()* { $x ! . || 'z' }, "
+        "if (1) then some $v in () satisfies true() else 0";
 
     return(parseToString(ctx, expr, err));
 }
