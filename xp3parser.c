@@ -13,6 +13,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -122,6 +123,7 @@ static const struct {
 
 static xp3AstNode *parseExpr(xp3Parser *p);
 static xp3AstNode *parseExprSingle(xp3Parser *p);
+static xp3AstNode *parseSequenceType(xp3Parser *p);
 
 /*
  * Tokens and errors
@@ -245,14 +247,26 @@ parserExpect(xp3Parser *p, xp3TokenKind kind, const char *what) {
     return(parserAdvance(p));
 }
 
+/* Check that the current token is the keyword and move past it. */
+static int
+parserExpectKeyword(xp3Parser *p, const char *keyword) {
+    char what[24];
+
+    if (tokIsName(p, &p->tok, keyword))
+        return(parserAdvance(p));
+    snprintf(what, sizeof(what), "'%s'", keyword);
+    parserExpected(p, what);
+    return(-1);
+}
+
 /* Check that a construct is available at the language level. */
 static int
 parserRequire(xp3Parser *p, const xp3Token *tok, xp3LanguageLevel level,
               const char *what) {
     if (p->level >= level)
         return(0);
-    parserError(p, XP3_ERR_XPST0003, tok, "%s require XPath %d.%d", what,
-                (int) level / 10, (int) level % 10);
+    parserError(p, XP3_ERR_XPST0003, tok, "XPath %d.%d is required for %s",
+                (int) level / 10, (int) level % 10, what);
     return(-1);
 }
 
@@ -335,6 +349,42 @@ parserStringValue(xp3Parser *p, const xp3Token *tok) {
 }
 
 /*
+ * The URI of a BracedURILiteral, whitespace normalized as for
+ * xs:anyURI, which is what fn:normalize-space does (XPath 3.1, section
+ * 2 and 2.4.5): whitespace at the ends is removed, and other runs of
+ * whitespace become one space. A URI of only whitespace becomes "",
+ * the same as Q{}, which means no namespace.
+ */
+static const xmlChar *
+parserUriValue(xp3Parser *p, const xmlChar *uri, size_t len) {
+    xmlChar *value;
+    size_t i;
+    size_t j = 0;
+    int space = 0;
+
+    /* The copy is in the arena and not shared yet, so it is normalized
+     * in place. */
+    value = (xmlChar *) parserStrndup(p, uri, len);
+    if (value == NULL)
+        return(NULL);
+    for (i = 0; value[i] != 0; i++) {
+        xmlChar c = value[i];
+
+        if ((c == ' ') || (c == '\t') || (c == '\n') || (c == '\r')) {
+            space = (j > 0);
+            continue;
+        }
+        if (space) {
+            value[j++] = ' ';
+            space = 0;
+        }
+        value[j++] = c;
+    }
+    value[j] = 0;
+    return(value);
+}
+
+/*
  * Store the name of an NCNAME, QNAME or EQNAME token in a node: the
  * local name in text, and the prefix or the URI.
  */
@@ -351,7 +401,7 @@ parserSetName(xp3Parser *p, xp3AstNode *node, const xp3Token *tok) {
     } else if (tok->kind == XP3_TOK_EQNAME) {
         if (parserRequire(p, tok, XP3_XPATH_30, "Q{} names") < 0)
             return(-1);
-        node->uri = parserStrndup(p, text + 2, tok->sep - 2);
+        node->uri = parserUriValue(p, text + 2, tok->sep - 2);
         if (node->uri == NULL)
             return(-1);
         local = tok->sep + 1;
@@ -444,7 +494,7 @@ parseNameTest(xp3Parser *p) {
             if (parserRequire(p, tok, XP3_XPATH_30, "Q{} names") < 0)
                 return(NULL);
             test->op = XP3_NAMETEST_ANY_LOCAL;
-            test->uri = parserStrndup(p, text + 2, tok->sep - 2);
+            test->uri = parserUriValue(p, text + 2, tok->sep - 2);
             if (test->uri == NULL)
                 return(NULL);
             break;
@@ -573,39 +623,167 @@ parseKindTest(xp3Parser *p, xp3KindTestKind kind) {
 }
 
 /*
- * ItemType ::= KindTest | ("item" "(" ")") | AtomicOrUnionType
+ * FunctionTest ::= ("function" "(" "*" ")")
+ *                | ("function" "(" (SequenceType ("," SequenceType)*)? ")"
+ *                   "as" SequenceType)
+ */
+static xp3AstNode *
+parseFunctionTest(xp3Parser *p) {
+    xp3AstNode *test;
+    xp3AstNode *type;
+
+    test = parserTokNode(p, XP3_AST_FUNCTION_TEST, 1, &p->tok);
+    if ((test == NULL) ||
+        (parserRequire(p, &p->tok, XP3_XPATH_30, "function tests") < 0) ||
+        (parserAdvance(p) < 0) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    if (p->tok.kind == XP3_TOK_STAR) {
+        test->op = 0;
+        if ((parserAdvance(p) < 0) ||
+            (parserExpect(p, XP3_TOK_RPAREN, "')'") < 0))
+            return(NULL);
+        return(test);
+    }
+
+    if (p->tok.kind != XP3_TOK_RPAREN) {
+        for (;;) {
+            type = parseSequenceType(p);
+            if (type == NULL)
+                return(NULL);
+            xp3AstAppend(test, type);
+            if (p->tok.kind != XP3_TOK_COMMA)
+                break;
+            if (parserAdvance(p) < 0)
+                return(NULL);
+        }
+    }
+    if ((parserExpect(p, XP3_TOK_RPAREN, "',' or ')'") < 0) ||
+        (parserExpectKeyword(p, "as") < 0))
+        return(NULL);
+    type = parseSequenceType(p);
+    if (type == NULL)
+        return(NULL);
+    xp3AstAppend(test, type);
+    return(test);
+}
+
+/*
+ * MapTest   ::= ("map" "(" "*" ")")
+ *             | ("map" "(" AtomicOrUnionType "," SequenceType ")")
+ * ArrayTest ::= ("array" "(" "*" ")") | ("array" "(" SequenceType ")")
+ */
+static xp3AstNode *
+parseMapOrArrayTest(xp3Parser *p, xp3AstKind kind) {
+    xp3AstNode *test;
+    xp3AstNode *type;
+
+    test = parserTokNode(p, kind, 1, &p->tok);
+    if ((test == NULL) ||
+        (parserRequire(p, &p->tok, XP3_XPATH_31,
+                       (kind == XP3_AST_MAP_TEST) ? "map tests" :
+                                                    "array tests") < 0) ||
+        (parserAdvance(p) < 0) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    if (p->tok.kind == XP3_TOK_STAR) {
+        test->op = 0;
+        if (parserAdvance(p) < 0)
+            return(NULL);
+    } else {
+        if (kind == XP3_AST_MAP_TEST) {
+            if (!tokIsEQName(&p->tok))
+                return(parserExpected(p, "an atomic type name or '*'"));
+            type = parserTokNode(p, XP3_AST_ATOMIC_TYPE, 0, &p->tok);
+            if ((type == NULL) || (parserSetName(p, type, &p->tok) < 0) ||
+                (parserAdvance(p) < 0) ||
+                (parserExpect(p, XP3_TOK_COMMA, "','") < 0))
+                return(NULL);
+            xp3AstAppend(test, type);
+        }
+        type = parseSequenceType(p);
+        if (type == NULL)
+            return(NULL);
+        xp3AstAppend(test, type);
+    }
+
+    if (parserExpect(p, XP3_TOK_RPAREN, "')'") < 0)
+        return(NULL);
+    return(test);
+}
+
+/*
+ * ItemType ::= KindTest | ("item" "(" ")") | FunctionTest | MapTest
+ *            | ArrayTest | AtomicOrUnionType | ("(" ItemType ")")
+ *
+ * Function, map and array tests and parentheses nest, so item types
+ * count towards the nesting limit.
  */
 static xp3AstNode *
 parseItemType(xp3Parser *p) {
-    xp3AstNode *type;
+    xp3AstNode *type = NULL;
+    int next;
+    int kind;
+
+    if (parserEnter(p, 1) < 0)
+        return(NULL);
+
+    if (p->tok.kind == XP3_TOK_LPAREN) {
+        if ((parserRequire(p, &p->tok, XP3_XPATH_30,
+                           "parenthesized item types") < 0) ||
+            (parserAdvance(p) < 0))
+            goto done;
+        type = parseItemType(p);
+        if ((type != NULL) &&
+            (parserExpect(p, XP3_TOK_RPAREN, "')'") < 0))
+            type = NULL;
+        goto done;
+    }
 
     if (p->tok.kind == XP3_TOK_NCNAME) {
-        int next = parserPeekKind(p);
-        int kind;
-
+        next = parserPeekKind(p);
         if (next < 0)
-            return(NULL);
+            goto done;
         if (next == XP3_TOK_LPAREN) {
             if (tokIsName(p, &p->tok, "item")) {
                 type = parserTokNode(p, XP3_AST_ANY_ITEM_TYPE, 0, &p->tok);
                 if ((type == NULL) || (parserAdvance(p) < 0) ||
                     (parserAdvance(p) < 0) ||
                     (parserExpect(p, XP3_TOK_RPAREN, "')'") < 0))
-                    return(NULL);
-                return(type);
+                    type = NULL;
+                goto done;
+            }
+            if (tokIsName(p, &p->tok, "function")) {
+                type = parseFunctionTest(p);
+                goto done;
+            }
+            if (tokIsName(p, &p->tok, "map")) {
+                type = parseMapOrArrayTest(p, XP3_AST_MAP_TEST);
+                goto done;
+            }
+            if (tokIsName(p, &p->tok, "array")) {
+                type = parseMapOrArrayTest(p, XP3_AST_ARRAY_TEST);
+                goto done;
             }
             kind = lookupKindTest(p, &p->tok);
-            if (kind >= 0)
-                return(parseKindTest(p, (xp3KindTestKind) kind));
+            if (kind >= 0) {
+                type = parseKindTest(p, (xp3KindTestKind) kind);
+                goto done;
+            }
         }
     }
 
-    if (!tokIsEQName(&p->tok))
-        return(parserExpected(p, "a sequence type"));
+    if (!tokIsEQName(&p->tok)) {
+        parserExpected(p, "a sequence type");
+        goto done;
+    }
     type = parserTokNode(p, XP3_AST_ATOMIC_TYPE, 0, &p->tok);
     if ((type == NULL) || (parserSetName(p, type, &p->tok) < 0) ||
         (parserAdvance(p) < 0))
-        return(NULL);
+        type = NULL;
+
+done:
+    p->depth -= 1;
     return(type);
 }
 
@@ -614,7 +792,7 @@ parseItemType(xp3Parser *p) {
  *                | (ItemType OccurrenceIndicator?)
  *
  * A "?", "*" or "+" right after an item type is always an occurrence
- * indicator (A.2.1.3, occurrence-indicators), so in
+ * indicator (A.1.2, occurrence-indicators), so in
  * "4 treat as item() + - 5" the "+" belongs to the type.
  */
 static xp3AstNode *
@@ -704,11 +882,17 @@ parseString(xp3Parser *p) {
     return(node);
 }
 
-/* VarRef ::= "$" EQName */
+/*
+ * "$" EQName, as a node of the given kind at the "$": VarRef, the
+ * variable of a binding, or a parameter.
+ */
 static xp3AstNode *
-parseVarRef(xp3Parser *p) {
-    xp3AstNode *node = parserTokNode(p, XP3_AST_VARREF, 0, &p->tok);
+parseDollarName(xp3Parser *p, xp3AstKind kind) {
+    xp3AstNode *node;
 
+    if (p->tok.kind != XP3_TOK_DOLLAR)
+        return(parserExpected(p, "'$'"));
+    node = parserTokNode(p, kind, 0, &p->tok);
     if ((node == NULL) || (parserAdvance(p) < 0))
         return(NULL);
     if (!tokIsEQName(&p->tok))
@@ -739,61 +923,363 @@ parseParenthesized(xp3Parser *p) {
 }
 
 /*
- * FunctionCall ::= EQName ArgumentList
- * ArgumentList ::= "(" (ExprSingle ("," ExprSingle)*)? ")"
+ * EnclosedExpr ::= "{" Expr? "}"
  *
- * Unprefixed reserved names such as "if" or "item" are not function
- * names (A.3).
+ * Stores the expression in *expr, or NULL for "{}", which XPath 3.0
+ * does not allow yet.
  */
-static xp3AstNode *
-parseFunctionCall(xp3Parser *p) {
-    xp3AstNode *call;
-    xp3AstNode *arg;
-
-    if (isReservedName(p, &p->tok)) {
-        char name[48];
-
-        parserQuote(p, &p->tok, name, sizeof(name));
-        return(parserError(p, XP3_ERR_XPST0003, &p->tok,
-                           "%s is reserved and cannot be a function name",
-                           name));
+static int
+parseEnclosedExpr(xp3Parser *p, xp3AstNode **expr) {
+    *expr = NULL;
+    if (parserExpect(p, XP3_TOK_LBRACE, "'{'") < 0)
+        return(-1);
+    if (p->tok.kind == XP3_TOK_RBRACE) {
+        if (parserRequire(p, &p->tok, XP3_XPATH_31,
+                          "empty enclosed expressions") < 0)
+            return(-1);
+        return(parserAdvance(p));
     }
+    *expr = parseExpr(p);
+    if (*expr == NULL)
+        return(-1);
+    return(parserExpect(p, XP3_TOK_RBRACE, "'}'"));
+}
 
-    call = parserTokNode(p, XP3_AST_FUNCTION_CALL, 0, &p->tok);
-    if ((call == NULL) || (parserSetName(p, call, &p->tok) < 0) ||
-        (parserAdvance(p) < 0) ||
-        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0))
-        return(NULL);
+/*
+ * ArgumentList ::= "(" (Argument ("," Argument)*)? ")"
+ * Argument     ::= ExprSingle | ArgumentPlaceholder
+ *
+ * Appends the arguments to node. A "?" followed by "," or ")" is a
+ * placeholder, otherwise it starts a unary lookup.
+ */
+static int
+parseArgumentList(xp3Parser *p, xp3AstNode *node) {
+    if (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0)
+        return(-1);
+    if (p->tok.kind == XP3_TOK_RPAREN)
+        return(parserAdvance(p));
 
-    if (p->tok.kind == XP3_TOK_RPAREN) {
-        if (parserAdvance(p) < 0)
-            return(NULL);
-        return(call);
-    }
     for (;;) {
-        arg = parseExprSingle(p);
-        if (arg == NULL)
-            return(NULL);
-        xp3AstAppend(call, arg);
+        xp3AstNode *arg = NULL;
+
+        if (p->tok.kind == XP3_TOK_QUESTION) {
+            int next = parserPeekKind(p);
+
+            if (next < 0)
+                return(-1);
+            if ((next == XP3_TOK_COMMA) || (next == XP3_TOK_RPAREN)) {
+                if (parserRequire(p, &p->tok, XP3_XPATH_30,
+                                  "argument placeholders") < 0)
+                    return(-1);
+                arg = parserTokNode(p, XP3_AST_ARG_PLACEHOLDER, 0, &p->tok);
+                if ((arg == NULL) || (parserAdvance(p) < 0))
+                    return(-1);
+            }
+        }
+        if (arg == NULL) {
+            arg = parseExprSingle(p);
+            if (arg == NULL)
+                return(-1);
+        }
+        xp3AstAppend(node, arg);
         if (p->tok.kind != XP3_TOK_COMMA)
             break;
         if (parserAdvance(p) < 0)
-            return(NULL);
+            return(-1);
     }
-    if (parserExpect(p, XP3_TOK_RPAREN, "',' or ')'") < 0)
+    return(parserExpect(p, XP3_TOK_RPAREN, "',' or ')'"));
+}
+
+/* Unprefixed reserved names such as "if" or "item" are not function
+ * names (A.3). */
+static int
+parserCheckFunctionName(xp3Parser *p) {
+    char name[48];
+
+    if (!isReservedName(p, &p->tok))
+        return(0);
+    parserQuote(p, &p->tok, name, sizeof(name));
+    parserError(p, XP3_ERR_XPST0003, &p->tok,
+                "%s is reserved and cannot be a function name", name);
+    return(-1);
+}
+
+/* FunctionCall ::= EQName ArgumentList */
+static xp3AstNode *
+parseFunctionCall(xp3Parser *p) {
+    xp3AstNode *call;
+
+    if (parserCheckFunctionName(p) < 0)
+        return(NULL);
+    call = parserTokNode(p, XP3_AST_FUNCTION_CALL, 0, &p->tok);
+    if ((call == NULL) || (parserSetName(p, call, &p->tok) < 0) ||
+        (parserAdvance(p) < 0) || (parseArgumentList(p, call) < 0))
         return(NULL);
     return(call);
 }
 
 /*
- * PrimaryExpr ::= Literal | VarRef | ParenthesizedExpr
- *               | ContextItemExpr | FunctionCall
+ * NamedFunctionRef ::= EQName "#" IntegerLiteral
  *
- * parseStep() only comes here for a name when it is followed by "(".
+ * An arity that does not fit in an int cannot match any function, so
+ * it is reported as XPST0017 right away.
+ */
+static xp3AstNode *
+parseNamedFunctionRef(xp3Parser *p) {
+    xp3AstNode *ref;
+    const xmlChar *digits;
+    size_t i;
+    int arity = 0;
+
+    if ((parserRequire(p, &p->tok, XP3_XPATH_30,
+                       "named function references") < 0) ||
+        (parserCheckFunctionName(p) < 0))
+        return(NULL);
+    ref = parserTokNode(p, XP3_AST_NAMED_FUNCTION_REF, 0, &p->tok);
+    if ((ref == NULL) || (parserSetName(p, ref, &p->tok) < 0) ||
+        (parserAdvance(p) < 0) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    if (p->tok.kind != XP3_TOK_INTEGER)
+        return(parserExpected(p, "an arity after '#'"));
+    digits = p->lex.input + p->tok.start;
+    for (i = 0; i < p->tok.length; i++) {
+        int digit = digits[i] - '0';
+
+        if (arity > (INT_MAX - digit) / 10)
+            return(parserError(p, XP3_ERR_XPST0017, &p->tok,
+                               "function arity is too large"));
+        arity = arity * 10 + digit;
+    }
+    ref->op = arity;
+    if (parserAdvance(p) < 0)
+        return(NULL);
+    return(ref);
+}
+
+/*
+ * InlineFunctionExpr ::= "function" "(" ParamList? ")"
+ *                        ("as" SequenceType)? FunctionBody
+ * Param              ::= "$" EQName ("as" SequenceType)?
+ * FunctionBody       ::= EnclosedExpr
+ *
+ * An empty body "{}" is stored as an EMPTY_SEQUENCE node.
+ */
+static xp3AstNode *
+parseInlineFunction(xp3Parser *p) {
+    xp3AstNode *func;
+    xp3AstNode *type;
+    xp3AstNode *body;
+    xp3Token brace;
+
+    func = parserTokNode(p, XP3_AST_INLINE_FUNCTION, 0, &p->tok);
+    if ((func == NULL) || (parserAdvance(p) < 0) ||
+        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0))
+        return(NULL);
+
+    if (p->tok.kind != XP3_TOK_RPAREN) {
+        for (;;) {
+            xp3AstNode *param = parseDollarName(p, XP3_AST_PARAM);
+
+            if (param == NULL)
+                return(NULL);
+            if (tokIsName(p, &p->tok, "as")) {
+                if (parserAdvance(p) < 0)
+                    return(NULL);
+                type = parseSequenceType(p);
+                if (type == NULL)
+                    return(NULL);
+                xp3AstAppend(param, type);
+            }
+            xp3AstAppend(func, param);
+            if (p->tok.kind != XP3_TOK_COMMA)
+                break;
+            if (parserAdvance(p) < 0)
+                return(NULL);
+        }
+    }
+    if (parserExpect(p, XP3_TOK_RPAREN, "',' or ')'") < 0)
+        return(NULL);
+
+    if (tokIsName(p, &p->tok, "as")) {
+        if (parserAdvance(p) < 0)
+            return(NULL);
+        type = parseSequenceType(p);
+        if (type == NULL)
+            return(NULL);
+        xp3AstAppend(func, type);
+    }
+
+    brace = p->tok;
+    if (parseEnclosedExpr(p, &body) < 0)
+        return(NULL);
+    if (body == NULL) {
+        body = parserTokNode(p, XP3_AST_EMPTY_SEQUENCE, 0, &brace);
+        if (body == NULL)
+            return(NULL);
+    }
+    xp3AstAppend(func, body);
+    return(func);
+}
+
+/*
+ * MapConstructor      ::= "map" "{" (MapConstructorEntry
+ *                         ("," MapConstructorEntry)*)? "}"
+ * MapConstructorEntry ::= ExprSingle ":" ExprSingle
+ *
+ * "map{a:b}" is a syntax error, because "a:b" is one QName token. The
+ * key needs a space, as in "map{a : b}" (XPath 3.1, 3.11.1.1).
+ */
+static xp3AstNode *
+parseMap(xp3Parser *p) {
+    xp3AstNode *map;
+
+    if (parserRequire(p, &p->tok, XP3_XPATH_31, "maps") < 0)
+        return(NULL);
+    map = parserTokNode(p, XP3_AST_MAP, 0, &p->tok);
+    if ((map == NULL) || (parserAdvance(p) < 0) ||
+        (parserExpect(p, XP3_TOK_LBRACE, "'{'") < 0))
+        return(NULL);
+
+    if (p->tok.kind == XP3_TOK_RBRACE) {
+        if (parserAdvance(p) < 0)
+            return(NULL);
+        return(map);
+    }
+    for (;;) {
+        xp3AstNode *key;
+        xp3AstNode *value;
+        xp3AstNode *entry;
+
+        key = parseExprSingle(p);
+        if (key == NULL)
+            return(NULL);
+        entry = parserWrap(p, XP3_AST_MAP_ENTRY, 0, key);
+        if ((entry == NULL) || (parserExpect(p, XP3_TOK_COLON, "':'") < 0))
+            return(NULL);
+        value = parseExprSingle(p);
+        if (value == NULL)
+            return(NULL);
+        xp3AstAppend(entry, value);
+        xp3AstAppend(map, entry);
+        if (p->tok.kind != XP3_TOK_COMMA)
+            break;
+        if (parserAdvance(p) < 0)
+            return(NULL);
+    }
+    if (parserExpect(p, XP3_TOK_RBRACE, "',' or '}'") < 0)
+        return(NULL);
+    return(map);
+}
+
+/* SquareArrayConstructor ::= "[" (ExprSingle ("," ExprSingle)*)? "]" */
+static xp3AstNode *
+parseSquareArray(xp3Parser *p) {
+    xp3AstNode *array;
+
+    if (parserRequire(p, &p->tok, XP3_XPATH_31, "arrays") < 0)
+        return(NULL);
+    array = parserTokNode(p, XP3_AST_ARRAY_SQUARE, 0, &p->tok);
+    if ((array == NULL) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    if (p->tok.kind == XP3_TOK_RBRACKET) {
+        if (parserAdvance(p) < 0)
+            return(NULL);
+        return(array);
+    }
+    for (;;) {
+        xp3AstNode *member = parseExprSingle(p);
+
+        if (member == NULL)
+            return(NULL);
+        xp3AstAppend(array, member);
+        if (p->tok.kind != XP3_TOK_COMMA)
+            break;
+        if (parserAdvance(p) < 0)
+            return(NULL);
+    }
+    if (parserExpect(p, XP3_TOK_RBRACKET, "',' or ']'") < 0)
+        return(NULL);
+    return(array);
+}
+
+/* CurlyArrayConstructor ::= "array" EnclosedExpr */
+static xp3AstNode *
+parseCurlyArray(xp3Parser *p) {
+    xp3AstNode *array;
+    xp3AstNode *expr;
+
+    if (parserRequire(p, &p->tok, XP3_XPATH_31, "arrays") < 0)
+        return(NULL);
+    array = parserTokNode(p, XP3_AST_ARRAY_CURLY, 0, &p->tok);
+    if ((array == NULL) || (parserAdvance(p) < 0) ||
+        (parseEnclosedExpr(p, &expr) < 0))
+        return(NULL);
+    if (expr != NULL)
+        xp3AstAppend(array, expr);
+    return(array);
+}
+
+/*
+ * Lookup       ::= "?" KeySpecifier
+ * UnaryLookup  ::= "?" KeySpecifier
+ * KeySpecifier ::= NCName | IntegerLiteral | ParenthesizedExpr | "*"
+ *
+ * kind is LOOKUP after a postfix expression, UNARY_LOOKUP as a
+ * primary.
+ */
+static xp3AstNode *
+parseLookup(xp3Parser *p, xp3AstKind kind) {
+    xp3AstNode *lookup;
+    xp3AstNode *expr;
+
+    if (parserRequire(p, &p->tok, XP3_XPATH_31, "lookups") < 0)
+        return(NULL);
+    lookup = parserTokNode(p, kind, XP3_LOOKUP_NAME, &p->tok);
+    if ((lookup == NULL) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    switch (p->tok.kind) {
+        case XP3_TOK_NCNAME:
+        case XP3_TOK_INTEGER:
+            if (p->tok.kind == XP3_TOK_INTEGER)
+                lookup->op = XP3_LOOKUP_INTEGER;
+            lookup->text = parserStrndup(p, p->lex.input + p->tok.start,
+                                         p->tok.length);
+            if ((lookup->text == NULL) || (parserAdvance(p) < 0))
+                return(NULL);
+            break;
+        case XP3_TOK_STAR:
+            lookup->op = XP3_LOOKUP_WILDCARD;
+            if (parserAdvance(p) < 0)
+                return(NULL);
+            break;
+        case XP3_TOK_LPAREN:
+            lookup->op = XP3_LOOKUP_EXPR;
+            expr = parseParenthesized(p);
+            if (expr == NULL)
+                return(NULL);
+            xp3AstAppend(lookup, expr);
+            break;
+        default:
+            return(parserExpected(p, "a key after '?'"));
+    }
+    return(lookup);
+}
+
+/*
+ * PrimaryExpr ::= Literal | VarRef | ParenthesizedExpr
+ *               | ContextItemExpr | FunctionCall | FunctionItemExpr
+ *               | MapConstructor | ArrayConstructor | UnaryLookup
+ *
+ * parseStep() only comes here for a name when "(", "#" or, for map
+ * and array, "{" follows.
  */
 static xp3AstNode *
 parsePrimary(xp3Parser *p) {
     xp3AstNode *node;
+    int next;
 
     switch (p->tok.kind) {
         case XP3_TOK_INTEGER:
@@ -805,9 +1291,13 @@ parsePrimary(xp3Parser *p) {
         case XP3_TOK_STRING:
             return(parseString(p));
         case XP3_TOK_DOLLAR:
-            return(parseVarRef(p));
+            return(parseDollarName(p, XP3_AST_VARREF));
         case XP3_TOK_LPAREN:
             return(parseParenthesized(p));
+        case XP3_TOK_LBRACKET:
+            return(parseSquareArray(p));
+        case XP3_TOK_QUESTION:
+            return(parseLookup(p, XP3_AST_UNARY_LOOKUP));
         case XP3_TOK_DOT:
             node = parserTokNode(p, XP3_AST_CONTEXT_ITEM, 0, &p->tok);
             if ((node == NULL) || (parserAdvance(p) < 0))
@@ -816,40 +1306,58 @@ parsePrimary(xp3Parser *p) {
         case XP3_TOK_NCNAME:
         case XP3_TOK_QNAME:
         case XP3_TOK_EQNAME:
+            next = parserPeekKind(p);
+            if (next < 0)
+                return(NULL);
+            if (next == XP3_TOK_HASH)
+                return(parseNamedFunctionRef(p));
+            if ((next == XP3_TOK_LBRACE) && tokIsName(p, &p->tok, "map"))
+                return(parseMap(p));
+            if ((next == XP3_TOK_LBRACE) && tokIsName(p, &p->tok, "array"))
+                return(parseCurlyArray(p));
+            if ((next == XP3_TOK_LPAREN) && (p->level >= XP3_XPATH_30) &&
+                tokIsName(p, &p->tok, "function"))
+                return(parseInlineFunction(p));
             return(parseFunctionCall(p));
         default:
             return(parserExpected(p, "an expression"));
     }
 }
 
-/*
- * Predicate ::= "[" Expr "]"
- *
- * Appends predicates as long as there are any, and returns node.
- */
+/* Predicate ::= "[" Expr "]" */
+static xp3AstNode *
+parsePredicate(xp3Parser *p) {
+    xp3AstNode *pred;
+    xp3AstNode *expr;
+
+    pred = parserTokNode(p, XP3_AST_PREDICATE, 0, &p->tok);
+    if ((pred == NULL) || (parserAdvance(p) < 0))
+        return(NULL);
+    expr = parseExpr(p);
+    if ((expr == NULL) || (parserExpect(p, XP3_TOK_RBRACKET, "']'") < 0))
+        return(NULL);
+    xp3AstAppend(pred, expr);
+    return(pred);
+}
+
+/* Append predicates as long as there are any. Returns node. */
 static xp3AstNode *
 parsePredicates(xp3Parser *p, xp3AstNode *node) {
     while (p->tok.kind == XP3_TOK_LBRACKET) {
-        xp3AstNode *pred;
-        xp3AstNode *expr;
+        xp3AstNode *pred = parsePredicate(p);
 
-        pred = parserTokNode(p, XP3_AST_PREDICATE, 0, &p->tok);
-        if ((pred == NULL) || (parserAdvance(p) < 0))
+        if (pred == NULL)
             return(NULL);
-        expr = parseExpr(p);
-        if ((expr == NULL) || (parserExpect(p, XP3_TOK_RBRACKET, "']'") < 0))
-            return(NULL);
-        xp3AstAppend(pred, expr);
         xp3AstAppend(node, pred);
     }
     return(node);
 }
 
 /*
- * PostfixExpr ::= PrimaryExpr Predicate*
+ * PostfixExpr ::= PrimaryExpr (Predicate | ArgumentList | Lookup)*
  *
- * A primary without predicates is returned as it is, otherwise it is
- * wrapped in a FILTER node.
+ * A primary without postfixes is returned as it is, otherwise it is
+ * wrapped in a FILTER node with the postfixes in order.
  */
 static xp3AstNode *
 parsePostfix(xp3Parser *p) {
@@ -857,12 +1365,40 @@ parsePostfix(xp3Parser *p) {
     xp3AstNode *filter;
 
     primary = parsePrimary(p);
-    if ((primary == NULL) || (p->tok.kind != XP3_TOK_LBRACKET))
+    if ((primary == NULL) ||
+        ((p->tok.kind != XP3_TOK_LBRACKET) &&
+         (p->tok.kind != XP3_TOK_LPAREN) &&
+         (p->tok.kind != XP3_TOK_QUESTION)))
         return(primary);
     filter = parserWrap(p, XP3_AST_FILTER, 0, primary);
     if (filter == NULL)
         return(NULL);
-    return(parsePredicates(p, filter));
+
+    for (;;) {
+        xp3AstNode *node;
+
+        switch (p->tok.kind) {
+            case XP3_TOK_LBRACKET:
+                node = parsePredicate(p);
+                break;
+            case XP3_TOK_LPAREN:
+                if (parserRequire(p, &p->tok, XP3_XPATH_30,
+                                  "dynamic function calls") < 0)
+                    return(NULL);
+                node = parserTokNode(p, XP3_AST_DYNAMIC_CALL, 0, &p->tok);
+                if ((node != NULL) && (parseArgumentList(p, node) < 0))
+                    node = NULL;
+                break;
+            case XP3_TOK_QUESTION:
+                node = parseLookup(p, XP3_AST_LOOKUP);
+                break;
+            default:
+                return(filter);
+        }
+        if (node == NULL)
+            return(NULL);
+        xp3AstAppend(filter, node);
+    }
 }
 
 /*
@@ -906,8 +1442,9 @@ parseNodeTest(xp3Parser *p) {
  * AxisStep ::= (ForwardAxis NodeTest | "@"? NodeTest
  *               | ReverseAxis NodeTest | "..") Predicate*
  *
- * A name is a function call if "(" follows and it is not a kind test,
- * otherwise a name test. Without an axis, the axis is child, except
+ * A name starts a primary expression if "(" follows and it is not a
+ * kind test, if "#" follows, or if it is map or array followed by "{".
+ * Otherwise it is a name test. Without an axis, the axis is child, except
  * for attribute() and schema-attribute(), which use the attribute
  * axis, and namespace-node(), which uses the namespace axis.
  */
@@ -949,8 +1486,12 @@ parseStep(xp3Parser *p) {
                 }
                 if ((parserAdvance(p) < 0) || (parserAdvance(p) < 0))
                     return(NULL);
-            } else if ((next == XP3_TOK_LPAREN) &&
-                       (lookupKindTest(p, &p->tok) < 0)) {
+            } else if (((next == XP3_TOK_LPAREN) &&
+                        (lookupKindTest(p, &p->tok) < 0)) ||
+                       (next == XP3_TOK_HASH) ||
+                       ((next == XP3_TOK_LBRACE) &&
+                        (tokIsName(p, &p->tok, "map") ||
+                         tokIsName(p, &p->tok, "array")))) {
                 return(parsePostfix(p));
             }
             break;
@@ -960,7 +1501,7 @@ parseStep(xp3Parser *p) {
             next = parserPeekKind(p);
             if (next < 0)
                 return(NULL);
-            if (next == XP3_TOK_LPAREN)
+            if ((next == XP3_TOK_LPAREN) || (next == XP3_TOK_HASH))
                 return(parsePostfix(p));
             break;
 
@@ -1014,6 +1555,8 @@ parserStartsStep(const xp3Parser *p) {
         case XP3_TOK_DOTDOT:
         case XP3_TOK_AT:
         case XP3_TOK_DOLLAR:
+        case XP3_TOK_LBRACKET:
+        case XP3_TOK_QUESTION:
             return(1);
         default:
             return(0);
@@ -1027,7 +1570,7 @@ parserStartsStep(const xp3Parser *p) {
  * RelativePathExpr ::= StepExpr (("/" | "//") StepExpr)*
  *
  * A "/" followed by a token that can start a step is the start of a
- * path, not a complete one (A.2.1.2, leading-lone-slash), so "/ * 5"
+ * path, not a complete one (A.1.2, leading-lone-slash), so "/ * 5"
  * is a syntax error and "(/) * 5" is a multiplication.
  *
  * A single step that is not an axis step, such as "$x" or "f()", is
@@ -1096,112 +1639,14 @@ parsePath(xp3Parser *p) {
  * Operators
  */
 
-/*
- * UnaryExpr ::= ("-" | "+")* ValueExpr
- * ValueExpr ::= PathExpr
- *
- * "-+-1" gives (unary - (unary + (unary - (integer 1)))).
- */
-static xp3AstNode *
-parseUnary(xp3Parser *p) {
-    xp3AstNode *top = NULL;
-    xp3AstNode *last = NULL;
-    xp3AstNode *ret = NULL;
-    xp3AstNode *operand;
-    int signs = 0;
-
-    while ((p->tok.kind == XP3_TOK_PLUS) || (p->tok.kind == XP3_TOK_MINUS)) {
-        xp3AstNode *node;
-
-        if (parserEnter(p, 1) < 0)
-            goto done;
-        signs++;
-        node = parserTokNode(p, XP3_AST_UNARY,
-                             (p->tok.kind == XP3_TOK_PLUS) ? XP3_OP_ADD :
-                                                             XP3_OP_SUB,
-                             &p->tok);
-        if ((node == NULL) || (parserAdvance(p) < 0))
-            goto done;
-        if (last != NULL)
-            xp3AstAppend(last, node);
-        else
-            top = node;
-        last = node;
-    }
-
-    operand = parsePath(p);
-    if (operand == NULL)
-        goto done;
-    if (last == NULL) {
-        ret = operand;
-    } else {
-        xp3AstAppend(last, operand);
-        ret = top;
-    }
-
-done:
-    p->depth -= signs;
-    return(ret);
-}
-
-/*
- * InstanceofExpr, TreatExpr, CastableExpr and CastExpr: an operand,
- * then optionally two keywords and a type. None of them repeats.
- */
-static xp3AstNode *
-parseTypeOperator(xp3Parser *p, xp3ParseFunc operand, const char *keyword,
-                  const char *keyword2, xp3AstKind kind, int single) {
-    xp3AstNode *left;
-    xp3AstNode *node;
-    xp3AstNode *type;
-
-    left = operand(p);
-    if ((left == NULL) || (!tokIsName(p, &p->tok, keyword)))
-        return(left);
-    node = parserWrap(p, kind, 0, left);
-    if ((node == NULL) || (parserAdvance(p) < 0))
-        return(NULL);
-    if (!tokIsName(p, &p->tok, keyword2)) {
-        char what[16];
-
-        snprintf(what, sizeof(what), "'%s'", keyword2);
-        return(parserExpected(p, what));
-    }
-    if (parserAdvance(p) < 0)
-        return(NULL);
-    type = single ? parseSingleType(p) : parseSequenceType(p);
-    if (type == NULL)
-        return(NULL);
-    xp3AstAppend(node, type);
-    return(node);
-}
-
-/* CastExpr ::= UnaryExpr ("cast" "as" SingleType)? */
-static xp3AstNode *
-parseCast(xp3Parser *p) {
-    return(parseTypeOperator(p, parseUnary, "cast", "as", XP3_AST_CAST_AS,
-                             1));
-}
-
-/* CastableExpr ::= CastExpr ("castable" "as" SingleType)? */
-static xp3AstNode *
-parseCastable(xp3Parser *p) {
-    return(parseTypeOperator(p, parseCast, "castable", "as",
-                             XP3_AST_CASTABLE_AS, 1));
-}
-
-/* TreatExpr ::= CastableExpr ("treat" "as" SequenceType)? */
-static xp3AstNode *
-parseTreat(xp3Parser *p) {
-    return(parseTypeOperator(p, parseCastable, "treat", "as",
-                             XP3_AST_TREAT_AS, 0));
-}
-
-/* InstanceofExpr ::= TreatExpr ("instance" "of" SequenceType)? */
-static xp3AstNode *
-parseInstanceOf(xp3Parser *p) {
-    return(parseTypeOperator(p, parseTreat, "instance", "of",
-                             XP3_AST_INSTANCE_OF, 0));
+/* Check the language level of operators added after XPath 2.0. */
+static int
+parserRequireOp(xp3Parser *p, int op) {
+    if (op == XP3_OP_CONCAT)
+        return(parserRequire(p, &p->tok, XP3_XPATH_30, "'||'"));
+    if (op == XP3_OP_SIMPLE_MAP)
+        return(parserRequire(p, &p->tok, XP3_XPATH_30, "'!'"));
+    return(0);
 }
 
 /*
@@ -1224,7 +1669,7 @@ parseBinary(xp3Parser *p, xp3ParseFunc operand, xp3MatchFunc match,
         xp3AstNode *node;
         xp3AstNode *right;
 
-        if (parserEnter(p, 1) < 0) {
+        if ((parserRequireOp(p, op) < 0) || (parserEnter(p, 1) < 0)) {
             left = NULL;
             break;
         }
@@ -1247,6 +1692,11 @@ parseBinary(xp3Parser *p, xp3ParseFunc operand, xp3MatchFunc match,
     }
     p->depth -= folds;
     return(left);
+}
+
+static int
+matchSimpleMap(const xp3Parser *p) {
+    return((p->tok.kind == XP3_TOK_BANG) ? XP3_OP_SIMPLE_MAP : -1);
 }
 
 static int
@@ -1285,6 +1735,11 @@ matchAdditive(const xp3Parser *p) {
     if (p->tok.kind == XP3_TOK_MINUS)
         return(XP3_OP_SUB);
     return(-1);
+}
+
+static int
+matchConcat(const xp3Parser *p) {
+    return((p->tok.kind == XP3_TOK_PIPEPIPE) ? XP3_OP_CONCAT : -1);
 }
 
 static int
@@ -1332,6 +1787,170 @@ matchOr(const xp3Parser *p) {
     return(tokIsName(p, &p->tok, "or") ? XP3_OP_OR : -1);
 }
 
+/*
+ * UnaryExpr     ::= ("-" | "+")* ValueExpr
+ * ValueExpr     ::= SimpleMapExpr
+ * SimpleMapExpr ::= PathExpr ("!" PathExpr)*
+ *
+ * "-+-1" gives (unary - (unary + (unary - (integer 1)))).
+ */
+static xp3AstNode *
+parseUnary(xp3Parser *p) {
+    xp3AstNode *top = NULL;
+    xp3AstNode *last = NULL;
+    xp3AstNode *ret = NULL;
+    xp3AstNode *operand;
+    int signs = 0;
+
+    while ((p->tok.kind == XP3_TOK_PLUS) || (p->tok.kind == XP3_TOK_MINUS)) {
+        xp3AstNode *node;
+
+        if (parserEnter(p, 1) < 0)
+            goto done;
+        signs++;
+        node = parserTokNode(p, XP3_AST_UNARY,
+                             (p->tok.kind == XP3_TOK_PLUS) ? XP3_OP_ADD :
+                                                             XP3_OP_SUB,
+                             &p->tok);
+        if ((node == NULL) || (parserAdvance(p) < 0))
+            goto done;
+        if (last != NULL)
+            xp3AstAppend(last, node);
+        else
+            top = node;
+        last = node;
+    }
+
+    operand = parseBinary(p, parsePath, matchSimpleMap, 1);
+    if (operand == NULL)
+        goto done;
+    if (last == NULL) {
+        ret = operand;
+    } else {
+        xp3AstAppend(last, operand);
+        ret = top;
+    }
+
+done:
+    p->depth -= signs;
+    return(ret);
+}
+
+/*
+ * InstanceofExpr, TreatExpr, CastableExpr and CastExpr: an operand,
+ * then optionally two keywords and a type. None of them repeats.
+ */
+static xp3AstNode *
+parseTypeOperator(xp3Parser *p, xp3ParseFunc operand, const char *keyword,
+                  const char *keyword2, xp3AstKind kind, int single) {
+    xp3AstNode *left;
+    xp3AstNode *node;
+    xp3AstNode *type;
+
+    left = operand(p);
+    if ((left == NULL) || (!tokIsName(p, &p->tok, keyword)))
+        return(left);
+    node = parserWrap(p, kind, 0, left);
+    if ((node == NULL) || (parserAdvance(p) < 0) ||
+        (parserExpectKeyword(p, keyword2) < 0))
+        return(NULL);
+    type = single ? parseSingleType(p) : parseSequenceType(p);
+    if (type == NULL)
+        return(NULL);
+    xp3AstAppend(node, type);
+    return(node);
+}
+
+/*
+ * ArrowExpr              ::= UnaryExpr ("=>" ArrowFunctionSpecifier
+ *                            ArgumentList)*
+ * ArrowFunctionSpecifier ::= EQName | VarRef | ParenthesizedExpr
+ *
+ * "$x => f(1)" gives (arrow f (var x) (integer 1)), and
+ * "$x => $f(1)" gives (arrow (var x) (var f) (integer 1)).
+ */
+static xp3AstNode *
+parseArrow(xp3Parser *p) {
+    xp3AstNode *left;
+    int folds = 0;
+
+    left = parseUnary(p);
+    while ((left != NULL) && (p->tok.kind == XP3_TOK_ARROW)) {
+        xp3AstNode *arrow;
+        xp3AstNode *func = NULL;
+
+        if ((parserRequire(p, &p->tok, XP3_XPATH_31, "'=>'") < 0) ||
+            (parserEnter(p, 1) < 0)) {
+            left = NULL;
+            break;
+        }
+        folds++;
+        arrow = parserWrap(p, XP3_AST_ARROW, XP3_ARROW_NAME, left);
+        if ((arrow == NULL) || (parserAdvance(p) < 0)) {
+            left = NULL;
+            break;
+        }
+
+        if (tokIsEQName(&p->tok)) {
+            if ((parserSetName(p, arrow, &p->tok) < 0) ||
+                (parserAdvance(p) < 0)) {
+                left = NULL;
+                break;
+            }
+        } else if (p->tok.kind == XP3_TOK_DOLLAR) {
+            func = parseDollarName(p, XP3_AST_VARREF);
+        } else if (p->tok.kind == XP3_TOK_LPAREN) {
+            func = parseParenthesized(p);
+        } else {
+            left = parserExpected(p, "a function after '=>'");
+            break;
+        }
+        if (func != NULL) {
+            arrow->op = XP3_ARROW_EXPR;
+            xp3AstAppend(arrow, func);
+        } else if (arrow->text == NULL) {
+            left = NULL;
+            break;
+        }
+
+        if (parseArgumentList(p, arrow) < 0) {
+            left = NULL;
+            break;
+        }
+        left = arrow;
+    }
+    p->depth -= folds;
+    return(left);
+}
+
+/* CastExpr ::= ArrowExpr ("cast" "as" SingleType)? */
+static xp3AstNode *
+parseCast(xp3Parser *p) {
+    return(parseTypeOperator(p, parseArrow, "cast", "as", XP3_AST_CAST_AS,
+                             1));
+}
+
+/* CastableExpr ::= CastExpr ("castable" "as" SingleType)? */
+static xp3AstNode *
+parseCastable(xp3Parser *p) {
+    return(parseTypeOperator(p, parseCast, "castable", "as",
+                             XP3_AST_CASTABLE_AS, 1));
+}
+
+/* TreatExpr ::= CastableExpr ("treat" "as" SequenceType)? */
+static xp3AstNode *
+parseTreat(xp3Parser *p) {
+    return(parseTypeOperator(p, parseCastable, "treat", "as",
+                             XP3_AST_TREAT_AS, 0));
+}
+
+/* InstanceofExpr ::= TreatExpr ("instance" "of" SequenceType)? */
+static xp3AstNode *
+parseInstanceOf(xp3Parser *p) {
+    return(parseTypeOperator(p, parseTreat, "instance", "of",
+                             XP3_AST_INSTANCE_OF, 0));
+}
+
 /* IntersectExceptExpr ::= InstanceofExpr (("intersect" | "except")
  *                         InstanceofExpr)* */
 static xp3AstNode *
@@ -1365,15 +1984,21 @@ parseRange(xp3Parser *p) {
     return(parseBinary(p, parseAdditive, matchRange, 0));
 }
 
+/* StringConcatExpr ::= RangeExpr ("||" RangeExpr)* */
+static xp3AstNode *
+parseStringConcat(xp3Parser *p) {
+    return(parseBinary(p, parseRange, matchConcat, 1));
+}
+
 /*
- * ComparisonExpr ::= RangeExpr ((ValueComp | GeneralComp | NodeComp)
- *                    RangeExpr)?
+ * ComparisonExpr ::= StringConcatExpr ((ValueComp | GeneralComp |
+ *                    NodeComp) StringConcatExpr)?
  *
  * Comparisons do not chain: "1 = 2 = 3" is a syntax error.
  */
 static xp3AstNode *
 parseComparison(xp3Parser *p) {
-    return(parseBinary(p, parseRange, matchComparison, 0));
+    return(parseBinary(p, parseStringConcat, matchComparison, 0));
 }
 
 /* AndExpr ::= ComparisonExpr ("and" ComparisonExpr)* */
@@ -1388,14 +2013,129 @@ parseOr(xp3Parser *p) {
     return(parseBinary(p, parseAnd, matchOr, 1));
 }
 
-/* ExprSingle ::= OrExpr */
+/*
+ * ForExpr          ::= "for" SimpleForBinding ("," SimpleForBinding)*
+ *                      "return" ExprSingle
+ * SimpleForBinding ::= "$" VarName "in" ExprSingle
+ * LetExpr          ::= "let" SimpleLetBinding ("," SimpleLetBinding)*
+ *                      "return" ExprSingle
+ * SimpleLetBinding ::= "$" VarName ":=" ExprSingle
+ * QuantifiedExpr   ::= ("some" | "every") "$" VarName "in" ExprSingle
+ *                      ("," "$" VarName "in" ExprSingle)*
+ *                      "satisfies" ExprSingle
+ *
+ * The node has one BINDING child per variable, then the expression
+ * after keyword.
+ */
+static xp3AstNode *
+parseBindingExpr(xp3Parser *p, xp3AstKind kind, const char *keyword) {
+    xp3AstNode *node;
+    xp3AstNode *expr;
+
+    node = parserTokNode(p, kind, 0, &p->tok);
+    if ((node == NULL) || (parserAdvance(p) < 0))
+        return(NULL);
+
+    for (;;) {
+        xp3AstNode *binding = parseDollarName(p, XP3_AST_BINDING);
+
+        if (binding == NULL)
+            return(NULL);
+        if (kind == XP3_AST_LET) {
+            if (parserExpect(p, XP3_TOK_ASSIGN, "':='") < 0)
+                return(NULL);
+        } else if (parserExpectKeyword(p, "in") < 0) {
+            return(NULL);
+        }
+        expr = parseExprSingle(p);
+        if (expr == NULL)
+            return(NULL);
+        xp3AstAppend(binding, expr);
+        xp3AstAppend(node, binding);
+        if (p->tok.kind != XP3_TOK_COMMA)
+            break;
+        if (parserAdvance(p) < 0)
+            return(NULL);
+    }
+
+    if (parserExpectKeyword(p, keyword) < 0)
+        return(NULL);
+    expr = parseExprSingle(p);
+    if (expr == NULL)
+        return(NULL);
+    xp3AstAppend(node, expr);
+    return(node);
+}
+
+/* IfExpr ::= "if" "(" Expr ")" "then" ExprSingle "else" ExprSingle */
+static xp3AstNode *
+parseIf(xp3Parser *p) {
+    xp3AstNode *node;
+    xp3AstNode *expr;
+
+    node = parserTokNode(p, XP3_AST_IF, 0, &p->tok);
+    if ((node == NULL) || (parserAdvance(p) < 0) ||
+        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0))
+        return(NULL);
+    expr = parseExpr(p);
+    if ((expr == NULL) || (parserExpect(p, XP3_TOK_RPAREN, "')'") < 0) ||
+        (parserExpectKeyword(p, "then") < 0))
+        return(NULL);
+    xp3AstAppend(node, expr);
+    expr = parseExprSingle(p);
+    if ((expr == NULL) || (parserExpectKeyword(p, "else") < 0))
+        return(NULL);
+    xp3AstAppend(node, expr);
+    expr = parseExprSingle(p);
+    if (expr == NULL)
+        return(NULL);
+    xp3AstAppend(node, expr);
+    return(node);
+}
+
+/*
+ * ExprSingle ::= ForExpr | LetExpr | QuantifiedExpr | IfExpr | OrExpr
+ *
+ * The keywords are names too, so they only start these expressions
+ * when "$" follows, or "(" after "if".
+ */
 static xp3AstNode *
 parseExprSingle(xp3Parser *p) {
-    xp3AstNode *ret;
+    xp3AstNode *ret = NULL;
+    int next;
 
     if (parserEnter(p, XP3_PARSE_EXPR_COST) < 0)
         return(NULL);
+
+    if (tokIsName(p, &p->tok, "for") || tokIsName(p, &p->tok, "let") ||
+        tokIsName(p, &p->tok, "some") || tokIsName(p, &p->tok, "every")) {
+        next = parserPeekKind(p);
+        if (next < 0)
+            goto done;
+        if (next == XP3_TOK_DOLLAR) {
+            if (tokIsName(p, &p->tok, "for"))
+                ret = parseBindingExpr(p, XP3_AST_FOR, "return");
+            else if (tokIsName(p, &p->tok, "some"))
+                ret = parseBindingExpr(p, XP3_AST_SOME, "satisfies");
+            else if (tokIsName(p, &p->tok, "every"))
+                ret = parseBindingExpr(p, XP3_AST_EVERY, "satisfies");
+            else if (parserRequire(p, &p->tok, XP3_XPATH_30,
+                                   "let expressions") == 0)
+                ret = parseBindingExpr(p, XP3_AST_LET, "return");
+            goto done;
+        }
+    } else if (tokIsName(p, &p->tok, "if")) {
+        next = parserPeekKind(p);
+        if (next < 0)
+            goto done;
+        if (next == XP3_TOK_LPAREN) {
+            ret = parseIf(p);
+            goto done;
+        }
+    }
     ret = parseOr(p);
+
+done:
     p->depth -= XP3_PARSE_EXPR_COST;
     return(ret);
 }
