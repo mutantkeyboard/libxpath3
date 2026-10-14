@@ -34,7 +34,7 @@ fuzz_replay = executable(
     xpath3_src,
     xp3version_h,
     include_directories: inc,
-    dependencies: libxml2_dep,
+    dependencies: [libxml2_dep, m_dep],
     c_args: ['-DXP3_STATIC', '-DXP3_FUZZ_DRIVER'],
 )
 test('fuzz-replay', fuzz_replay, args: fuzz_seed)
@@ -47,7 +47,7 @@ if get_option('fuzzer')
         xpath3_src,
         xp3version_h,
         include_directories: inc,
-        dependencies: libxml2_dep,
+        dependencies: [libxml2_dep, m_dep],
         c_args: ['-DXP3_STATIC', '-fsanitize=fuzzer'],
         link_args: ['-fsanitize=fuzzer'],
     )

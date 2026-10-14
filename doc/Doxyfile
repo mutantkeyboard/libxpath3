@@ -23,9 +23,13 @@ INPUT                  = $(SOURCE_ROOT)doc/mainpage.md \
                          $(SOURCE_ROOT)xp3ast.c \
                          $(SOURCE_ROOT)xp3chars.c \
                          $(SOURCE_ROOT)xp3context.c \
+                         $(SOURCE_ROOT)xp3decimal.c \
+                         $(SOURCE_ROOT)xp3double.c \
                          $(SOURCE_ROOT)xp3error.c \
                          $(SOURCE_ROOT)xp3lexer.c \
                          $(SOURCE_ROOT)xp3parser.c \
+                         $(SOURCE_ROOT)xp3types.c \
+                         $(SOURCE_ROOT)xp3value.c \
                          $(SOURCE_ROOT)xpath3.c
 EXCLUDE_SYMLINKS       = YES
 USE_MDFILE_AS_MAINPAGE = $(SOURCE_ROOT)doc/mainpage.md

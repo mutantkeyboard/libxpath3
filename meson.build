@@ -30,18 +30,25 @@ xpath3_src = files(
     'xp3ast.c',
     'xp3chars.c',
     'xp3context.c',
+    'xp3decimal.c',
+    'xp3double.c',
     'xp3error.c',
     'xp3lexer.c',
     'xp3parser.c',
+    'xp3types.c',
+    'xp3value.c',
     'xpath3.c',
 )
+
+# xp3double.c needs the math library on some systems.
+m_dep = cc.find_library('m', required: false)
 
 xpath3_lib = library(
     'xpath3',
     xpath3_src,
     xp3version_h,
     include_directories: inc,
-    dependencies: libxml2_dep,
+    dependencies: [libxml2_dep, m_dep],
     c_args: ['-DIN_LIBXPATH3'],
     gnu_symbol_visibility: 'hidden',
     version: version,
@@ -52,7 +59,7 @@ xpath3_dep = declare_dependency(
     link_with: xpath3_lib,
     include_directories: inc,
     sources: xp3version_h,
-    dependencies: libxml2_dep,
+    dependencies: [libxml2_dep, m_dep],
 )
 meson.override_dependency('libxpath3', xpath3_dep)
 

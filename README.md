@@ -24,6 +24,8 @@ Not in scope:
 
 Conformance is measured against the W3C [QT3 test suite](https://github.com/w3c/qt3tests), and the pass rate is published here with each release. Fuzzers with allocation-failure injection run in the same style as libxml2's.
 
+Where the specifications leave a choice to the implementation, libxpath3 should behave like [Saxon](https://www.saxonica.com/), the de facto reference implementation that most existing stylesheets and Schematron rule sets are tested against. The same input then gives the same result in both. The first such choice is the precision of decimal division, which was measured with Saxon-HE 10.9 and 12.5; `doc/DESIGN.md` (section 4.3) has the rule and how to repeat the measurement. However, where the specifications are explicit, they win over Saxon.
+
 Only the parser exists so far, so QT3 runs in parse-only mode: a test passes if its expression parses when the expected result allows that, or fails with the expected error code. Tests that need features outside the scope above (schema awareness, the namespace axis, XQuery, XSLT) are not applicable. Against QT3 commit `201a6e4`:
 
 | Spec | Passed | Failed | Not applicable |

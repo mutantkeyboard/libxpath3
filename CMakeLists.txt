@@ -36,11 +36,25 @@ set(XP3_SOURCES
     xp3ast.c
     xp3chars.c
     xp3context.c
+    xp3decimal.c
+    xp3double.c
     xp3error.c
     xp3lexer.c
     xp3parser.c
+    xp3types.c
+    xp3value.c
     xpath3.c
 )
+
+# xp3double.c needs the math library on some systems. Elsewhere, as with
+# MSVC, the math functions are in the C runtime and find_library() sets
+# XP3_LIBM to XP3_LIBM-NOTFOUND, so every target links ${XP3_LIBM_LIBS},
+# which is empty then, and never XP3_LIBM directly.
+find_library(XP3_LIBM m)
+set(XP3_LIBM_LIBS "")
+if(XP3_LIBM)
+    set(XP3_LIBM_LIBS ${XP3_LIBM})
+endif()
 
 add_library(xpath3 ${XP3_SOURCES})
 target_include_directories(xpath3 PUBLIC
@@ -55,7 +69,7 @@ endif()
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(xpath3 PRIVATE -Wall -Wextra -Wpedantic -Werror=vla)
 endif()
-target_link_libraries(xpath3 PUBLIC LibXml2::LibXml2)
+target_link_libraries(xpath3 PUBLIC LibXml2::LibXml2 ${XP3_LIBM_LIBS})
 set_target_properties(xpath3 PROPERTIES
     C_VISIBILITY_PRESET hidden
     VERSION ${PROJECT_VERSION}
@@ -69,14 +83,14 @@ if(BUILD_TESTING)
 
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
-    foreach(name error context lexer ast parser)
+    foreach(name error context lexer ast parser decimal value)
         add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
         target_include_directories(test${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}/include
         )
-        target_link_libraries(test${name} PRIVATE LibXml2::LibXml2)
+        target_link_libraries(test${name} PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
         add_test(NAME ${name} COMMAND test${name})
     endforeach()
 
@@ -89,7 +103,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}/include
     )
-    target_link_libraries(xp3parse-replay PRIVATE LibXml2::LibXml2)
+    target_link_libraries(xp3parse-replay PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
     file(GLOB XP3_FUZZ_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed/*)
     add_test(NAME fuzz-replay COMMAND xp3parse-replay ${XP3_FUZZ_SEED})
 
@@ -100,7 +114,7 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}/include
     )
-    target_link_libraries(qt3run PRIVATE LibXml2::LibXml2)
+    target_link_libraries(qt3run PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
     set(XP3_QT3_DIR "" CACHE PATH "Directory of a QT3 test suite checkout")
     if(XP3_QT3_DIR)
         foreach(spec XP20 XP30 XP31)

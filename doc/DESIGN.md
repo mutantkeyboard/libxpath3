@@ -119,6 +119,8 @@ A value is a sequence of items. An item is one of:
 - **Room for stage 2 items from day one.** The item tag and memory management include function items, maps and arrays from the start, even though stage 1 never creates them. Adding them later is then an extension, not a rewrite of the core.
 - **Values are immutable and reference counted.** Sequences, maps, arrays and closures share structure instead of copying. Nodes are never reference counted, because libxml2 owns them.
 - **Sequence representation.** Empty sequences and singletons need no allocation beyond the item. Longer sequences are reference-counted arrays. Integer ranges (`1 to 1000000`) are stored as a range and expanded only when needed.
+- **Range bounds are 64-bit.** A range stores its first and last value as 64-bit integers. A range whose bounds do not fit raises `LIMIT`: such a sequence could never be materialized anyway, and an implementation limit is allowed by the spec.
+- **No small-integer fast path, for now.** Every `xs:integer` is an arbitrary-precision decimal (4.3), even `1`. That keeps one representation and one set of arithmetic rules. A fast path for integers that fit in 64 bits can be added later behind the same functions, if profiling shows the need.
 
 ### 4.2 Atomic types
 
@@ -140,15 +142,37 @@ Derived types such as `xs:nonNegativeInteger` or `xs:token` share the representa
 
 ### 4.3 Decimal arithmetic
 
-Exact decimal arithmetic is a hard requirement. The e-invoicing rules that motivated this library compare monetary sums and fail on binary floating-point rounding.
+Exact decimal arithmetic is a hard requirement. Rules that compare sums of amounts fail on binary floating-point rounding, which is exactly what `xs:decimal` exists to prevent.
 
 - **In-tree implementation.** Arbitrary precision, stored as base-10⁹ limbs with a sign and a scale. Add, subtract and multiply are exact. Division and the `round` family take an explicit precision and rounding mode.
-- **Division precision is implementation-defined.** The spec requires at least 18 digits. The default should match Saxon, because Saxon is the de facto reference: existing stylesheets and Schematron rules are tested against it. The exact rule is confirmed by testing against Saxon.
+- **Division precision is implementation-defined, and libxpath3 matches Saxon.** The spec requires at least 18 digits. Saxon is the de facto reference: existing stylesheets and Schematron rules are developed and tested against it, so a different rounding would make the same document validate differently. The rule comes from Saxon-HE 12.5's source (`Calculator.internalDecimalDivide`, `Int64Value.div` and `isLong`, and the `BigDecimalValue` constructors), and was confirmed by measuring about 90 divisions with Saxon-HE 10.9 and 12.5, which agree on all of them:
+  1. The quotient is rounded to max(18, s₁ − s₂ + 18) digits after the decimal point, to nearest, with ties rounded toward zero (Java's `RoundingMode.HALF_DOWN`), and trailing zeros are removed.
+  2. s₁ and s₂ are the operands' scales: the number of digits after the point once trailing zeros are removed, which is negative for values that end in zeros (`300000` has scale −5). That is how an `xs:decimal` operand counts.
+  3. An `xs:integer` operand counts with scale 0 instead, without removing its zeros, with one exception: when both operands are integers and either is negative or at least 2³¹, both count like decimals. (Saxon sends such pairs through Java's `BigInteger`, and its `isLong` test is `(value >> 31) != 0`, which is also true for every negative value.)
+
+  For example `1 div 3` is `0.333333333333333333`, `0.001 div 3` is `0.000333333333333333333` (21 digits), `1 div 0.7` is `1.428571428571428571` (the 18-digit floor), `1 div 300000` is `0.000003333333333333` (18 digits: two small integers), while `1 div 300000.0` is `0.00000333333333333333333` (23: a decimal divisor) and `1 div 3000000000000000000` has 36 digits (an integer above 2³¹). `25 div 10000000000000000000` is exactly `0.0000000000000000025`, `1 div 2^100` is `0`, and `3 div 524288` is `0.000005722045898437`, where the exact value ends in a 5 and the tie goes toward zero, not to the even digit. `xp3DecimalDivTyped()` implements this, and the measured cases are test vectors in `test/testdecimal.c`. To repeat the measurement, run an XQuery file of divisions through `java -cp Saxon-HE.jar net.sf.saxon.Query -q:file.xq`.
+- **The spec wins where it is explicit.** Saxon is followed only where the spec leaves a choice. For example, the quotient of two integers is an `xs:decimal` even when it is whole, as the spec requires, although Saxon also reports `(6 div 2) instance of xs:integer` as true.
 - **`xs:integer` is arbitrary precision too.** For example, IBAN validation computes `mod 97` on a 30-digit integer.
 
 ### 4.4 Converting numbers to strings
 
-Casting `xs:double` to `xs:string` must produce the shortest representation that converts back to the same value. Numbers between 1e-6 and 1e6 use plain decimal notation, others use exponent notation. libxml2's XPath 1.0 formatting does not follow these rules. Options are an in-tree implementation of a known algorithm (for example Ryu, which is available under licences compatible with MIT), or writing one. To be decided in stage 1.
+Casting `xs:double` to `xs:string` must produce the shortest representation that converts back to the same value. Numbers between 1e-6 and 1e6 use plain decimal notation, others use exponent notation. libxml2's XPath 1.0 formatting does not follow these rules.
+
+**Decided: a round-trip search, not Ryu.** The shortest digits are found by trying 1 to 17 significant digits with `snprintf("%.*e")` and keeping the first result that `strtod` reads back as exactly the same value. Seventeen digits always round-trip for IEEE 754 doubles, so the search always ends; `xs:float` works the same way with up to 9 digits. The XDM notation rules are then applied to those digits.
+
+The trade-off, for anyone who wants to revisit it:
+
+| | Round-trip search (chosen) | Ryu |
+|---|---|---|
+| What it is | Brute force over libc: format, parse back, compare | A dedicated algorithm (Ulf Adams, 2018) that computes the shortest digits directly with precomputed tables and integer arithmetic |
+| Correctness | Correct by construction, because the round trip is the requirement. Relies on a correctly rounded `strtod`, which glibc, macOS and musl have | Correct, and proven so in the paper |
+| Speed | Up to 17 `snprintf` and `strtod` calls per number, roughly 10 to 50 times slower | One pass, among the fastest known methods |
+| Code | About 30 lines | About 2,000 lines of dense C to vendor, with tables |
+| Licence | Nothing to carry | Apache 2.0 or Boost, compatible with MIT, but the notice has to be kept |
+
+**One case follows Saxon rather than the bare minimum.** The spec allows several strings for the same value, as long as they read back as it, and leaves the choice to the implementation, so the D3 policy applies. Exponent notation always shows at least two digits (`1.0E7`). When one digit would round-trip, Saxon, through Java's `toString`, shows the closest two-digit value instead of padding with 0. That only changes the smallest subnormals: `4.9E-324` rather than `5.0E-324`, and `1.4E-45` for the smallest float. libxpath3 does the same, with one extra `snprintf` call.
+
+Both methods produce identical output, because both are defined by the shortest digits that round-trip. Converting numbers to strings is not a hot path for the intended uses, so the simpler code wins. Ryu can replace the search later without any caller changing, because everything goes through one function in `xp3double.c`. The trigger to do that is a profile, for example of `fn:string` over millions of numbers, not an assumption.
 
 ### 4.5 Nodes
 
@@ -210,7 +234,7 @@ There is one API for all XPath versions from 2.0 on. There is no separate XPath 
 ### 6.3 Function library and extension functions
 
 - **One table of built-in functions**, each entry holding name, arity, signature and implementation. Function calls apply the function conversion rules from the signature: atomize, cast `xs:untypedAtomic`, promote numeric types.
-- **Stage 1 priority:** the functions the e-invoicing rules use come first. Those are `exists`, `count`, `sum`, `round`, `abs`, `matches`, `tokenize`, `replace`, `string-join`, `string-to-codepoints`, `upper-case`, `distinct-values`, `ends-with` and the XPath 1.0 string functions. The rest of the XPath 2.0 function library follows by chapter of the spec.
+- **Stage 1 priority:** the functions that real-world validation rule sets use most come first. Those are `exists`, `count`, `sum`, `round`, `abs`, `matches`, `tokenize`, `replace`, `string-join`, `string-to-codepoints`, `upper-case`, `distinct-values`, `ends-with` and the XPath 1.0 string functions. The rest of the XPath 2.0 function library follows by chapter of the spec.
 - **Extension functions:** applications register C functions with a signature written as text, for example `xs:decimal u:decimalOrZero(item()*)`. libxpath3 parses the signature and applies the conversion rules before calling the C function, so extension functions receive correctly typed arguments.
 
 ### 6.4 Regular expressions
@@ -287,7 +311,7 @@ Schematron-style use: compile each rule once at startup, then evaluate it agains
 
 - **QT3 runner:** reads the W3C QT3 catalogue and selects tests by spec dependency (`XP20`, `XP30`, `XP31`), running each set at the matching language level (5.1), and by feature, skipping schema awareness and the namespace axis. It reports pass, fail and not-applicable per test set. The pass rate is published in the README and tracked in CI, so regressions fail the build.
 - **Unit tests** for the parts that are easy to get subtly wrong: decimal arithmetic, double-to-string conversion, date and duration arithmetic, regex, document order with adjacent text nodes.
-- **Differential testing (optional):** compare results with Saxon on a corpus of real expressions, including the EN 16931 and XRechnung rules. Saxon runs only in CI and is never a dependency.
+- **Differential testing (optional):** compare results with Saxon on a corpus of real expressions, such as published Schematron rule sets. Saxon runs only in CI and is never a dependency.
 - **Fuzzers**, modelled on libxml2's `fuzz/xpath.c` with a dictionary of XPath tokens:
   - an expression fuzzer, compile only
   - an expression plus document fuzzer, for evaluation
