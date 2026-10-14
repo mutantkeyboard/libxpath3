@@ -100,14 +100,14 @@ static void
 testDeclareNamespace(void) {
     xp3StaticContext *ctx = xp3NewStaticContext();
 
-    check(xp3DeclareNamespace(ctx, BAD_CAST "inv", BAD_CAST "urn:invoice") == 0,
+    check(xp3DeclareNamespace(ctx, BAD_CAST "ex", BAD_CAST "urn:example") == 0,
           "declare new prefix");
-    check(strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "inv"), "urn:invoice"),
+    check(strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "ex"), "urn:example"),
           "new prefix bound");
 
-    check(xp3DeclareNamespace(ctx, BAD_CAST "inv", BAD_CAST "urn:other") == 0,
+    check(xp3DeclareNamespace(ctx, BAD_CAST "ex", BAD_CAST "urn:other") == 0,
           "override prefix");
-    check(strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "inv"), "urn:other"),
+    check(strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "ex"), "urn:other"),
           "override replaces the binding");
 
     check(xp3DeclareNamespace(ctx, BAD_CAST "fn", BAD_CAST "urn:mine") == 0,
@@ -115,11 +115,11 @@ testDeclareNamespace(void) {
     check(strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "fn"), "urn:mine"),
           "predeclared prefix rebound");
 
-    check(xp3DeclareNamespace(ctx, BAD_CAST "inv", BAD_CAST "") == 0,
+    check(xp3DeclareNamespace(ctx, BAD_CAST "ex", BAD_CAST "") == 0,
           "empty URI removes binding");
-    check(xp3StaticContextLookupNs(ctx, BAD_CAST "inv") == NULL,
+    check(xp3StaticContextLookupNs(ctx, BAD_CAST "ex") == NULL,
           "binding removed");
-    check(xp3DeclareNamespace(ctx, BAD_CAST "inv", NULL) == 0,
+    check(xp3DeclareNamespace(ctx, BAD_CAST "ex", NULL) == 0,
           "removing an unbound prefix succeeds");
 
     check(xp3DeclareNamespace(ctx, BAD_CAST "xml", BAD_CAST XP3_NS_XML) == 0,

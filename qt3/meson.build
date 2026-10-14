@@ -6,7 +6,7 @@ qt3run = executable(
     xpath3_src,
     xp3version_h,
     include_directories: inc,
-    dependencies: libxml2_dep,
+    dependencies: [libxml2_dep, m_dep],
     c_args: ['-DXP3_STATIC'],
 )
 

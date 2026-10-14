@@ -9,7 +9,8 @@ test('basic', testbasic)
 # because the shared library only exports the public API.
 internal_test_args = ['-DXP3_STATIC']
 
-foreach name : ['error', 'context', 'lexer', 'ast', 'parser']
+foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
+                'value']
     exe = executable(
         'test' + name,
         'test' + name + '.c',
@@ -17,7 +18,7 @@ foreach name : ['error', 'context', 'lexer', 'ast', 'parser']
         xpath3_src,
         xp3version_h,
         include_directories: inc,
-        dependencies: libxml2_dep,
+        dependencies: [libxml2_dep, m_dep],
         c_args: internal_test_args,
     )
     test(name, exe)

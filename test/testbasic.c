@@ -28,7 +28,7 @@ check(int cond, const char *what) {
 
 int
 main(void) {
-    static const char xml[] = "<invoice><line>1</line></invoice>";
+    static const char xml[] = "<root><item>1</item></root>";
     xmlDocPtr doc;
 
     check(strcmp(xp3GetVersion(), XP3_VERSION_STRING) == 0,
@@ -42,8 +42,8 @@ main(void) {
         xmlNodePtr root = xmlDocGetRootElement(doc);
 
         check(root != NULL &&
-              xmlStrEqual(root->name, BAD_CAST "invoice"),
-              "root element is <invoice>");
+              xmlStrEqual(root->name, BAD_CAST "root"),
+              "root element is <root>");
         xmlFreeDoc(doc);
     }
 
