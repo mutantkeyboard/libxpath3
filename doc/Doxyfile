@@ -26,6 +26,7 @@ INPUT                  = $(SOURCE_ROOT)doc/mainpage.md \
                          $(SOURCE_ROOT)xp3decimal.c \
                          $(SOURCE_ROOT)xp3double.c \
                          $(SOURCE_ROOT)xp3error.c \
+                         $(SOURCE_ROOT)xp3func.c \
                          $(SOURCE_ROOT)xp3lexer.c \
                          $(SOURCE_ROOT)xp3parser.c \
                          $(SOURCE_ROOT)xp3types.c \
