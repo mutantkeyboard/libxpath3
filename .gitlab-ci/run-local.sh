@@ -4,18 +4,26 @@
 #
 # Usage: sh .gitlab-ci/run-local.sh [job...]
 #
-# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 fuzz docs (default: all)
-# Set IMAGE to use a different image than fedora:latest.
+# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs
+# (default: all)
+# Set IMAGE to use a different image than fedora:latest, and COVERAGE_OUT
+# to a directory to get the coverage job's HTML report and Cobertura XML.
 #
 # Keep the jobs in sync with .gitlab-ci.yml.
 
 set -u
 
-ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 fuzz docs"
+ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs"
 
 # On the host: start the container and run this script inside it.
 if [ "${1:-}" != "--inside" ]; then
     root=$(cd "$(dirname "$0")/.." && pwd)
+    if [ -n "${COVERAGE_OUT:-}" ]; then
+        mkdir -p "$COVERAGE_OUT" && out=$(cd "$COVERAGE_OUT" && pwd) || exit 1
+        exec docker run --rm -v "$root:/src:ro" -v "$out:/out" \
+            -e COVERAGE_OUT=/out "${IMAGE:-fedora:latest}" \
+            sh /src/.gitlab-ci/run-local.sh --inside "$@"
+    fi
     exec docker run --rm -v "$root:/src:ro" "${IMAGE:-fedora:latest}" \
         sh /src/.gitlab-ci/run-local.sh --inside "$@"
 fi
@@ -90,6 +98,30 @@ job_qt3() {
     done
 }
 
+job_coverage() {
+    export CC=gcc
+    export QT3_COMMIT=201a6e466940cdfc727f4babfedcde5332b9f578
+    dnf install -y -q --setopt=install_weak_deps=False gcovr >/dev/null 2>&1 &&
+    git init -q qt3tests &&
+    git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git \
+        "$QT3_COMMIT" &&
+    git -C qt3tests checkout -q FETCH_HEAD &&
+    meson setup build -Db_coverage=true &&
+    meson compile -C build &&
+    meson test -C build --print-errorlogs &&
+    for spec in XP20 XP30 XP31; do
+        ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt \
+            qt3tests/catalog.xml || return 1
+    done &&
+    mkdir coverage &&
+    gcovr --root . --filter '[^/]*\.c$' --exclude-unreachable-branches \
+        --print-summary --cobertura coverage.xml \
+        --html-details coverage/index.html build &&
+    if [ -n "${COVERAGE_OUT:-}" ]; then
+        cp -r coverage coverage.xml "$COVERAGE_OUT"/
+    fi
+}
+
 job_fuzz() {
     export CC=clang ASAN_OPTIONS="detect_leaks=1"
     meson setup build --werror -Dfuzzer=true \
@@ -125,6 +157,7 @@ for job in "$@"; do
     log="/tmp/$fn.log"
     if ( "$fn" ) >"$log" 2>&1; then
         echo "PASS $job"
+        grep -E '^(lines|functions|branches): ' "$log"
     else
         echo "FAIL $job"
         tail -n 30 "$log"

@@ -23,3 +23,6 @@ oom-*
 
 # Editor setup stays local
 .vscode/
+
+# The coverage report the README suggests producing locally
+/coverage-report/

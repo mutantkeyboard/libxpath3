@@ -78,10 +78,10 @@ libxml2:master:
     - ./build/test/testbasic
 
 # Parse-only QT3 conformance, against a pinned commit of the test suite.
-# The coverage regex shows the XP31 pass rate on pipelines and MRs. Known
-# failures are listed in qt3/known-failures-*.txt; any other failure, or a
-# known failure that now passes, fails the job. It runs under ASan and
-# UBSan, so every QT3 expression is also a memory-safety test.
+# The job log ends with the pass rate of each level. Known failures are
+# listed in qt3/known-failures-*.txt; any other failure, or a known failure
+# that now passes, fails the job. It runs under ASan and UBSan, so every
+# QT3 expression is also a memory-safety test.
 qt3:
   stage: build
   variables:
@@ -98,7 +98,43 @@ qt3:
       for spec in XP20 XP30 XP31; do
       ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt qt3tests/catalog.xml || exit 1;
       done
-  coverage: '/XP31 parse-only: .*\((\d+\.\d+)%\)/'
+
+# Line coverage of the library sources, from the unit tests, the replayed
+# fuzz corpus and the QT3 run. GitLab shows the percentage on pipelines and
+# MRs, and marks covered and uncovered lines in MR diffs. The HTML report is
+# kept as an artifact. Only this job sets a coverage value, because GitLab
+# averages the values of all jobs.
+coverage:
+  stage: build
+  variables:
+    CC: gcc
+    QT3_COMMIT: 201a6e466940cdfc727f4babfedcde5332b9f578
+  script:
+    - dnf install -y --setopt=install_weak_deps=False gcovr
+    - git init -q qt3tests
+    - git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git "$QT3_COMMIT"
+    - git -C qt3tests checkout -q FETCH_HEAD
+    - meson setup build -Db_coverage=true
+    - meson compile -C build
+    - meson test -C build --print-errorlogs
+    - >
+      for spec in XP20 XP30 XP31; do
+      ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt qt3tests/catalog.xml || exit 1;
+      done
+    - mkdir coverage
+    - >
+      gcovr --root . --filter '[^/]*\.c$' --exclude-unreachable-branches
+      --print-summary --cobertura coverage.xml
+      --html-details coverage/index.html build
+  coverage: '/^lines: (\d+\.\d+)%/'
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
 
 # Fuzzing smoke test: two minutes of libFuzzer on the parser, with ASan
 # and UBSan, seeded with the corpus and the dictionary. Long runs happen
