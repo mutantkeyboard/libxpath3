@@ -74,7 +74,7 @@ libxpath3/
 │   ├── libxpath3/xpath3.h      public API (single header to start)
 │   └── private/                 internal headers, not installed
 ├── *.c                          sources at the top level, as in libxml2
-├── codegen/                     generators (Unicode tables, adapted from libxml2)
+├── codegen/                     generators and their committed output (built-in function table; Unicode tables, adapted from libxml2)
 ├── fuzz/                        fuzzers and dictionaries, libxml2 style
 ├── test/                        unit tests
 ├── doc/                         Doxygen configuration and this document
@@ -234,6 +234,7 @@ There is one API for all XPath versions from 2.0 on. There is no separate XPath 
 ### 6.3 Function library and extension functions
 
 - **One table of built-in functions**, each entry holding name, arity, signature and implementation. Function calls apply the function conversion rules from the signature: atomize, cast `xs:untypedAtomic`, promote numeric types.
+- **The table is generated from the W3C specifications.** `codegen/genFunctions.py` reads the F&O 3.1 function catalog, the XML source of the Recommendation's function descriptions, and writes `codegen/functions.inc`. Each entry is one signature: namespace, local name, arity, the first language level that has it, the function properties of F&O 3.1 1.7.4 (focus-dependent, context-dependent, nondeterministic, higher-order, and nondeterministic with respect to ordering); constant folding skips a call with any of the first four, while the fifth only tells the evaluator not to rely on the order of the result, and the signature text. The language level comes from comparing with F&O 1.0 (XPath 2.0) and F&O 3.0 by name and arity, so `fn:round#1` is 2.0 while `fn:round#2` is 3.0. Generating the 273 signatures avoids copying mistakes, and the few corrections to the catalog's own mistakes are listed in one place, the generator. The generator is Python, like libxml2's `codegen/`; the output is committed, so building needs no Python. The signature text is the 3.1 one at every level: where a type changed between versions, as the argument of `fn:string-join` did (`xs:string*` before 3.1, `xs:anyAtomicType*` since), the 3.1 type applies at level 2.0 and 3.0 too, because the level restricts which functions exist, not their types (5.1). Constructor functions such as `xs:integer(...)` are not in the table: they follow from the atomic types (4.2).
 - **Stage 1 priority:** the functions that real-world validation rule sets use most come first. Those are `exists`, `count`, `sum`, `round`, `abs`, `matches`, `tokenize`, `replace`, `string-join`, `string-to-codepoints`, `upper-case`, `distinct-values`, `ends-with` and the XPath 1.0 string functions. The rest of the XPath 2.0 function library follows by chapter of the spec.
 - **Extension functions:** applications register C functions with a signature written as text, for example `xs:decimal u:decimalOrZero(item()*)`. libxpath3 parses the signature and applies the conversion rules before calling the C function, so extension functions receive correctly typed arguments.
 
