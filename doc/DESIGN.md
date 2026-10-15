@@ -321,6 +321,7 @@ Schematron-style use: compile each rule once at startup, then evaluate it agains
 
   The goal is OSS-Fuzz once the code is stable.
 - **CI on GNOME GitLab:** builds with Meson and CMake, with ASan and UBSan, against libxml2 master and the latest release.
+- **Coverage:** a CI job builds with gcov, runs the unit tests, the replayed fuzz corpus and QT3, and reports line coverage of the library sources with gcovr in GitLab's native format: the percentage on pipelines and merge requests, covered and uncovered lines marked in merge request diffs. No external service such as Codecov, which would need an account, a token and an upload step for little more. Only this job sets GitLab's coverage value, because GitLab averages the values of all jobs; the QT3 pass rate is in the `qt3` job log and the README instead.
 
 ### Platforms
 

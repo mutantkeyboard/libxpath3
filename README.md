@@ -1,5 +1,8 @@
 # libxpath3
 
+[![pipeline](https://gitlab.gnome.org/mutantkeyboard/libxpath3/badges/main/pipeline.svg)](https://gitlab.gnome.org/mutantkeyboard/libxpath3/-/pipelines?ref=main)
+[![coverage](https://gitlab.gnome.org/mutantkeyboard/libxpath3/badges/main/coverage.svg)](https://gitlab.gnome.org/mutantkeyboard/libxpath3/-/pipelines?ref=main)
+
 libxpath3 is an XPath 3.1 engine in C for documents parsed with [libxml2](https://gitlab.gnome.org/GNOME/libxml2). It evaluates expressions directly on libxml2's tree, so existing libxml2 code can use it without converting documents.
 
 > **Work in progress.** libxpath3 is under active development and not ready for production use yet. The API may change.
@@ -68,7 +71,9 @@ mkdir corpus && cp fuzz/seed/* corpus
 
 The `fuzz` CI job does the same for two minutes on every pipeline, and keeps any crash inputs as artifacts.
 
-Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and GitLab shows the XPath 3.1 pass rate on the pipeline and the merge request. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
+Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and ends its log with the pass rate of each level. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
+
+The `coverage` job measures line coverage of the library sources over the unit tests, the replayed fuzz corpus and the QT3 run, with gcov and [gcovr](https://gcovr.com/). GitLab shows the percentage on the pipeline and the merge request, and marks covered and uncovered lines in merge request diffs; the full HTML report is kept as a job artifact. To produce it locally: `COVERAGE_OUT=coverage-report sh .gitlab-ci/run-local.sh coverage`, then open `coverage-report/coverage/index.html`.
 
 ## Building the project
 
