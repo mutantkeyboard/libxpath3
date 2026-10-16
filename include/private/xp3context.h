@@ -28,6 +28,9 @@
 #define XP3_NS_MAP   "http://www.w3.org/2005/xpath-functions/map"
 #define XP3_NS_ARRAY "http://www.w3.org/2005/xpath-functions/array"
 
+/* Reserved for namespace declarations, never in names */
+#define XP3_NS_XMLNS "http://www.w3.org/2000/xmlns/"
+
 /* Default limit on the length of an expression, in bytes */
 #define XP3_DEFAULT_MAX_EXPR_LENGTH (1024 * 1024)
 /* Default XPath version */
@@ -45,11 +48,18 @@
 struct _xp3StaticContext {
     xp3LanguageLevel level;     /* accepted XPath version */
     xmlHashTable *namespaces;   /* prefix -> namespace URI (xmlChar *) */
+    xmlChar *defaultElementNs;  /* for element and type names, or NULL */
+    xmlHashTable *variables;    /* (local name, URI) of declared
+                                 * variables, or NULL if none */
     size_t maxExprLength;       /* compile-time limit, in bytes */
     int maxParseDepth;          /* compile-time limit on nesting */
 };
 
 const xmlChar *
 xp3StaticContextLookupNs(const xp3StaticContext *ctx, const xmlChar *prefix);
+
+int
+xp3StaticContextHasVariable(const xp3StaticContext *ctx, const xmlChar *uri,
+                            const xmlChar *localName);
 
 #endif /* XP3_XP3CONTEXT_H */

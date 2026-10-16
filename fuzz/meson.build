@@ -24,6 +24,9 @@ fuzz_seed = files(
     'seed/noctx',
     'seed/path31',
     'seed/quant30',
+    'seed/static31',
+    'seed/static_err',
+    'seed/static_inject',
     'seed/types31',
 )
 

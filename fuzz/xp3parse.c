@@ -1,16 +1,20 @@
 /*
- * xp3parse.c: a libFuzzer target to test parsing XPath expressions
+ * xp3parse.c: a libFuzzer target to test compiling XPath expressions,
+ * which covers both the parser and static analysis
  *
  * The input starts with a three-byte header: the first byte selects
  * the language level (or no static context), and the next two are a
  * big-endian allocation-failure position, 0 for none. The rest is the
- * expression, which may contain anything, including NUL bytes.
+ * expression, which may contain anything, including NUL bytes. The
+ * contexts bind the prefix ex, a default element namespace and the
+ * variables $v and $ex:w, so that analysis gets past names.
  *
  * The target checks the library's contracts and aborts when one is
- * broken: parsing either returns a tree or reports an error, never
- * neither, and an injected allocation failure results in NO_MEMORY,
- * never a tree and never silence. Everything else (overflows, leaks,
- * undefined behaviour) is left to the sanitizers.
+ * broken: compiling either returns an expression or reports an error,
+ * never neither, an injected allocation failure results in NO_MEMORY,
+ * never an expression and never silence, and every variable slot is
+ * within the slot count. Everything else (overflows, leaks, undefined
+ * behaviour) is left to the sanitizers.
  *
  * Built with -DXP3_FUZZ_DRIVER, the same file gets a main() that
  * replays files given as arguments, so the seed corpus and earlier
@@ -35,7 +39,7 @@
 #include <libxpath3/xpath3.h>
 #include "private/xp3ast.h"
 #include "private/xp3error.h"
-#include "private/xp3parser.h"
+#include "private/xp3static.h"
 #include "../test/testalloc.h"
 
 /* Larger inputs only slow the fuzzer down, as in libxml2's targets. */
@@ -69,7 +73,14 @@ LLVMFuzzerInitialize(int *argc, char ***argv) {
     for (i = 0; i < 3; i++) {
         fuzzCtx[i] = xp3NewStaticContext();
         if ((fuzzCtx[i] == NULL) ||
-            (xp3SetStaticContextLanguageLevel(fuzzCtx[i], levels[i]) < 0)) {
+            (xp3SetStaticContextLanguageLevel(fuzzCtx[i], levels[i]) < 0) ||
+            (xp3DeclareNamespace(fuzzCtx[i], BAD_CAST "ex",
+                                 BAD_CAST "urn:example") < 0) ||
+            (xp3SetDefaultElementNamespace(fuzzCtx[i],
+                                           BAD_CAST "urn:default") < 0) ||
+            (xp3DeclareVariable(fuzzCtx[i], NULL, BAD_CAST "v") < 0) ||
+            (xp3DeclareVariable(fuzzCtx[i], BAD_CAST "urn:example",
+                                BAD_CAST "w") < 0)) {
             fprintf(stderr, "xp3parse: cannot create the contexts\n");
             abort();
         }
@@ -82,9 +93,10 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
     const unsigned char *bytes = (const unsigned char *) data;
     const xp3StaticContext *ctx;
     xp3Error *err = NULL;
-    xp3Ast *ast;
+    xp3Expr *expr;
     size_t failurePos;
     int failed;
+    int i;
 
     if ((size < 3) || (size > XP3_FUZZ_MAX_SIZE))
         return(0);
@@ -93,24 +105,24 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
     failurePos = ((size_t) bytes[1] << 8) | bytes[2];
 
     xp3TestAllocFailAt((failurePos > 0) ? (int) failurePos - 1 : -1);
-    ast = xp3Parse(ctx, BAD_CAST data + 3, size - 3, &err);
+    expr = xp3CompileLength(ctx, BAD_CAST data + 3, size - 3, &err);
     failed = xp3TestAllocFailed();
     xp3TestAllocFailAt(-1);
 
-    /* Parsing returns a tree or reports an error, never neither or
-     * both. */
-    if ((ast == NULL) == (err == NULL)) {
-        fprintf(stderr, "xp3parse: %s\n", (ast == NULL) ?
-                "parse failed without an error" :
-                "parse succeeded with an error");
+    /* Compiling returns an expression or reports an error, never
+     * neither or both. */
+    if ((expr == NULL) == (err == NULL)) {
+        fprintf(stderr, "xp3parse: %s\n", (expr == NULL) ?
+                "compiling failed without an error" :
+                "compiling succeeded with an error");
         abort();
     }
 
     if (failed) {
         /* The failed allocation must surface as NO_MEMORY. */
-        if (ast != NULL) {
-            fprintf(stderr, "xp3parse: tree built after an allocation "
-                    "failure\n");
+        if (expr != NULL) {
+            fprintf(stderr, "xp3parse: expression compiled after an "
+                    "allocation failure\n");
             abort();
         }
         if (err->code != XP3_ERR_NO_MEMORY) {
@@ -120,15 +132,22 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
         }
     }
 
-    if (ast != NULL) {
+    if (expr != NULL) {
         xmlChar *str;
 
-        if (ast->root == NULL) {
-            fprintf(stderr, "xp3parse: tree without a root\n");
+        if ((expr->ast == NULL) || (expr->ast->root == NULL)) {
+            fprintf(stderr, "xp3parse: expression without a tree\n");
             abort();
         }
+        for (i = 0; i < expr->variableCount; i++) {
+            if ((expr->variables[i].slot < 0) ||
+                (expr->variables[i].slot >= expr->slotCount)) {
+                fprintf(stderr, "xp3parse: variable slot out of range\n");
+                abort();
+            }
+        }
         /* Walk the whole tree through the printer. */
-        str = xp3AstToString(ast->root);
+        str = xp3AstToString(expr->ast->root);
         xmlFree(str);
     } else {
         /* The accessors and the libxml2 adapter must cope with any
@@ -141,7 +160,7 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
         xp3ErrorReport(err, (xmlStructuredErrorFunc) fuzzErrorSink, NULL);
     }
 
-    xp3AstFree(ast);
+    xp3FreeExpr(expr);
     xp3ErrorFree(err);
     return(0);
 }

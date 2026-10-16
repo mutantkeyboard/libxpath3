@@ -35,10 +35,17 @@ typedef enum
     XP3_ERR_LIMIT,     /* not a W3C code: resource limit hit */
     XP3_ERR_XPST0003,  /* syntax error */
     XP3_ERR_XPST0008,  /* undeclared variable */
+    XP3_ERR_XPST0010,  /* namespace axis not supported */
     XP3_ERR_XPST0017,  /* unknown function or wrong arity */
+    XP3_ERR_XPST0051,  /* sequence type with a non-atomic type */
+    XP3_ERR_XPST0080,  /* cast to an abstract type */
     XP3_ERR_XPST0081,  /* unbound namespace prefix */
+    XP3_ERR_XQST0039,  /* duplicate parameter name */
+    XP3_ERR_XQST0052,  /* cast to an unknown or complex type */
+    XP3_ERR_XQST0070,  /* the xmlns namespace in a name */
     XP3_ERR_XPTY0004,  /* type error */
     XP3_ERR_FOAR0001,  /* division by zero */
+    XP3_ERR_FOAR0002,  /* number too large, such as an arity */
     XP3_ERR_FORG0001,  /* invalid value for cast */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */
 } xp3ErrCode;

@@ -44,14 +44,16 @@ typedef enum {
                                      * fn:unordered, map:keys... */
 
 /* One signature of a built-in function, with a fixed arity */
-typedef struct {
+typedef struct _xp3FuncInfo xp3FuncInfo;
+
+struct _xp3FuncInfo {
     xp3FuncNamespace ns;
     const char *name;           /* local name, for example "substring" */
     int arity;                  /* the minimum if XP3_FUNC_VARIADIC */
     xp3LanguageLevel level;     /* the first level that has it */
     int flags;
     const char *signature;      /* as written in F&O 3.1 */
-} xp3FuncInfo;
+};
 
 const xp3FuncInfo *
 xp3FuncLookup(const xmlChar *uri, const xmlChar *localName, int arity,

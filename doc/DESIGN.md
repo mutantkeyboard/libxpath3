@@ -226,10 +226,17 @@ There is one API for all XPath versions from 2.0 on. There is no separate XPath 
 
 ### 6.2 Static analysis
 
-- Resolve prefixes to namespace URIs, and functions by name and arity.
-- Check variable scoping.
-- Fold constant expressions.
-- Record simple static types where they allow cheaper evaluation, for example a predicate known to be numeric.
+`xp3Compile()` parses an expression, then walks the tree once and resolves every name against the static context. The results are stored in the tree itself, which becomes the compiled expression.
+
+- **Names.** Prefixes resolve through the statically known namespaces (XPST0081). Unprefixed element and type names get the default element/type namespace, function names the function namespace, and attribute and variable names no namespace. A name in the namespace reserved for xmlns attributes is an error (XQST0070, XPath 3.1 2.4.5).
+- **Variables become slots.** Every range variable, inline function parameter and declared variable in use gets a slot number, and every reference resolves to one (XPST0008). Evaluation can then keep variables in an array instead of looking them up by name. The declared variables in use are listed with their slots, so that a dynamic context can bind them by name.
+- **Functions** are checked against the built-in function table at the language level, so a 3.0 function is unknown in an XPath 2.0 context (XPST0017). Functions that are not implemented yet still compile, and fail when called.
+- **Constructor functions become casts.** `xs:integer($x)` compiles to `($x cast as xs:integer?)`, which is how XPath 3.1, 3.14.4 defines it, so evaluation only has to implement cast. A constructor function used as a function item (`xs:date#1`, `xs:integer(?)`) stays a call.
+- **Type names** follow the rule for where they appear. A sequence type needs a generalized atomic type, which is an atomic type or a union of them such as `xs:numeric` (XPST0051). Cast and castable need a simple type that is not abstract (XQST0052, and XPST0080 for `xs:NOTATION`, `xs:anySimpleType` and `xs:anyAtomicType`); XPath 2.0 only casts to atomic types and calls the error XPST0051. Element and attribute tests need a known type (XPST0008). Without a schema there are no element or attribute declarations, so `schema-element()` and `schema-attribute()` always raise XPST0008.
+- **Also static:** the namespace axis, which is not supported (XPST0010), and duplicate parameter names in an inline function (XQST0039).
+- **The compiled expression is self-contained and immutable.** URIs from the static context are copied into the expression's arena, so the context can be changed or freed after compiling. Nothing writes to the expression afterwards, so several threads can evaluate it at once.
+- **Positions.** An error carries the position of its node: the start of the name, or for an arrow (`=> f()`), the start of its left side, because the tree does not keep the position of the function name.
+- **Later:** constant folding and simple static types come with the evaluator, which they reuse to compute values.
 
 ### 6.3 Function library and extension functions
 
@@ -278,11 +285,12 @@ Library name `libxpath3`, API prefix `xp3`. Individual function names are not fi
 /* Static context and compilation */
 xp3StaticContext *xp3NewStaticContext(void);
 int  xp3DeclareNamespace(xp3StaticContext *sctx, const xmlChar *prefix, const xmlChar *uri);
-int  xp3DeclareVariable(xp3StaticContext *sctx, const xmlChar *nsUri, const xmlChar *localName);
+int  xp3DeclareVariable(xp3StaticContext *sctx, const xmlChar *uri, const xmlChar *localName);
+int  xp3SetDefaultElementNamespace(xp3StaticContext *sctx, const xmlChar *uri);
 int  xp3RegisterFunction(xp3StaticContext *sctx, const char *signature,
                          xp3FunctionImpl impl, void *userData);
 int  xp3SetStaticContextLanguageLevel(xp3StaticContext *sctx, xp3LanguageLevel level);  /* XP3_XPATH_20, _30, _31 (default) */
-xp3Expr *xp3Compile(xp3StaticContext *sctx, const xmlChar *expr, xp3Error **err);
+xp3Expr *xp3Compile(const xp3StaticContext *sctx, const xmlChar *expr, xp3Error **err);
 void xp3FreeExpr(xp3Expr *expr);
 
 /* Evaluation */
@@ -310,7 +318,7 @@ Schematron-style use: compile each rule once at startup, then evaluate it agains
 
 ## 9. Testing
 
-- **QT3 runner:** reads the W3C QT3 catalogue and selects tests by spec dependency (`XP20`, `XP30`, `XP31`), running each set at the matching language level (5.1), and by feature, skipping schema awareness and the namespace axis. It reports pass, fail and not-applicable per test set. The pass rate is published in the README and tracked in CI, so regressions fail the build.
+- **QT3 runner:** reads the W3C QT3 catalogue and selects tests by spec dependency (`XP20`, `XP30`, `XP31`), running each set at the matching language level (5.1), and by feature, skipping schema awareness and the namespace axis. It reports pass, fail and not-applicable per test set. The pass rate is published in the README and tracked in CI, so regressions fail the build. Until evaluation exists it runs in compile-only mode, with the namespaces and variables of each test's environment: expected static errors must be raised by compiling, unless the expression calls `fn:error`, and other expected errors count as "may compile". Tests that conflict with the specification are listed in `qt3/known-failures-*.txt` with the reason.
 - **Unit tests** for the parts that are easy to get subtly wrong: decimal arithmetic, double-to-string conversion, date and duration arithmetic, regex, document order with adjacent text nodes.
 - **Differential testing (optional):** compare results with Saxon on a corpus of real expressions, such as published Schematron rule sets. Saxon runs only in CI and is never a dependency.
 - **Fuzzers**, modelled on libxml2's `fuzz/xpath.c` with a dictionary of XPath tokens:

@@ -1,1 +1,1 @@
-# Known parse-only failures for XP20, one test-set/test-case per line.
+# Known compile-only failures for XP20, one test-set/test-case per line.
