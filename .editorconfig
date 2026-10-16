@@ -1,0 +1,16 @@
+# EditorConfig: https://editorconfig.org
+#
+# Based on libxml2's, with the line limit and whitespace rules that
+# .gitlab-ci/check-style.py checks in CI.
+
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+tab_width = 8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{c,h,inc,in}]
+max_line_length = 79

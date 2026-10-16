@@ -1010,12 +1010,9 @@ decimalDivScaled(const xp3Decimal *a, long sa, const xp3Decimal *b, long sb,
                  xp3Decimal **res) {
     long scale;
     long e;
-    uint32_t *num = NULL;
-    uint32_t *den = NULL;
+    uint32_t *num;
     const uint32_t *n = a->limbs;
-    const uint32_t *d = b->limbs;
     size_t nn = a->count;
-    size_t dn = b->count;
     xp3ErrCode ret;
 
     *res = NULL;
@@ -1031,29 +1028,25 @@ decimalDivScaled(const xp3Decimal *a, long sa, const xp3Decimal *b, long sb,
         return(XP3_ERR_LIMIT);
 
     /*
-     * a / b = (A / B) * 10^(sb - sa), so the coefficient at the target
-     * scale is A * 10^(scale + sb - sa) / B.
+     * a / b = (A / B) * 10^(b->scale - a->scale), so the coefficient at
+     * the target scale is A * 10^e / B with
+     * e = scale + b->scale - a->scale. e is never negative, so only the
+     * dividend is ever shifted: decimals are stored without trailing
+     * zeros after the point, so a->scale is max(sa, 0) and b->scale is
+     * at least sb, however the caller counted sa and sb. If sa > 0,
+     * e >= (sa - sb + 18) + sb - sa = 18; otherwise e >= 18 + 0.
      */
     e = scale + b->scale - a->scale;
-    if (e >= 0) {
-        if (magDigits(n, nn) + (size_t) e > 3 * XP3_DECIMAL_MAX_DIGITS)
-            return(XP3_ERR_LIMIT);
-        num = limbsAlloc(nn + (size_t) e / XP3_BASE_DIGITS + 1);
-        if (num == NULL)
-            return(XP3_ERR_NO_MEMORY);
-        nn = magShift10(n, nn, (size_t) e, num);
-        n = num;
-    } else {
-        den = limbsAlloc(dn + (size_t) -e / XP3_BASE_DIGITS + 1);
-        if (den == NULL)
-            return(XP3_ERR_NO_MEMORY);
-        dn = magShift10(d, dn, (size_t) -e, den);
-        d = den;
-    }
-    ret = decimalQuotient(n, nn, d, dn, a->negative != b->negative, scale,
+    if (magDigits(n, nn) + (size_t) e > 3 * XP3_DECIMAL_MAX_DIGITS)
+        return(XP3_ERR_LIMIT);
+    num = limbsAlloc(nn + (size_t) e / XP3_BASE_DIGITS + 1);
+    if (num == NULL)
+        return(XP3_ERR_NO_MEMORY);
+    nn = magShift10(n, nn, (size_t) e, num);
+    ret = decimalQuotient(num, nn, b->limbs, b->count,
+                          a->negative != b->negative, scale,
                           XP3_ROUND_HALF_DOWN, res);
     xmlFree(num);
-    xmlFree(den);
     return(ret);
 }
 

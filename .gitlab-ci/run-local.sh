@@ -4,8 +4,8 @@
 #
 # Usage: sh .gitlab-ci/run-local.sh [job...]
 #
-# Jobs: gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs
-# (default: all)
+# Jobs: style gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage
+#       fuzz docs (default: all)
 # Set IMAGE to use a different image than fedora:latest, and COVERAGE_OUT
 # to a directory to get the coverage job's HTML report and Cobertura XML.
 #
@@ -13,7 +13,7 @@
 
 set -u
 
-ALL_JOBS="gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs"
+ALL_JOBS="style gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs"
 
 # On the host: start the container and run this script inside it.
 if [ "${1:-}" != "--inside" ]; then
@@ -33,7 +33,7 @@ echo "Installing packages..."
 dnf install -y -q --setopt=install_weak_deps=False \
     gcc clang compiler-rt libasan libubsan \
     meson ninja-build cmake pkgconf-pkg-config \
-    libxml2-devel doxygen git >/dev/null 2>&1 || {
+    libxml2-devel doxygen git glibc-langpack-de >/dev/null 2>&1 || {
     echo "dnf install failed"
     exit 1
 }
@@ -46,6 +46,10 @@ meson_job() {
     meson setup build --werror $1 &&
     meson compile -C build &&
     meson test -C build --print-errorlogs
+}
+
+job_style() {
+    python3 .gitlab-ci/check-style.py
 }
 
 job_gcc() {

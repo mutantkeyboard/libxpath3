@@ -1,6 +1,8 @@
 # CI for libxpath3.
 #
 # All jobs use the public Fedora image, so no project-specific image is needed.
+# glibc-langpack-de provides a locale with a decimal comma, so testvalue checks
+# that number formatting ignores the locale.
 # Windows jobs (MSVC, MinGW) are added once it is clear whether this project
 # can use GNOME's Windows runners (tag "win32-ps").
 
@@ -15,7 +17,7 @@ default:
       dnf install -y --setopt=install_weak_deps=False
       gcc clang compiler-rt libasan libubsan
       meson ninja-build cmake pkgconf-pkg-config
-      libxml2-devel doxygen git
+      libxml2-devel doxygen git glibc-langpack-de
 
 variables:
   UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
@@ -45,6 +47,15 @@ gcc:c99:
     CC: gcc
     MESON_ARGS: "-Dc_std=c99"
     CFLAGS: "-pedantic-errors -Werror=vla"
+
+# The mechanical parts of the coding style, which no formatter can
+# reproduce: see .gitlab-ci/check-style.py.
+style:
+  stage: build
+  before_script:
+    - dnf install -y --setopt=install_weak_deps=False python3 git
+  script:
+    - python3 .gitlab-ci/check-style.py
 
 clang:asan:
   extends: .meson

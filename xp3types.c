@@ -15,7 +15,8 @@
 
 /* Flags of a type */
 #define XP3_TYPE_FLAG_ABSTRACT 1    /* no value has exactly this type */
-#define XP3_TYPE_FLAG_PRIMITIVE 2   /* primitive in XSD 1.1, or untypedAtomic */
+#define XP3_TYPE_FLAG_PRIMITIVE 2   /* primitive in XSD 1.1, or
+                                     * untypedAtomic */
 
 typedef struct {
     const char *name;               /* local name in the xs namespace */

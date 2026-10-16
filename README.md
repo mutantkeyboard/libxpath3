@@ -75,6 +75,8 @@ Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs 
 
 The `coverage` job measures line coverage of the library sources over the unit tests, the replayed fuzz corpus and the QT3 run, with gcov and [gcovr](https://gcovr.com/). GitLab shows the percentage on the pipeline and the merge request, and marks covered and uncovered lines in merge request diffs; the full HTML report is kept as a job artifact. To produce it locally: `COVERAGE_OUT=coverage-report sh .gitlab-ci/run-local.sh coverage`, then open `coverage-report/coverage/index.html`.
 
+The code follows libxml2's style. No formatter can reproduce it (clang-format cannot keep `return(x)`, for example), so the `style` job checks the mechanical rules instead: at most 79 columns, no tabs or trailing whitespace, no `//` comments, and `return(x)`. Run it before pushing with `python3 .gitlab-ci/check-style.py`. The `.editorconfig` sets up editors to match.
+
 ## Building the project
 
 Requirements: Meson 1.3 or later, Ninja, a C99 compiler and libxml2 2.9 or later. Doxygen is optional, for the API documentation. CMake 3.18 or later can be used instead of Meson.

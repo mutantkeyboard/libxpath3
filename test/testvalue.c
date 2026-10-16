@@ -21,6 +21,7 @@
 #include <libxml/parser.h>
 #include <libxml/xmlmemory.h>
 
+#include "private/xp3decimal.h"
 #include "private/xp3double.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
@@ -74,6 +75,13 @@ testTypes(void) {
           "primitive of ID");
     check(xp3TypePrimitive(XP3_TYPE_UNTYPED_ATOMIC) ==
           XP3_TYPE_UNTYPED_ATOMIC, "untypedAtomic is primitive");
+    check(xp3TypeParent(XP3_TYPE_BYTE) == XP3_TYPE_SHORT, "parent of byte");
+    check(xp3TypeParent(XP3_TYPE_DECIMAL) == XP3_TYPE_ANY_ATOMIC,
+          "parent of a primitive type");
+    check(xp3TypeParent(XP3_TYPE_ANY_ATOMIC) == XP3_TYPE_ANY_ATOMIC,
+          "anyAtomicType is its own parent");
+    check(xp3TypeParent(XP3_TYPE_COUNT) == XP3_TYPE_ANY_ATOMIC,
+          "parent of an invalid type");
     check(xp3TypePrimitive(XP3_TYPE_DAY_TIME_DURATION) == XP3_TYPE_DURATION,
           "primitive of dayTimeDuration");
 
@@ -252,7 +260,17 @@ testSequences(void) {
     check(v != NULL && v->shape == XP3_SEQ_SINGLE && xp3ValueCount(v) == 1,
           "single");
     expectSeq(v, "5", "single item");
+    check(xp3ValueRef(v) == v && v->refs == 2, "reference to a sequence");
     xp3ValueUnref(v);
+    check(v->refs == 1, "reference released");
+    check(xp3ValueItemAt(v, 0, &item) == 1, "item of single");
+    item = xp3ItemRef(item);
+    xp3ValueUnref(v);
+    check(item.kind == XP3_ITEM_ATOMIC && item.u.atomic->refs == 2,
+          "item outlives its sequence");
+    xp3ItemUnref(item);
+    xp3ItemUnref(item);
+    check(xp3ValueRef(NULL) == NULL, "reference to NULL");
 
     /* Nodes are borrowed */
     memset(&node, 0, sizeof(node));
@@ -447,8 +465,8 @@ testNumberStrings(const char *label) {
 /* The same results under a locale with a decimal comma */
 static void
 testLocale(void) {
-    const char *names[] = { "de_DE.UTF-8", "de_DE.utf8", "de_DE", "fr_FR.UTF-8",
-                            "fr_FR.utf8" };
+    const char *names[] = { "de_DE.UTF-8", "de_DE.utf8", "de_DE",
+                            "fr_FR.UTF-8", "fr_FR.utf8" };
     size_t i;
 
     for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
@@ -478,6 +496,8 @@ buildValues(char *out, size_t size) {
     xp3Value *range = NULL;
     xp3Value *all;
     xp3Atomic *a;
+    xp3Decimal *dec;
+    double half;
     xmlChar *num;
 
     out[0] = 0;
@@ -504,6 +524,25 @@ buildValues(char *out, size_t size) {
     if (a == NULL)
         return(-1);
     xp3AtomicUnref(a);
+    a = xp3AtomicNewString(XP3_TYPE_STRING, BAD_CAST "abc", 3);
+    if (a == NULL)
+        return(-1);
+    xp3AtomicUnref(a);
+    a = xp3AtomicNewBinary(XP3_TYPE_HEX_BINARY,
+                           (const unsigned char *) "\x01\x02", 2);
+    if (a == NULL)
+        return(-1);
+    all = xp3ValueSingle(xp3ItemFromAtomic(a));
+    if (all == NULL)
+        return(-1);
+    xp3ValueUnref(all);
+    dec = xp3DecimalFromInt64(5);
+    if (dec == NULL)
+        return(-1);
+    half = xp3DecimalToDouble(dec);
+    xp3DecimalFree(dec);
+    if (isnan(half))
+        return(-1);
     num = xp3DoubleToString(0.1);
     if (num == NULL)
         return(-1);

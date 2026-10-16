@@ -335,7 +335,8 @@ static const struct {
     { "$a[?x = 1]", "(filter (var a) (predicate (binary = (unary-lookup x) "
                     "(integer 1))))" },
     { "?*", "(unary-lookup *)" },
-    { "map/array", "(path (step child (name map)) (step child (name array)))" },
+    { "map/array",
+      "(path (step child (name map)) (step child (name array)))" },
 
     /* Function, map and array types */
     { "$f instance of function(*)",
@@ -578,7 +579,26 @@ static const struct {
 
     /* Lexical errors, also when found while peeking */
     { "1 + 'abc",             "XPST0003", 1, 5 },
-    { "a 10div 3",            "XPST0003", 1, 3 }
+    { "a 10div 3",            "XPST0003", 1, 3 },
+
+    /* A lexical error in the token right after a construct */
+    { ". 'abc",               "XPST0003", 1, 3 },
+    { "'a' 'b",               "XPST0003", 1, 5 },
+    { "f#2 'abc",             "XPST0003", 1, 5 },
+    { "$m?a 'abc",            "XPST0003", 1, 6 },
+    { "$m?* 'abc",            "XPST0003", 1, 6 },
+    { "some 'abc",            "XPST0003", 1, 6 },
+    { "if 'abc",              "XPST0003", 1, 4 },
+    { "1 cast as xs:int? 'abc", "XPST0003", 1, 19 },
+    { "1 instance of xs:int* 'abc", "XPST0003", 1, 23 },
+    { "1 instance of foo 'abc", "XPST0003", 1, 19 },
+
+    /* Missing type names */
+    { "1 cast as 5",          "XPST0003", 1, 11 },
+    { "() instance of element(a, 5)", "XPST0003", 1, 27 },
+    { "function($a as) { 1 }", "XPST0003", 1, 15 },
+    { "() instance of map(5, item())", "XPST0003", 1, 20 },
+    { "() instance of array(*", "XPST0003", 1, 23 }
 };
 
 static void
@@ -664,11 +684,14 @@ static const struct {
     { XP3_XPATH_31, "array(1)", NULL },
 
     /* XPath 3.0 syntax */
-    { XP3_XPATH_20, "for $x in 1 return $x", "(for (bind x (integer 1)) (var x))" },
+    { XP3_XPATH_20, "for $x in 1 return $x",
+      "(for (bind x (integer 1)) (var x))" },
     { XP3_XPATH_20, "let $x := 1 return $x", NULL },
-    { XP3_XPATH_30, "let $x := 1 return $x", "(let (bind x (integer 1)) (var x))" },
+    { XP3_XPATH_30, "let $x := 1 return $x",
+      "(let (bind x (integer 1)) (var x))" },
     { XP3_XPATH_20, "'a' || 'b'", NULL },
-    { XP3_XPATH_30, "'a' || 'b'", "(binary || (string \"a\") (string \"b\"))" },
+    { XP3_XPATH_30, "'a' || 'b'",
+      "(binary || (string \"a\") (string \"b\"))" },
     { XP3_XPATH_20, "a ! b", NULL },
     { XP3_XPATH_20, "f#1", NULL },
     { XP3_XPATH_30, "f#1", "(function-ref f#1)" },
@@ -794,6 +817,26 @@ testArguments(const xp3StaticContext *ctx) {
 
     check(xp3Parse(ctx, BAD_CAST "1 +", 3, NULL) == NULL,
           "error without an error pointer");
+
+    /* The length limit of the static context */
+    {
+        xp3StaticContext *small = xp3NewStaticContext();
+
+        if (small != NULL) {
+            small->maxExprLength = 4;
+            ast = xp3Parse(small, BAD_CAST "1 + 2", 5, &err);
+            check(ast == NULL && err != NULL &&
+                  strcmp((const char *) xp3ErrorCode(err), "LIMIT") == 0,
+                  "expression longer than the limit");
+            xp3ErrorFree(err);
+            ast = xp3Parse(small, BAD_CAST "1 + 2", 4, &err);
+            check(ast == NULL && err != NULL &&
+                  strcmp((const char *) xp3ErrorCode(err), "XPST0003") == 0,
+                  "expression at the limit is parsed");
+            xp3ErrorFree(err);
+            xp3FreeStaticContext(small);
+        }
+    }
 }
 
 /* Repeat str n times followed by tail. Returns a malloc'ed string. */
@@ -907,28 +950,22 @@ testLimits(const xp3StaticContext *defaultCtx) {
                 "many unary signs");
 }
 
-/* Parse and print a larger expression. Returns NULL with *err set on
- * failure. */
-static xmlChar *
-parseLarge(const xp3StaticContext *ctx, xp3Error **err) {
-    static const char expr[] =
-        "fn:concat('it''s', $p:x)[1]/child::a[@b = 1] | "
-        "//c instance of element(d, xs:string?)*, "
-        "-Q{urn:x}e cast as xs:integer?, document-node(element(*)), "
-        "let $m := map{'k': [1, ?a]} return $m?k => f(?), "
-        "function($x as map(*)) as item()* { $x ! . || 'z' }, "
-        "if (1) then some $v in () satisfies true() else 0";
-
-    return(parseToString(ctx, expr, err));
-}
+/* An expression with most kinds of nodes, for the allocation tests */
+static const char largeExpr[] =
+    "fn:concat('it''s', $p:x)[1]/child::a[@b = 1] | "
+    "//c instance of element(d, xs:string?)*, "
+    "-Q{urn:x}e cast as xs:integer?, document-node(element(*)), "
+    "let $m := map{'k': [1, ?a]} return $m?k => f(?), "
+    "function($x as map(*)) as item()* { $x ! . || 'z' }, "
+    "if (1) then some $v in () satisfies true() else 0";
 
 static void
-testAllocationFailures(const xp3StaticContext *ctx) {
+testAllocationFailures(const xp3StaticContext *ctx, const char *expr) {
     xmlChar *expected;
     xp3Error *err = NULL;
     int i;
 
-    expected = parseLarge(ctx, &err);
+    expected = parseToString(ctx, expr, &err);
     check(expected != NULL, "reference tree parsed");
     xp3ErrorFree(err);
 
@@ -947,7 +984,7 @@ testAllocationFailures(const xp3StaticContext *ctx) {
 
         err = NULL;
         xp3TestAllocFailAt(i);
-        actual = parseLarge(ctx, &err);
+        actual = parseToString(ctx, expr, &err);
         if (!xp3TestAllocFailed()) {
             check(actual != NULL && expected != NULL &&
                   xmlStrEqual(actual, expected),
@@ -986,7 +1023,17 @@ main(void) {
     testPositions(ctx);
     testArguments(ctx);
     testLimits(ctx);
-    testAllocationFailures(ctx);
+    testAllocationFailures(ctx, largeExpr);
+    /* A string longer than an arena block gets its own allocation */
+    {
+        char *literal = repeat("x", 5000, "'");
+
+        if (literal != NULL) {
+            literal[0] = '\'';
+            testAllocationFailures(ctx, literal);
+            free(literal);
+        }
+    }
 
     xp3FreeStaticContext(ctx);
 

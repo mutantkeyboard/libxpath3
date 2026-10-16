@@ -198,7 +198,8 @@ testAllocationFailures(void) {
         ret = xp3DeclareNamespace(ctx, BAD_CAST "p", BAD_CAST "urn:new");
         if (!xp3TestAllocFailed()) {
             check(ret == 0 &&
-                  strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "p"), "urn:new"),
+                  strEq(xp3StaticContextLookupNs(ctx, BAD_CAST "p"),
+                        "urn:new"),
                   "declare complete after allocation failures");
             xp3TestAllocFailAt(-1);
             xp3FreeStaticContext(ctx);

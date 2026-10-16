@@ -49,6 +49,7 @@
 #
 # Author: Antonio Nešić <nesic.antonio@gmail.com>
 
+import collections
 import html
 import re
 import sys
@@ -58,6 +59,10 @@ FOS = '{http://www.w3.org/xpath-functions/spec/namespace}'
 
 # Order of the namespaces, as xp3FuncNamespace in xp3func.h
 NAMESPACES = ['fn', 'math', 'map', 'array']
+
+# One entry of the generated table
+Signature = collections.namedtuple(
+    'Signature', 'namespace name arity level flags text')
 
 PROPERTY_FLAGS = [
     ('focus-dependent', 'XP3_FUNC_FOCUS'),
@@ -72,14 +77,15 @@ def html_signatures(path):
     """The (prefixed name, arity) pairs of an F&O HTML specification."""
     text = open(path, encoding='utf-8', errors='replace').read()
     result = set()
-    for m in re.finditer(r'<div class="proto">(.*?)</div>', text, re.S):
-        proto = ' '.join(html.unescape(re.sub(r'<[^>]+>', '', m.group(1)))
-                         .split())
-        m = re.match(r'([a-z]+:[\w-]+)\s*\((.*)\)\s*as', proto)
-        if m is None:
+    for div in re.finditer(r'<div class="proto">(.*?)</div>', text, re.S):
+        markup_free = re.sub(r'<[^>]+>', '', div.group(1))
+        proto = ' '.join(html.unescape(markup_free).split())
+        parts = re.match(r'([a-z]+:[\w-]+)\s*\((.*)\)\s*as', proto)
+        if parts is None:
             continue
-        args = m.group(2).strip()
-        result.add((m.group(1), args.count('$') if args else 0))
+        qname = parts.group(1)
+        args = parts.group(2).strip()
+        result.add((qname, args.count('$') if args else 0))
     # With different markup nothing would match, and every function
     # would silently become XPath 3.1.
     if len(result) < 100:
@@ -87,18 +93,18 @@ def html_signatures(path):
     return result
 
 
-def properties(qname, index, arity, props):
-    if not props:
+def properties(qname, index, arity, blocks):
+    if not blocks:
         if qname != 'fn:boolean':
             sys.exit('%s has no properties' % qname)
         return {'deterministic', 'context-independent', 'focus-independent'}
-    if len(props) == 1 and props[0].get('arity') is None:
-        found = props[0]
-    elif index < len(props):
-        found = props[index]
+    if len(blocks) == 1 and blocks[0].get('arity') is None:
+        block = blocks[0]
+    elif index < len(blocks):
+        block = blocks[index]
     else:
         sys.exit('%s has fewer properties blocks than signatures' % qname)
-    result = {p.text for p in found}
+    result = {prop.text for prop in block}
     if qname == 'array:sort' and arity == 3:
         result.discard('context-independent')
         result.add('context-dependent')
@@ -119,7 +125,7 @@ def c_string(text, indent):
         parts.append(text[:cut + 1])
         text = text[cut + 1:]
     parts.append(text)
-    return ('\n' + ' ' * indent).join('"%s"' % p for p in parts)
+    return ('\n' + ' ' * indent).join('"%s"' % part for part in parts)
 
 
 def main():
@@ -135,13 +141,13 @@ def main():
         if prefix not in NAMESPACES:
             continue
         qname = prefix + ':' + func.get('name')
-        props = func.findall(FOS + 'properties')
+        blocks = func.findall(FOS + 'properties')
         protos = func.find(FOS + 'signatures').findall(FOS + 'proto')
         for index, proto in enumerate(protos):
             args = proto.findall(FOS + 'arg')
-            variadic = any(a.get('name') == '...' for a in args)
-            params = ['$%s as %s' % (a.get('name'), a.get('type'))
-                      for a in args if a.get('name') != '...']
+            variadic = any(arg.get('name') == '...' for arg in args)
+            params = ['$%s as %s' % (arg.get('name'), arg.get('type'))
+                      for arg in args if arg.get('name') != '...']
             arity = len(params)
             if variadic:
                 params.append('...')
@@ -151,20 +157,22 @@ def main():
                 level = 'XP3_XPATH_30'
             else:
                 level = 'XP3_XPATH_31'
-            prop = properties(qname, index, arity, props)
-            flags = [flag for name, flag in PROPERTY_FLAGS if name in prop]
+            found = properties(qname, index, arity, blocks)
+            flags = [flag for name, flag in PROPERTY_FLAGS if name in found]
             if variadic:
                 flags.insert(0, 'XP3_FUNC_VARIADIC')
             signature = '%s(%s) as %s' % (qname, ', '.join(params),
                                           proto.get('return-type'))
-            rows.append((NAMESPACES.index(prefix), func.get('name'), arity,
-                         level, flags, signature))
+            rows.append(Signature(NAMESPACES.index(prefix), func.get('name'),
+                                  arity, level, flags, signature))
 
     # Sorted for binary search, as xp3FuncLookup() expects
-    rows.sort(key=lambda r: (r[0], r[1].encode('utf-8'), r[2]))
-    for a, b in zip(rows, rows[1:]):
-        if a[:3] == b[:3]:
-            sys.exit('duplicate signature %s' % a[5])
+    rows.sort(key=lambda row: (row.namespace, row.name.encode('utf-8'),
+                               row.arity))
+    for previous, row in zip(rows, rows[1:]):
+        if ((previous.namespace, previous.name, previous.arity) ==
+                (row.namespace, row.name, row.arity)):
+            sys.exit('duplicate signature %s' % row.text)
 
     print('/*')
     print(' * Built-in functions of XPath 3.1, generated by')
@@ -173,16 +181,17 @@ def main():
     print(' */')
     print()
     print('static const xp3FuncInfo xp3Functions[] = {')
-    for ns, name, arity, level, flags, signature in rows:
+    for row in rows:
         head = '    { %s, "%s", %d, %s,' % (
-            'XP3_FUNC_NS_' + NAMESPACES[ns].upper(), name, arity, level)
-        flags = ' | '.join(flags) if flags else '0'
+            'XP3_FUNC_NS_' + NAMESPACES[row.namespace].upper(), row.name,
+            row.arity, row.level)
+        flags = ' | '.join(row.flags) if row.flags else '0'
         if len(head) + len(flags) + 2 <= 79:
             print('%s %s,' % (head, flags))
         else:
             print(head)
             print('      %s,' % flags)
-        print('      %s },' % c_string(signature, 6))
+        print('      %s },' % c_string(row.text, 6))
     print('};')
 
 
