@@ -82,7 +82,8 @@ add(xp3AstNode *parent, ...) {
 #define INT(v)     mk(ast, XP3_AST_INTEGER, 0, v)
 #define VAR(v)     mkName(ast, XP3_AST_VARREF, 0, NULL, NULL, v)
 #define ATOMIC(p, l) mkName(ast, XP3_AST_ATOMIC_TYPE, 0, p, NULL, l)
-#define TYPE(occ, item) add(mk(ast, XP3_AST_SEQUENCE_TYPE, occ, NULL), item, NULL)
+#define TYPE(occ, item) \
+    add(mk(ast, XP3_AST_SEQUENCE_TYPE, occ, NULL), item, NULL)
 
 static void
 expectTree(const xp3AstNode *node, const char *expected, const char *what) {

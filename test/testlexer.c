@@ -13,6 +13,7 @@
 #include <libxml/parser.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3chars.h"
 #include "private/xp3context.h"
 #include "private/xp3error.h"
 #include "private/xp3lexer.h"
@@ -172,6 +173,7 @@ static const struct {
 
     /* Other errors are reported where they occur */
     { "Q{a{b}c",  0, "XPST0003", 1, 4 },
+    { "Q{a\xff}c", 0, "XPST0003", 1, 4 },
     { "Q{x} 1",   0, "XPST0003", 1, 5 },
     { "a % b",    0, "XPST0003", 1, 3 },
     { "a\n  ^",   0, "XPST0003", 2, 3 },
@@ -328,6 +330,66 @@ testKindNames(void) {
           "unknown kind has no name");
 }
 
+/*
+ * Every range of NameStartChar and NameChar (XML 1.0 Fifth Edition,
+ * 2.3), checked at both ends and just outside them.
+ */
+static void
+testNameChars(void) {
+    static const struct {
+        int low;
+        int high;
+    } startRanges[] = {
+        { 'A', 'Z' }, { '_', '_' }, { 'a', 'z' },
+        { 0xC0, 0xD6 }, { 0xD8, 0xF6 }, { 0xF8, 0x2FF },
+        { 0x370, 0x37D }, { 0x37F, 0x1FFF }, { 0x200C, 0x200D },
+        { 0x2070, 0x218F }, { 0x2C00, 0x2FEF }, { 0x3001, 0xD7FF },
+        { 0xF900, 0xFDCF }, { 0xFDF0, 0xFFFD }, { 0x10000, 0xEFFFF }
+    };
+    static const struct {
+        int low;
+        int high;
+    } nameRanges[] = {
+        { '-', '.' }, { '0', '9' }, { 0xB7, 0xB7 },
+        { 0x300, 0x36F }, { 0x203F, 0x2040 }
+    };
+    /* Just outside a range, and in neither production */
+    static const int neither[] = {
+        0, ' ', ',', '/', ':', '@', '[', '^', '`', '{', 0x7F, 0xBF,
+        0xD7, 0xF7, 0x37E, 0x2000, 0x200B, 0x200E, 0x203E, 0x2041,
+        0x206F, 0x2190, 0x2BFF, 0x2FF0, 0x3000, 0xD800, 0xF8FF, 0xFDD0,
+        0xFFFE, 0xF0000, 0x10FFFF
+    };
+    size_t i;
+    char what[64];
+
+    for (i = 0; i < sizeof(startRanges) / sizeof(startRanges[0]); i++) {
+        int low = startRanges[i].low;
+        int high = startRanges[i].high;
+
+        snprintf(what, sizeof(what), "U+%04X starts a name", low);
+        check(xp3IsNameStartChar(low) && xp3IsNameChar(low), what);
+        snprintf(what, sizeof(what), "U+%04X starts a name", high);
+        check(xp3IsNameStartChar(high) && xp3IsNameChar(high), what);
+    }
+    for (i = 0; i < sizeof(nameRanges) / sizeof(nameRanges[0]); i++) {
+        int low = nameRanges[i].low;
+        int high = nameRanges[i].high;
+
+        snprintf(what, sizeof(what), "U+%04X only continues a name", low);
+        check(!xp3IsNameStartChar(low) && xp3IsNameChar(low), what);
+        snprintf(what, sizeof(what), "U+%04X only continues a name",
+                 high);
+        check(!xp3IsNameStartChar(high) && xp3IsNameChar(high), what);
+    }
+    for (i = 0; i < sizeof(neither) / sizeof(neither[0]); i++) {
+        snprintf(what, sizeof(what), "U+%04X is not a name character",
+                 neither[i]);
+        check(!xp3IsNameStartChar(neither[i]) && !xp3IsNameChar(neither[i]),
+              what);
+    }
+}
+
 int
 main(void) {
     xp3StaticContext *ctx;
@@ -342,6 +404,7 @@ main(void) {
     testPeekAndRestore(ctx);
     testLimits();
     testKindNames();
+    testNameChars();
 
     xp3FreeStaticContext(ctx);
 

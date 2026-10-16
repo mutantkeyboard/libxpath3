@@ -102,9 +102,13 @@ xp3FloatParse(const char *str) {
 /*
  * The shortest significant digits of a positive finite value that read
  * back as the same value: a double, or a float if isFloat is set.
- * Stores at most 17 digits without trailing zeros in digits, and the
- * power of ten of the first digit in *exponent. Returns the number of
- * digits.
+ * Stores at most 17 digits in digits, and the power of ten of the
+ * first digit in *exponent. Returns the number of digits.
+ *
+ * The digits never end in 0. If the p digits that round-trip were
+ * D followed by 0, the value would be within half a unit of the p-th
+ * digit of D, so rounding it to p - 1 digits gives D as well, which
+ * reads back as the same value and would have been found first.
  */
 static int
 shortestDigits(double value, int isFloat, char *digits, int *exponent) {
@@ -141,8 +145,6 @@ shortestDigits(double value, int isFloat, char *digits, int *exponent) {
             break;
     }
 
-    while ((n > 1) && (digits[n - 1] == '0'))
-        n--;
     digits[n] = 0;
     return(n);
 }

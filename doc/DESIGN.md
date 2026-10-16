@@ -322,6 +322,7 @@ Schematron-style use: compile each rule once at startup, then evaluate it agains
   The goal is OSS-Fuzz once the code is stable.
 - **CI on GNOME GitLab:** builds with Meson and CMake, with ASan and UBSan, against libxml2 master and the latest release.
 - **Coverage:** a CI job builds with gcov, runs the unit tests, the replayed fuzz corpus and QT3, and reports line coverage of the library sources with gcovr in GitLab's native format: the percentage on pipelines and merge requests, covered and uncovered lines marked in merge request diffs. No external service such as Codecov, which would need an account, a token and an upload step for little more. Only this job sets GitLab's coverage value, because GitLab averages the values of all jobs; the QT3 pass rate is in the `qt3` job log and the README instead.
+- **Code style, no formatter:** the code follows libxml2's style, which libxml2 keeps by hand: `return(x)`, the function name at the start of its line, hand-aligned tables and comments. clang-format cannot express it. Even a tuned configuration rewrites about 20% of the lines, including every `return(x)` as `return (x)`, because its only option for that space also changes `if (`. So a `style` CI job (`.gitlab-ci/check-style.py`) checks the mechanical rules instead: at most 79 columns, no tabs except in the public header's libxml2-style declarations, no trailing whitespace, no `//` comments, and `return(x)` or `return;`. An `.editorconfig` based on libxml2's sets up editors.
 
 ### Platforms
 

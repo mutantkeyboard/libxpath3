@@ -55,7 +55,8 @@ static const char *const xp3ErrCodeNames[] = {
  */
 const char *
 xp3ErrCodeName(xp3ErrCode code) {
-    if ((unsigned) code >= sizeof(xp3ErrCodeNames) / sizeof(xp3ErrCodeNames[0]))
+    if ((unsigned) code >=
+        sizeof(xp3ErrCodeNames) / sizeof(xp3ErrCodeNames[0]))
         return(NULL);
     return(xp3ErrCodeNames[code]);
 }
