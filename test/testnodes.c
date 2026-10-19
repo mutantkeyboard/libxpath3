@@ -12,6 +12,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -835,6 +836,449 @@ done:
 }
 
 /*
+ * Random trees, checked against a model
+ *
+ * A second, deliberately naive implementation of the rules: walk the
+ * libxml2 children and turn each run of text, CDATA and skipped nodes
+ * into one node with the run's text, or into nothing if the run has
+ * no content. Every axis of every node must list the model's nodes in
+ * the model's order, and the sort must agree with it too. The random
+ * trees mix all node kinds, with empty text and CDATA, so runs of
+ * several libxml2 nodes and empty runs are common.
+ */
+
+#define XP3_RANDOM_TREES 200
+#define XP3_RANDOM_MAX_NODES 512
+#define XP3_RANDOM_TEXT 1024
+
+typedef struct {
+    xmlNodePtr node;            /* the canonical node */
+    int parent;                 /* index of the parent, -1 for the root */
+    int isAttribute;
+    char text[XP3_RANDOM_TEXT]; /* the expected string value */
+} xp3ModelNode;
+
+static xp3ModelNode modelNodes[XP3_RANDOM_MAX_NODES];
+static int modelCount;
+static uint64_t randomState;
+static int randomNodesLeft;
+
+static unsigned
+randomBelow(unsigned limit) {
+    randomState = randomState * UINT64_C(6364136223846793005) +
+                  UINT64_C(1442695040888963407);
+    return((unsigned) (randomState >> 33) % limit);
+}
+
+static int
+modelIsText(const xmlNode *node) {
+    return((node->type == XML_TEXT_NODE) ||
+           (node->type == XML_CDATA_SECTION_NODE));
+}
+
+static int
+modelIsSkipped(const xmlNode *node) {
+    return((node->type == XML_ENTITY_REF_NODE) ||
+           (node->type == XML_XINCLUDE_START) ||
+           (node->type == XML_XINCLUDE_END) ||
+           (node->type == XML_DTD_NODE));
+}
+
+static void
+buildRandomChildren(xmlDocPtr doc, xmlNodePtr parent, int depth) {
+    unsigned count = randomBelow(6);
+    unsigned i;
+
+    for (i = 0; (i < count) && (randomNodesLeft > 0); i++) {
+        unsigned kind = randomBelow(9);
+        const char *content;
+        char name[16];
+        xmlNodePtr node;
+
+        randomNodesLeft--;
+        snprintf(name, sizeof(name), "n%d", randomNodesLeft);
+        content = (randomBelow(3) == 0) ? "" : name;
+        if ((kind <= 2) && (depth < 5)) {
+            unsigned attributes = randomBelow(3);
+            unsigned j;
+
+            node = appendRaw(parent, xmlNewDocNode(doc, NULL, BAD_CAST "e",
+                                                   NULL));
+            for (j = 0; j < attributes; j++) {
+                char attrName[8];
+
+                snprintf(attrName, sizeof(attrName), "a%u", j);
+                xmlNewProp(node, BAD_CAST attrName, BAD_CAST content);
+            }
+            buildRandomChildren(doc, node, depth + 1);
+        } else if (kind == 4) {
+            appendRaw(parent, xmlNewCDataBlock(doc, BAD_CAST content,
+                                               (int) strlen(content)));
+        } else if (kind == 5) {
+            appendRaw(parent, xmlNewDocComment(doc, BAD_CAST name));
+        } else if (kind == 6) {
+            appendRaw(parent, xmlNewDocPI(doc, BAD_CAST "pi",
+                                          BAD_CAST name));
+        } else if (kind == 7) {
+            appendRaw(parent, xmlNewReference(doc, BAD_CAST "e"));
+        } else if (kind == 8) {
+            node = appendRaw(parent, xmlNewDocNode(doc, NULL,
+                                                   BAD_CAST "include",
+                                                   NULL));
+            node->type = (randomBelow(2) == 0) ? XML_XINCLUDE_START :
+                                                 XML_XINCLUDE_END;
+        } else {
+            appendRaw(parent, xmlNewDocText(doc, BAD_CAST content));
+        }
+    }
+}
+
+static xmlDocPtr
+buildRandomTree(void) {
+    xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
+    xmlNodePtr root = (xmlNodePtr) doc;
+    xmlNodePtr element;
+
+    xmlCreateIntSubset(doc, BAD_CAST "r", NULL, NULL);
+    xmlAddDocEntity(doc, BAD_CAST "e", XML_INTERNAL_GENERAL_ENTITY, NULL,
+                    NULL, BAD_CAST "E");
+    if (randomBelow(2) == 0)
+        appendRaw(root, xmlNewDocComment(doc, BAD_CAST "top"));
+    element = appendRaw(root, xmlNewDocNode(doc, NULL, BAD_CAST "r", NULL));
+    if (randomBelow(2) == 0)
+        xmlNewProp(element, BAD_CAST "a", BAD_CAST "1");
+    randomNodesLeft = 150;
+    buildRandomChildren(doc, element, 0);
+    if (randomBelow(3) == 0)
+        appendRaw(root, xmlNewDocPI(doc, BAD_CAST "end", NULL));
+    return(doc);
+}
+
+static int
+modelAdd(xmlNodePtr node, int parent, int isAttribute) {
+    xp3ModelNode *model;
+
+    if (modelCount >= XP3_RANDOM_MAX_NODES) {
+        check(0, "random tree fits the model");
+        return(-1);
+    }
+    model = &modelNodes[modelCount];
+    model->node = node;
+    model->parent = parent;
+    model->isAttribute = isAttribute;
+    model->text[0] = 0;
+    return(modelCount++);
+}
+
+static void
+modelAddText(int index, const xmlChar *text) {
+    char *out = modelNodes[index].text;
+
+    if ((text == NULL) || (index < 0))
+        return;
+    if (strlen(out) + strlen((const char *) text) >= XP3_RANDOM_TEXT) {
+        check(0, "random text fits the model");
+        return;
+    }
+    strcat(out, (const char *) text);
+}
+
+static void
+modelChildren(xmlNodePtr parent, int parentIndex) {
+    xmlNodePtr node = parent->children;
+
+    while ((node != NULL) && (parentIndex >= 0)) {
+        int index;
+
+        if (modelIsText(node) || modelIsSkipped(node)) {
+            index = -1;
+            for (; (node != NULL) &&
+                   (modelIsText(node) || modelIsSkipped(node));
+                 node = node->next) {
+                if ((!modelIsText(node)) || (node->content == NULL) ||
+                    (node->content[0] == 0))
+                    continue;
+                if (index < 0)
+                    index = modelAdd(node, parentIndex, 0);
+                modelAddText(index, node->content);
+            }
+            continue;
+        }
+        index = modelAdd(node, parentIndex, 0);
+        if (node->type == XML_ELEMENT_NODE) {
+            xmlAttrPtr attr;
+
+            for (attr = node->properties; attr != NULL; attr = attr->next) {
+                int attrIndex = modelAdd((xmlNodePtr) attr, index, 1);
+
+                if (attrIndex >= 0)
+                    modelAddText(attrIndex, attr->children->content);
+            }
+            modelChildren(node, index);
+        } else if (index >= 0) {
+            modelAddText(index, node->content);
+        }
+        node = node->next;
+    }
+}
+
+static int
+modelIsAncestor(int ancestor, int index) {
+    int parent;
+
+    for (parent = modelNodes[index].parent; parent >= 0;
+         parent = modelNodes[parent].parent) {
+        if (parent == ancestor)
+            return(1);
+    }
+    return(0);
+}
+
+/* The string value of documents and elements: their descendant text */
+static void
+modelSubtreeText(void) {
+    int index;
+    int other;
+
+    for (index = 0; index < modelCount; index++) {
+        xp3NodeKind kind = xp3NodeGetKind(modelNodes[index].node);
+
+        if ((kind != XP3_NODE_DOCUMENT) && (kind != XP3_NODE_ELEMENT))
+            continue;
+        for (other = index + 1; other < modelCount; other++) {
+            if (modelIsAncestor(index, other) &&
+                modelIsText(modelNodes[other].node))
+                modelAddText(index, BAD_CAST modelNodes[other].text);
+        }
+    }
+}
+
+static int
+modelInAxis(xp3Axis axis, int context, int other) {
+    const xp3ModelNode *contextNode = &modelNodes[context];
+    const xp3ModelNode *otherNode = &modelNodes[other];
+    int siblings = (!contextNode->isAttribute) &&
+                   (!otherNode->isAttribute) &&
+                   (contextNode->parent >= 0) &&
+                   (otherNode->parent == contextNode->parent);
+
+    switch (axis) {
+        case XP3_AXIS_SELF:
+            return(other == context);
+        case XP3_AXIS_CHILD:
+            return((otherNode->parent == context) &&
+                   (!otherNode->isAttribute));
+        case XP3_AXIS_ATTRIBUTE:
+            return((otherNode->parent == context) && otherNode->isAttribute);
+        case XP3_AXIS_PARENT:
+            return(contextNode->parent == other);
+        case XP3_AXIS_DESCENDANT:
+            return(modelIsAncestor(context, other) &&
+                   (!otherNode->isAttribute));
+        case XP3_AXIS_DESCENDANT_OR_SELF:
+            return((other == context) ||
+                   (modelIsAncestor(context, other) &&
+                    (!otherNode->isAttribute)));
+        case XP3_AXIS_ANCESTOR:
+            return(modelIsAncestor(other, context));
+        case XP3_AXIS_ANCESTOR_OR_SELF:
+            return((other == context) || modelIsAncestor(other, context));
+        case XP3_AXIS_FOLLOWING_SIBLING:
+            return(siblings && (other > context));
+        case XP3_AXIS_PRECEDING_SIBLING:
+            return(siblings && (other < context));
+        case XP3_AXIS_FOLLOWING:
+            return((other > context) && (!modelIsAncestor(context, other)) &&
+                   (!otherNode->isAttribute));
+        case XP3_AXIS_PRECEDING:
+            return((other < context) && (!modelIsAncestor(other, context)) &&
+                   (!otherNode->isAttribute));
+        default:
+            return(0);
+    }
+}
+
+static int
+modelIndexOf(xmlNodePtr node) {
+    int index;
+
+    for (index = 0; index < modelCount; index++) {
+        if (modelNodes[index].node == node)
+            return(index);
+    }
+    return(-1);
+}
+
+static void
+checkRandomAxes(int tree) {
+    static const xp3Axis axes[] = {
+        XP3_AXIS_CHILD, XP3_AXIS_DESCENDANT, XP3_AXIS_ATTRIBUTE,
+        XP3_AXIS_SELF, XP3_AXIS_DESCENDANT_OR_SELF,
+        XP3_AXIS_FOLLOWING_SIBLING, XP3_AXIS_FOLLOWING, XP3_AXIS_PARENT,
+        XP3_AXIS_ANCESTOR, XP3_AXIS_PRECEDING_SIBLING, XP3_AXIS_PRECEDING,
+        XP3_AXIS_ANCESTOR_OR_SELF
+    };
+    int context;
+    size_t axisIndex;
+
+    for (context = 0; context < modelCount; context++) {
+        for (axisIndex = 0; axisIndex < sizeof(axes) / sizeof(axes[0]);
+             axisIndex++) {
+            xp3Axis axis = axes[axisIndex];
+            int reverse = (axis == XP3_AXIS_PARENT) ||
+                          (axis == XP3_AXIS_ANCESTOR) ||
+                          (axis == XP3_AXIS_ANCESTOR_OR_SELF) ||
+                          (axis == XP3_AXIS_PRECEDING_SIBLING) ||
+                          (axis == XP3_AXIS_PRECEDING);
+            xmlNodePtr node = NULL;
+            int expected = reverse ? modelCount : -1;
+            int position = 0;
+
+            while (1) {
+                /* The next model node on the axis, in axis order */
+                do {
+                    expected += reverse ? -1 : 1;
+                } while ((expected >= 0) && (expected < modelCount) &&
+                         (!modelInAxis(axis, context, expected)));
+                if ((expected < 0) || (expected >= modelCount))
+                    expected = -1;
+                node = xp3AxisNext(axis, modelNodes[context].node, node);
+                if ((node == NULL) && (expected < 0))
+                    break;
+                if ((node == NULL) || (expected < 0) ||
+                    (modelNodes[expected].node != node)) {
+                    fprintf(stderr, "FAIL: random tree %d, axis %d of node "
+                            "%d: item %d is node %d, expected %d\n", tree,
+                            (int) axis, context, position,
+                            (node != NULL) ? modelIndexOf(node) : -1,
+                            expected);
+                    failures++;
+                    break;
+                }
+                position++;
+            }
+        }
+    }
+}
+
+static void
+checkRandomValues(int tree) {
+    int index;
+
+    for (index = 0; index < modelCount; index++) {
+        xmlChar *value = NULL;
+
+        if ((xp3NodeStringValue(modelNodes[index].node, &value, NULL) !=
+             XP3_ERR_OK) ||
+            (strcmp((const char *) value, modelNodes[index].text) != 0)) {
+            fprintf(stderr, "FAIL: random tree %d, string value of node "
+                    "%d: \"%s\", expected \"%s\"\n", tree, index,
+                    (value != NULL) ? (const char *) value : "NULL",
+                    modelNodes[index].text);
+            failures++;
+        }
+        xmlFree(value);
+    }
+}
+
+/* Any libxml2 node of a model node's run, chosen at random */
+static xmlNodePtr
+randomRunMember(xmlNodePtr node) {
+    xmlNodePtr member;
+
+    if (!modelIsText(node))
+        return(node);
+    for (member = node->next;
+         (member != NULL) && (modelIsText(member) ||
+                              modelIsSkipped(member));
+         member = member->next) {
+        if (modelIsText(member) && (randomBelow(2) == 0))
+            return(member);
+    }
+    return(node);
+}
+
+static void
+checkRandomOrder(int tree) {
+    static xp3Item items[XP3_RANDOM_MAX_NODES * 2];
+    static char picked[XP3_RANDOM_MAX_NODES];
+    xp3DocOrder *order = xp3DocOrderNew();
+    size_t count = 0;
+    size_t kept = 0;
+    int index;
+    int pair;
+
+    if (order == NULL) {
+        check(0, "random order table created");
+        return;
+    }
+    memset(picked, 0, sizeof(picked));
+    while (count < (size_t) modelCount * 2) {
+        index = (int) randomBelow((unsigned) modelCount);
+        picked[index] = 1;
+        items[count++] = xp3ItemFromNode(
+            randomRunMember(modelNodes[index].node));
+    }
+    if (xp3DocOrderSort(order, items, &count) != XP3_ERR_OK) {
+        check(0, "random sort succeeds");
+        xp3DocOrderFree(order);
+        return;
+    }
+    for (index = 0; index < modelCount; index++) {
+        if (!picked[index])
+            continue;
+        if ((kept >= count) || (items[kept].u.node !=
+                                modelNodes[index].node)) {
+            fprintf(stderr, "FAIL: random tree %d, sorted item %d is not "
+                    "node %d\n", tree, (int) kept, index);
+            failures++;
+            break;
+        }
+        kept++;
+    }
+    check(kept == count, "random sort keeps each node once");
+
+    for (pair = 0; pair < 50; pair++) {
+        int first = (int) randomBelow((unsigned) modelCount);
+        int second = (int) randomBelow((unsigned) modelCount);
+        int result = 99;
+
+        if ((xp3DocOrderCompare(order, modelNodes[first].node,
+                                modelNodes[second].node, &result) !=
+             XP3_ERR_OK) ||
+            ((first < second) != (result < 0)) ||
+            ((first > second) != (result > 0))) {
+            fprintf(stderr, "FAIL: random tree %d, comparing nodes %d and "
+                    "%d gave %d\n", tree, first, second, result);
+            failures++;
+        }
+    }
+    xp3DocOrderFree(order);
+}
+
+static void
+testRandomTrees(void) {
+    int tree;
+
+    for (tree = 0; (tree < XP3_RANDOM_TREES) && (failures < 20); tree++) {
+        xmlDocPtr doc;
+        int root;
+
+        randomState = (uint64_t) tree + 1;
+        doc = buildRandomTree();
+        modelCount = 0;
+        root = modelAdd((xmlNodePtr) doc, -1, 0);
+        modelChildren((xmlNodePtr) doc, root);
+        modelSubtreeText();
+
+        checkRandomAxes(tree);
+        checkRandomValues(tree);
+        checkRandomOrder(tree);
+        xmlFreeDoc(doc);
+    }
+}
+
+/*
  * Allocation failures
  */
 
@@ -947,6 +1391,7 @@ main(void) {
     testOrderTrees(&tree);
     testOrderChanged();
     testOrderLarge();
+    testRandomTrees();
     testAllocationFailures(&tree);
 
     xmlFreeDoc(tree.wideDoc);
