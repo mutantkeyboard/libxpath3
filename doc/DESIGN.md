@@ -176,10 +176,12 @@ Both methods produce identical output, because both are defined by the shortest 
 
 ### 4.5 Nodes
 
-- **Document order.** Computed from the tree through public fields and cached per document in a side table that the dynamic context owns. Nodes are never modified.
-- **Node identity.** Pointer identity of `xmlNode *`.
+- **Document order.** Computed from the tree through public fields and kept in a side table that the dynamic context owns: a hash table from node pointers to positions, filled one whole tree at a time, the first time a node of that tree is compared. Trees are ordered by when they were first indexed, which keeps the order between documents stable, as XDM 3.1 2.4 requires. Nodes are never modified. Sorting input that is already in order moves nothing, and sorting a single node doesn't index its tree.
+- **Node identity.** Pointer identity of `xmlNode *`. A text node is identified by one libxml2 node of its run (below).
 - **Namespace axis.** Not supported, which the spec allows. Using it raises `XPST0010`. libxml2 represents namespace nodes in an unusual way. Leaving them out avoids that, and the namespace axis is deprecated in XPath 2.0 and later anyway. `fn:in-scope-prefixes` and `fn:namespace-uri-for-prefix` still work.
-- **Text nodes.** libxml2 can produce adjacent text nodes and CDATA sections, but XDM never has adjacent text nodes. Navigation has to present merged text nodes. This needs care, and its own tests.
+- **Text nodes.** libxml2 can produce adjacent text nodes and CDATA sections, and empty text nodes, but XDM has neither. Navigation presents each run of adjacent text and CDATA nodes as one XDM text node, represented by the first libxml2 node of the run that has content; its string value is the text of the whole run. A run without content is no node. Every axis returns only representatives, and `xp3NodeCanonical()` maps any node of a run to its representative, for nodes that come from the application.
+- **Nodes XDM doesn't have.** The DTD, XInclude markers and declarations are skipped by navigation. Text on both sides of a skipped node belongs to one run.
+- **Entity references.** Without `XML_PARSE_NOENT`, libxml2 keeps references to user-defined entities as `XML_ENTITY_REF_NODE`. Their content is shared by every reference to the entity, and its parent is the declaration, not the reference, so it can't be shown in place without breaking node identity, document order and the parent axis. Entity references are skipped with their content, in navigation and in string values alike, attribute values included, so `string(e)` always equals the concatenated text nodes of `e`. Applications parse with `XML_PARSE_NOENT` to see the content, as libxslt's `XSLT_PARSE_OPTIONS` already does.
 
 ## 5. Static and dynamic context
 
