@@ -8,11 +8,12 @@
  * is kept in the evaluation state and saved around the expressions
  * that change it: path steps, predicates and filters.
  *
- * Evaluation covers XPath 3.1 sections 3.1 (primary expressions), 3.3
- * (paths), 3.4 (sequences, without the operators), 3.7.2 (and/or), 3.12
- * (for), 3.13 (let), 3.14 (if) and 3.15 (quantified expressions). The
- * rest raises UNSUPPORTED: operators come with Part 7c, function calls
- * with Part 8, and maps, arrays and function items with Part 12.
+ * Evaluation covers XPath 3.1 sections 3.1 (primary expressions), 3.2.1
+ * (filters), 3.3 (paths), 3.4 (sequences, without the operators), 3.8
+ * (and, or), 3.9 (for), 3.10 (let), 3.12 (if) and 3.13 (quantified
+ * expressions). The rest raises UNSUPPORTED: operators come with Part
+ * 7c, function calls with Part 8, and maps, arrays and function items
+ * with Part 12.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -953,7 +954,7 @@ evalPath(xp3Eval *ev, const xp3AstNode *path) {
     return(current);
 }
 
-/* A primary expression with predicates (XPath 3.1, 3.3.3), positions
+/* A primary expression with predicates (XPath 3.1, 3.2.1), positions
  * counted in sequence order */
 static xp3Value *
 evalFilter(xp3Eval *ev, const xp3AstNode *node) {
