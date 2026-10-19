@@ -88,7 +88,7 @@ libxml2:master:
     - meson test -C build --print-errorlogs
     - ./build/test/testbasic
 
-# Parse-only QT3 conformance, against a pinned commit of the test suite.
+# Compile-only QT3 conformance, against a pinned commit of the test suite.
 # The job log ends with the pass rate of each level. Known failures are
 # listed in qt3/known-failures-*.txt; any other failure, or a known failure
 # that now passes, fails the job. It runs under ASan and UBSan, so every

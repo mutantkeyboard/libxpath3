@@ -42,6 +42,7 @@ extern "C" {
 
 typedef struct _xp3Error xp3Error;
 typedef struct _xp3StaticContext xp3StaticContext;
+typedef struct _xp3Expr xp3Expr;
 
 /**
  * Specify the language level of the XPath expression. The default is
@@ -94,6 +95,23 @@ XP3PUBFUN int
 		    xp3DeclareNamespace		(xp3StaticContext *ctx,
 						 const xmlChar *prefix,
 						 const xmlChar *uri);
+XP3PUBFUN int
+		    xp3SetDefaultElementNamespace(xp3StaticContext *ctx,
+						 const xmlChar *uri);
+XP3PUBFUN int
+		    xp3DeclareVariable		(xp3StaticContext *ctx,
+						 const xmlChar *uri,
+						 const xmlChar *localName);
+
+/*
+ * Compiling
+ */
+XP3PUBFUN xp3Expr *
+		    xp3Compile			(const xp3StaticContext *ctx,
+						 const xmlChar *expr,
+						 xp3Error **error);
+XP3PUBFUN void
+		    xp3FreeExpr			(xp3Expr *expr);
 
 #ifdef __cplusplus
 }

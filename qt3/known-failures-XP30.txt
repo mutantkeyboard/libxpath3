@@ -1,1 +1,7 @@
-# Known parse-only failures for XP30, one test-set/test-case per line.
+# Known compile-only failures for XP30, one test-set/test-case per line.
+
+# Uses the namespace axis without declaring the namespace-axis dependency,
+# and expects the error of serializing a namespace node. Without the axis,
+# XPath 3.1, 3.3.2.1 requires XPST0010, which is what compiling raises.
+# Still the same upstream (checked 2026-10-16).
+fn-serialize/serialize-xml-012

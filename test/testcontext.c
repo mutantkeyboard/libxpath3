@@ -143,8 +143,9 @@ testDeclareNamespace(void) {
           "NULL context rejected");
     check(xp3DeclareNamespace(ctx, NULL, BAD_CAST "urn:x") < 0,
           "NULL prefix rejected");
-    check(xp3StaticContextLookupNs(NULL, BAD_CAST "xs") == NULL,
-          "lookup with NULL context");
+    check(xmlStrEqual(xp3StaticContextLookupNs(NULL, BAD_CAST "xs"),
+                      BAD_CAST XP3_NS_XS),
+          "lookup with NULL context uses the predeclared prefixes");
     check(xp3StaticContextLookupNs(ctx, NULL) == NULL,
           "lookup with NULL prefix");
 
@@ -212,6 +213,41 @@ testAllocationFailures(void) {
         xp3FreeStaticContext(ctx);
     }
     check(i > 0 && i < 1000, "xp3DeclareNamespace failure points exercised");
+
+    /* Declaring variables and the default namespace: a failure returns
+     * -1 and declares nothing. */
+    for (i = 0; i < 1000; i++) {
+        xp3StaticContext *ctx;
+        int ret;
+
+        xp3TestAllocFailAt(-1);
+        ctx = xp3NewStaticContext();
+        if (ctx == NULL) {
+            check(0, "context for variable test");
+            break;
+        }
+
+        xp3TestAllocFailAt(i);
+        ret = xp3DeclareVariable(ctx, BAD_CAST "urn:x", BAD_CAST "v");
+        if (ret == 0)
+            ret = xp3SetDefaultElementNamespace(ctx, BAD_CAST "urn:d");
+        if (!xp3TestAllocFailed()) {
+            check(ret == 0 &&
+                  xp3StaticContextHasVariable(ctx, BAD_CAST "urn:x",
+                                              BAD_CAST "v") &&
+                  strEq(ctx->defaultElementNs, "urn:d"),
+                  "variable declared after allocation failures");
+            xp3TestAllocFailAt(-1);
+            xp3FreeStaticContext(ctx);
+            break;
+        }
+        check(ret < 0, "a failed declaration returns -1");
+        check(ctx->defaultElementNs == NULL,
+              "default namespace unchanged on failure");
+        xp3TestAllocFailAt(-1);
+        xp3FreeStaticContext(ctx);
+    }
+    check(i > 0 && i < 1000, "xp3DeclareVariable failure points exercised");
 
     xp3TestAllocRestore();
 }

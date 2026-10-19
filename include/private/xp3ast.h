@@ -18,8 +18,11 @@
 
 /*
  * Node kinds. The comment says which fields a kind uses. "name" means
- * the fields prefix, uri and text (the local name): at most one of
- * prefix and uri is set.
+ * the fields prefix, uri and text (the local name). The parser sets at
+ * most one of prefix and uri. Static analysis (xp3static.c) then sets
+ * uri to the namespace the name resolves to, or NULL for no namespace,
+ * and keeps the prefix for messages. It also sets the fields marked
+ * "after analysis" below.
  */
 typedef enum {
     XP3_AST_NONE = 0,
@@ -30,7 +33,8 @@ typedef enum {
     XP3_AST_DOUBLE,             /* text: as written */
     XP3_AST_STRING,             /* text: the value, quotes removed and
                                  * doubled quotes decoded */
-    XP3_AST_VARREF,             /* $name: name */
+    XP3_AST_VARREF,             /* $name: name. After analysis, op: the
+                                 * slot of the variable */
     XP3_AST_CONTEXT_ITEM,       /* . */
     XP3_AST_SEQUENCE,           /* a, b, c: children */
     XP3_AST_EMPTY_SEQUENCE,     /* () */
@@ -40,7 +44,8 @@ typedef enum {
     XP3_AST_LET,                /* children: BINDING..., return expression */
     XP3_AST_SOME,               /* children: BINDING..., satisfies expr */
     XP3_AST_EVERY,              /* children: BINDING..., satisfies expr */
-    XP3_AST_BINDING,            /* $name in/:= expr: name, child: expr */
+    XP3_AST_BINDING,            /* $name in/:= expr: name, child: expr.
+                                 * After analysis, op: the slot */
     XP3_AST_IF,                 /* children: condition, then, else */
 
     /* Operators */
@@ -51,7 +56,8 @@ typedef enum {
     XP3_AST_CASTABLE_AS,        /* children: expr, SEQUENCE_TYPE */
     XP3_AST_CAST_AS,            /* children: expr, SEQUENCE_TYPE */
     XP3_AST_ARROW,              /* op: xp3ArrowKind. XP3_ARROW_NAME: name,
-                                 * children: expr, args...
+                                 * children: expr, args..., and after
+                                 * analysis func as for FUNCTION_CALL
                                  * XP3_ARROW_EXPR: children: expr,
                                  * function expr, args... */
 
@@ -68,15 +74,20 @@ typedef enum {
                                  * DYNAMIC_CALL and LOOKUP in order */
 
     /* Functions */
-    XP3_AST_FUNCTION_CALL,      /* name, children: arguments */
+    XP3_AST_FUNCTION_CALL,      /* name, children: arguments. After
+                                 * analysis, func: the built-in function,
+                                 * or NULL for a constructor function,
+                                 * whose target type is then in op */
     XP3_AST_ARG_PLACEHOLDER,    /* ? as an argument */
     XP3_AST_DYNAMIC_CALL,       /* postfix (args): children: arguments */
     XP3_AST_NAMED_FUNCTION_REF, /* name#arity: name, op: arity or
-                                 * XP3_ARITY_OVERFLOW */
+                                 * XP3_ARITY_OVERFLOW. After analysis,
+                                 * func as for FUNCTION_CALL */
     XP3_AST_INLINE_FUNCTION,    /* children: PARAM..., optional
                                  * SEQUENCE_TYPE (return type), body */
     XP3_AST_PARAM,              /* $name: name, optional child:
-                                 * SEQUENCE_TYPE */
+                                 * SEQUENCE_TYPE. After analysis, op:
+                                 * the slot */
 
     /* Lookups */
     XP3_AST_LOOKUP,             /* postfix ?key: op: xp3LookupKind,
@@ -93,7 +104,8 @@ typedef enum {
     XP3_AST_SEQUENCE_TYPE,      /* op: xp3Occurrence, child: item type */
     XP3_AST_EMPTY_SEQUENCE_TYPE,/* empty-sequence() */
     XP3_AST_ANY_ITEM_TYPE,      /* item() */
-    XP3_AST_ATOMIC_TYPE,        /* name */
+    XP3_AST_ATOMIC_TYPE,        /* name. After analysis, op: the type,
+                                 * see xp3StaticType in xp3static.h */
     XP3_AST_FUNCTION_TEST,      /* op: 0 for function(*), 1 typed:
                                  * children: parameter types, return type */
     XP3_AST_MAP_TEST,           /* op: 0 for map(*), 1 typed:
@@ -218,6 +230,8 @@ typedef enum {
     XP3_OCC_ONE_OR_MORE         /* + */
 } xp3Occurrence;
 
+struct _xp3FuncInfo;
+
 typedef struct _xp3AstNode xp3AstNode;
 typedef struct _xp3AstBlock xp3AstBlock;
 typedef struct _xp3Ast xp3Ast;
@@ -237,6 +251,7 @@ struct _xp3AstNode {
     xp3AstNode *first;      /* first child */
     xp3AstNode *last;       /* last child */
     xp3AstNode *next;       /* next sibling */
+    const struct _xp3FuncInfo *func; /* see the node kinds */
 };
 
 /*
@@ -252,6 +267,9 @@ xp3AstNew(void);
 
 void
 xp3AstFree(xp3Ast *ast);
+
+void *
+xp3AstAlloc(xp3Ast *ast, size_t size);
 
 xp3AstNode *
 xp3AstNewNode(xp3Ast *ast, xp3AstKind kind, int line, int column);

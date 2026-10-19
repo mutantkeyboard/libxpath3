@@ -1,12 +1,13 @@
 /*
  * qt3run.c: run the W3C QT3 test suite against libxpath3
  *
- * Only the parser exists so far, so every test runs in parse-only
- * mode. A test passes if its expression parses and the expected
- * result allows that, or if parsing fails with an error code the
- * expected result names. An expected error other than XPST0003 counts
- * as "may parse", because static analysis or evaluation raises it
- * later.
+ * Evaluation does not exist yet, so every test runs in compile-only
+ * mode: the expression is compiled with the namespaces and variables of
+ * its environment. A test passes if it compiles and the expected result
+ * allows that, or if compiling fails with an error code the expected
+ * result names. Static errors (XPST, XQST) must be raised by
+ * compiling; any other expected error counts as "may compile", because
+ * evaluation raises it.
  *
  * Usage: qt3run [-s XP20|XP30|XP31] [-t PREFIX] [-k FILE] [-v] CATALOG
  *
@@ -27,8 +28,9 @@
 #include <libxml/xmlstring.h>
 
 #include <libxpath3/xpath3.h>
-#include "private/xp3ast.h"
-#include "private/xp3parser.h"
+#include "private/xp3context.h"
+#include "private/xp3func.h"
+#include "private/xp3static.h"
 
 #define QT3_NS "http://www.w3.org/2010/09/qt-fots-catalog"
 
@@ -40,7 +42,7 @@ typedef struct {
     const char *spec;           /* "XP20", "XP30" or "XP31" */
     const char *prefix;         /* only test sets starting with this */
     int verbose;
-    xp3StaticContext *ctx;
+    xmlNodePtr catalogRoot;     /* for environments shared by test sets */
     xmlHashTable *known;        /* "set/case" of known failures */
 
     int passed;
@@ -216,29 +218,59 @@ dependenciesMet(const qt3Run *run, xmlNodePtr node) {
 }
 
 /*
- * Whether an expected result accepts the outcome of parsing: code is
- * NULL if the expression parsed, otherwise the error code.
+ * Whether a compiled expression calls fn:error, which can raise any
+ * error code when evaluated, including static ones.
  */
 static int
-accepts(xmlNodePtr expected, const xmlChar *code) {
+callsError(const xp3AstNode *node) {
+    const xp3AstNode *child;
+
+    if ((node->func != NULL) &&
+        (node->func->ns == XP3_FUNC_NS_FN) &&
+        (strcmp(node->func->name, "error") == 0))
+        return(1);
+    for (child = node->first; child != NULL; child = child->next) {
+        if (callsError(child))
+            return(1);
+    }
+    return(0);
+}
+
+/* Whether an error code is a static error, which compiling raises */
+static int
+isStaticCode(const xmlChar *code) {
+    return((code != NULL) && ((xmlStrncmp(code, BAD_CAST "XPST", 4) == 0) ||
+                              (xmlStrncmp(code, BAD_CAST "XQST", 4) == 0)));
+}
+
+/*
+ * Whether an expected result accepts the outcome of compiling: code is
+ * NULL if the expression compiled, otherwise the error code. dynamic
+ * is set if a compiled expression can raise static error codes when
+ * evaluated, through fn:error.
+ */
+static int
+accepts(xmlNodePtr expected, const xmlChar *code, int dynamic) {
     xmlNodePtr cur;
 
     if (isElement(expected, "result") || isElement(expected, "any-of")) {
         for (cur = expected->children; cur != NULL; cur = cur->next) {
-            if ((cur->type == XML_ELEMENT_NODE) && accepts(cur, code))
+            if ((cur->type == XML_ELEMENT_NODE) &&
+                accepts(cur, code, dynamic))
                 return(1);
         }
         return(0);
     }
     if (isElement(expected, "all-of")) {
         for (cur = expected->children; cur != NULL; cur = cur->next) {
-            if ((cur->type == XML_ELEMENT_NODE) && !accepts(cur, code))
+            if ((cur->type == XML_ELEMENT_NODE) &&
+                !accepts(cur, code, dynamic))
                 return(0);
         }
         return(1);
     }
     /* not(assertion): the assertion has to be evaluated to be negated,
-     * so the expression has to parse. The suite never puts an error
+     * so the expression has to compile. The suite never puts an error
      * element inside a not. */
     if (isElement(expected, "not"))
         return(code == NULL);
@@ -247,15 +279,15 @@ accepts(xmlNodePtr expected, const xmlChar *code) {
         int ret;
 
         if (code == NULL)
-            ret = !xmlStrEqual(expectedCode, BAD_CAST "XPST0003");
+            ret = dynamic || !isStaticCode(expectedCode);
         else
             ret = xmlStrEqual(expectedCode, BAD_CAST "*") ||
                   xmlStrEqual(expectedCode, code);
         xmlFree(expectedCode);
         return(ret);
     }
-    /* Assertions about the value, including "not": the expression has
-     * to parse for them to be checked. */
+    /* Assertions about the value: the expression has to compile for
+     * them to be checked. */
     return(code == NULL);
 }
 
@@ -342,10 +374,130 @@ printExpected(xmlNodePtr result) {
     xmlBufferFree(buf);
 }
 
-/* Parse the expression of one test case and check the outcome. */
+/*
+ * Declare the variable an environment names, as "name" or "prefix:name"
+ * with the prefix bound in the catalog, as on <param name="...">, or
+ * as "$name" on <source role="...">.
+ */
+static int
+declareVariable(xp3StaticContext *ctx, xmlNodePtr node, const xmlChar *name) {
+    const xmlChar *colon = xmlStrchr(name, ':');
+    const xmlChar *uri = NULL;
+    xmlChar *prefix;
+    xmlNsPtr ns;
+    int ret;
+
+    if (colon == NULL)
+        return(xp3DeclareVariable(ctx, NULL, name));
+    prefix = xmlStrndup(name, (int) (colon - name));
+    if (prefix == NULL)
+        return(-1);
+    ns = xmlSearchNs(node->doc, node, prefix);
+    xmlFree(prefix);
+    if (ns != NULL)
+        uri = ns->href;
+    ret = (uri != NULL) ? xp3DeclareVariable(ctx, uri, colon + 1) : -1;
+    return(ret);
+}
+
+/*
+ * Apply what an environment declares for compiling: namespaces, where
+ * the empty prefix sets the default element namespace, and the
+ * variables of <param> and <source role="$name">.
+ */
+static int
+applyEnvironment(xp3StaticContext *ctx, xmlNodePtr env) {
+    xmlNodePtr cur;
+    int ret = 0;
+
+    for (cur = env->children; (cur != NULL) && (ret == 0); cur = cur->next) {
+        if (isElement(cur, "namespace")) {
+            xmlChar *prefix = xmlGetProp(cur, BAD_CAST "prefix");
+            xmlChar *uri = xmlGetProp(cur, BAD_CAST "uri");
+
+            if ((prefix == NULL) || (*prefix == 0))
+                ret = xp3SetDefaultElementNamespace(ctx, uri);
+            else
+                ret = xp3DeclareNamespace(ctx, prefix, uri);
+            xmlFree(prefix);
+            xmlFree(uri);
+        } else if (isElement(cur, "param")) {
+            xmlChar *name = xmlGetProp(cur, BAD_CAST "name");
+
+            if (name != NULL)
+                ret = declareVariable(ctx, cur, name);
+            xmlFree(name);
+        } else if (isElement(cur, "source")) {
+            xmlChar *role = xmlGetProp(cur, BAD_CAST "role");
+
+            if ((role != NULL) && (role[0] == '$'))
+                ret = declareVariable(ctx, cur, role + 1);
+            xmlFree(role);
+        }
+    }
+    return(ret);
+}
+
+/* The named environment in a test set or, failing that, the catalog. */
+static xmlNodePtr
+findEnvironment(const qt3Run *run, xmlNodePtr setRoot, const xmlChar *name) {
+    xmlNodePtr roots[2];
+    xmlNodePtr cur;
+    int i;
+
+    roots[0] = setRoot;
+    roots[1] = run->catalogRoot;
+    for (i = 0; i < 2; i++) {
+        for (cur = roots[i]->children; cur != NULL; cur = cur->next) {
+            xmlChar *envName;
+            int found;
+
+            if (!isElement(cur, "environment"))
+                continue;
+            envName = xmlGetProp(cur, BAD_CAST "name");
+            found = xmlStrEqual(envName, name);
+            xmlFree(envName);
+            if (found)
+                return(cur);
+        }
+    }
+    return(NULL);
+}
+
+/*
+ * The static context of a test case: the language level of the run and
+ * the declarations of its environment. Returns NULL on failure.
+ */
+static xp3StaticContext *
+testContext(const qt3Run *run, xmlNodePtr setRoot, xmlNodePtr testCase) {
+    xp3StaticContext *ctx = xp3NewStaticContext();
+    xmlNodePtr env = firstChild(testCase, "environment");
+
+    if ((ctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(ctx,
+                                          (xp3LanguageLevel) run->level) < 0))
+        goto error;
+    if (env != NULL) {
+        xmlChar *ref = xmlGetProp(env, BAD_CAST "ref");
+
+        if (ref != NULL) {
+            env = findEnvironment(run, setRoot, ref);
+            xmlFree(ref);
+        }
+        if ((env != NULL) && (applyEnvironment(ctx, env) < 0))
+            goto error;
+    }
+    return(ctx);
+
+error:
+    xp3FreeStaticContext(ctx);
+    return(NULL);
+}
+
+/* Compile the expression of one test case and check the outcome. */
 static void
 runTestCase(qt3Run *run, const char *setName, const char *setPath,
-            xmlNodePtr testCase) {
+            xmlNodePtr setRoot, xmlNodePtr testCase) {
     xmlNodePtr test = firstChild(testCase, "test");
     xmlNodePtr result = firstChild(testCase, "result");
     xmlChar *name = xmlGetProp(testCase, BAD_CAST "name");
@@ -354,7 +506,8 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
     size_t len = 0;
     char id[512];
     xp3Error *err = NULL;
-    xp3Ast *ast;
+    xp3StaticContext *ctx;
+    xp3Expr *compiled;
     const xmlChar *code = NULL;
     int passed;
     int known;
@@ -387,10 +540,18 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
         return;
     }
 
-    ast = xp3Parse(run->ctx, expr, len, &err);
-    if (ast == NULL)
+    ctx = testContext(run, setRoot, testCase);
+    if (ctx == NULL) {
+        printf("ERROR %s: cannot set up the environment\n", id);
+        run->failed++;
+        xmlFree(expr);
+        return;
+    }
+    compiled = xp3Compile(ctx, expr, &err);
+    if (compiled == NULL)
         code = xp3ErrorCode(err);
-    passed = accepts(result, code);
+    passed = accepts(result, code,
+                     (compiled != NULL) && callsError(compiled->ast->root));
     known = (run->known != NULL) &&
             (xmlHashLookup(run->known, BAD_CAST id) != NULL);
 
@@ -412,8 +573,8 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
 
             printShort("expression", expr, len);
             printExpected(result);
-            if (ast != NULL)
-                snprintf(got, sizeof(got), "parsed");
+            if (compiled != NULL)
+                snprintf(got, sizeof(got), "compiled");
             else
                 snprintf(got, sizeof(got), "%s at %d:%d: %s",
                          (const char *) code, xp3ErrorLine(err),
@@ -423,7 +584,8 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
         }
     }
 
-    xp3AstFree(ast);
+    xp3FreeExpr(compiled);
+    xp3FreeStaticContext(ctx);
     xp3ErrorFree(err);
     xmlFree(expr);
 }
@@ -469,7 +631,7 @@ runTestSet(qt3Run *run, const char *catalogPath, xmlNodePtr testSet) {
             run->notApplicable++;
             continue;
         }
-        runTestCase(run, (const char *) name, path, cur);
+        runTestCase(run, (const char *) name, path, root, cur);
     }
 
     if (run->verbose) {
@@ -577,27 +739,20 @@ main(int argc, char **argv) {
     xmlInitParser();
     if ((knownPath != NULL) && (loadKnown(&run, knownPath) < 0))
         return(2);
-    run.ctx = xp3NewStaticContext();
-    if ((run.ctx == NULL) ||
-        (xp3SetStaticContextLanguageLevel(run.ctx,
-                                          (xp3LanguageLevel) run.level) < 0)) {
-        fprintf(stderr, "qt3run: cannot create the static context\n");
-        return(2);
-    }
-
     catalog = xmlReadFile(catalogPath, NULL, XML_PARSE_NONET);
     if (catalog == NULL) {
         fprintf(stderr, "qt3run: cannot read %s\n", catalogPath);
         return(2);
     }
-    for (cur = xmlDocGetRootElement(catalog)->children; cur != NULL;
+    run.catalogRoot = xmlDocGetRootElement(catalog);
+    for (cur = run.catalogRoot->children; cur != NULL;
          cur = cur->next) {
         if (isElement(cur, "test-set") &&
             (runTestSet(&run, catalogPath, cur) < 0))
             status = 2;
     }
 
-    printf("%s parse-only: %d passed, %d failed", run.spec, run.passed,
+    printf("%s compile-only: %d passed, %d failed", run.spec, run.passed,
            run.failed + run.knownFailed);
     if (run.knownFailed > 0)
         printf(" (%d known)", run.knownFailed);
@@ -613,6 +768,5 @@ main(int argc, char **argv) {
 
     xmlFreeDoc(catalog);
     xmlHashFree(run.known, NULL);
-    xp3FreeStaticContext(run.ctx);
     return(status);
 }

@@ -185,11 +185,15 @@ xp3AstKindName(xp3AstKind kind) {
     return(xp3AstKindNames[kind]);
 }
 
-/*
- * Allocate size bytes from the arena, aligned for any type.
- * Returns NULL if memory allocation failed.
+/**
+ * Allocate memory from the arena of a tree, aligned for any type. It is
+ * freed with the tree.
+ *
+ * @param ast   the tree
+ * @param size  number of bytes
+ * @returns the memory, or NULL if memory allocation failed
  */
-static void *
+void *
 xp3AstAlloc(xp3Ast *ast, size_t size) {
     xp3AstBlock *block = ast->blocks;
     void *ret;

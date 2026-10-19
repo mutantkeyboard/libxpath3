@@ -29,6 +29,7 @@ INPUT                  = $(SOURCE_ROOT)doc/mainpage.md \
                          $(SOURCE_ROOT)xp3func.c \
                          $(SOURCE_ROOT)xp3lexer.c \
                          $(SOURCE_ROOT)xp3parser.c \
+                         $(SOURCE_ROOT)xp3static.c \
                          $(SOURCE_ROOT)xp3types.c \
                          $(SOURCE_ROOT)xp3value.c \
                          $(SOURCE_ROOT)xpath3.c
