@@ -262,13 +262,18 @@ XPath uses the XML Schema regex dialect plus `^`/`$` anchors, the `s m i x q` fl
 
 - **Stage 1 evaluates eagerly**, with explicit short-circuits where it matters: `exists`, `empty`, `[1]`, `head`, `some`/`every`, `and`/`or`, and effective boolean value.
 - **Built-in functions and operators consume their arguments through a small iterator interface**, even while everything behind it is still eager. That keeps a later switch to lazy evaluation local to the evaluator.
-- **Path expressions sort into document order and remove duplicates only when static analysis cannot prove the result is already ordered.** Plain child and descendant steps usually are.
+- **Path expressions sort into document order and remove duplicates only when needed.** One axis step from one context node is already in document order, because the step collects its axis in order and reverses a reverse axis after its predicates. Anything else (several context nodes, or a non-step on the right of `/`) goes through the document-order table of 4.5, which checks input that is already in order without moving it. Proving more paths ordered statically is Part 7d.
+- **The focus and variables.** The focus (context item, position, size) is kept in the evaluation state and saved around the expressions that change it: path steps, predicates and filters. Variables live in an array of slots that static analysis numbered (6.2); declared variables get their values from the dynamic context when an evaluation starts, and a missing one is `XPDY0002`.
+- **Clauses loop, they don't recurse.** `for`, `let`, `some` and `every` iterate over their bindings with an explicit state per binding. A long list of bindings is not nesting, so the parser's depth limit doesn't bound it, and recursing per binding would let a 1 MB expression overflow the stack.
+- **Predicates.** A predicate whose value is a single number selects by position; any other value counts by its effective boolean value (XPath 3.1, 3.3.3 and 2.4.3).
+- **The document-order table lives for one evaluation.** It is created when a path first needs sorting and freed at the end, so a tree changed between evaluations never meets a stale table.
 
 ### 7.2 Errors
 
 - Every error carries a code (an `xs:QName`, for example `err:FOAR0001`), a message and a source position.
 - Errors are returned through the evaluation call, so there is no global error state. libxpath3 has its own `xp3Error` type, plus an adapter that forwards errors to a libxml2 structured error handler. libxml2 has an `XML_FROM_XPATH` domain, but XPath 3 error codes are QNames, not integers.
 - `fn:error` raises user-defined errors through the same mechanism.
+- **Not implemented yet.** Until every part of the language is evaluated, an expression that needs a missing part (an operator before Part 7c, a function call before Part 8, maps and arrays before Part 12) compiles, and raises `UNSUPPORTED` when evaluated. Like `NO_MEMORY` and `LIMIT`, it is not a W3C code and has no namespace, so it can't be mistaken for a real XPath error.
 
 ### 7.3 Limits
 
@@ -279,9 +284,11 @@ Defaults are generous and configurable per dynamic context, following the exampl
 - maximum sequence length and string length
 - the regex step budget
 
+The maximum sequence length exists since 7b: `xp3SetMaxSequenceLength()`, 10 million items by default like libxml2's node-set limit, and integer ranges don't count because they are never expanded. Evaluation recursion follows the tree, whose depth the parser limits, and clauses loop (7.1). The operation count is still missing, so nested `for` clauses can take as long as their combinations do.
+
 ## 8. Public API sketch
 
-Library name `libxpath3`, API prefix `xp3`. Individual function names are not final.
+Library name `libxpath3`, API prefix `xp3`. Compiling and evaluating exist since 6b and 7b with these names; extension functions come with Part 8.
 
 ```c
 /* Static context and compilation */
@@ -297,18 +304,22 @@ void xp3FreeExpr(xp3Expr *expr);
 
 /* Evaluation */
 xp3DynamicContext *xp3NewDynamicContext(void);
-int  xp3SetContextNode(xp3DynamicContext *dctx, xmlNode *node);
-int  xp3BindVariable(xp3DynamicContext *dctx, const xmlChar *nsUri, const xmlChar *localName,
-                     xp3Sequence *value);
+void xp3FreeDynamicContext(xp3DynamicContext *dctx);
+int  xp3SetContextNode(xp3DynamicContext *dctx, xmlNode *node);  /* any node of a text run stands for the run */
+int  xp3BindVariable(xp3DynamicContext *dctx, const xmlChar *uri, const xmlChar *localName,
+                     xp3Sequence *value);                           /* adds a reference; NULL unbinds */
+int  xp3SetMaxSequenceLength(xp3DynamicContext *dctx, size_t max);
 xp3Sequence *xp3Evaluate(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error **err);
-int  xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error **err);
+int  xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error **err);  /* 1, 0, -1 */
 
-/* Results */
+/* Sequences: immutable and reference counted */
+xp3Sequence  *xp3NewNodeSequence(xmlNode **nodes, size_t count);
+xp3Sequence  *xp3NewStringSequence(const xmlChar *str);
+void          xp3FreeSequence(xp3Sequence *seq);
 size_t        xp3SequenceLength(const xp3Sequence *seq);
-xp3ItemKind   xp3ItemKindAt(const xp3Sequence *seq, size_t i);
-xmlNode      *xp3NodeAt(const xp3Sequence *seq, size_t i);
-xmlChar      *xp3StringValueAt(const xp3Sequence *seq, size_t i);  /* caller frees with xmlFree */
-void          xp3SequenceRelease(xp3Sequence *seq);
+int           xp3SequenceItemKind(const xp3Sequence *seq, size_t i);     /* xp3ItemKind, -1 past the end */
+xmlNode      *xp3SequenceNode(const xp3Sequence *seq, size_t i);
+xmlChar      *xp3SequenceStringValue(const xp3Sequence *seq, size_t i);  /* caller frees with xmlFree */
 
 /* Errors */
 const xmlChar *xp3ErrorCode(const xp3Error *err);      /* e.g. "FOAR0001" */
@@ -320,7 +331,7 @@ Schematron-style use: compile each rule once at startup, then evaluate it agains
 
 ## 9. Testing
 
-- **QT3 runner:** reads the W3C QT3 catalogue and selects tests by spec dependency (`XP20`, `XP30`, `XP31`), running each set at the matching language level (5.1), and by feature, skipping schema awareness and the namespace axis. It reports pass, fail and not-applicable per test set. The pass rate is published in the README and tracked in CI, so regressions fail the build. Until evaluation exists it runs in compile-only mode, with the namespaces and variables of each test's environment: expected static errors must be raised by compiling, unless the expression calls `fn:error`, and other expected errors count as "may compile". Tests that conflict with the specification are listed in `qt3/known-failures-*.txt` with the reason.
+- **QT3 runner:** reads the W3C QT3 catalogue and selects tests by spec dependency (`XP20`, `XP30`, `XP31`), running each set at the matching language level (5.1), and by feature, skipping schema awareness and the namespace axis. It reports pass, fail and not-applicable per test set. The pass rate is published in the README and tracked in CI, so regressions fail the build. Its compile-only mode is the gate: each expression is compiled with the namespaces and variables of its test's environment, expected static errors must be raised by compiling, unless the expression calls `fn:error`, and other expected errors count as "may compile". Tests that conflict with the specification are listed in `qt3/known-failures-*.txt` with the reason. Since 7b, evaluation mode (`-e`) also evaluates each expression, with the source documents and parameters of its environment, and checks the assertions. Assertions written in XPath (`assert`, `assert-eq`, `assert-deep-eq`, `assert-type`) are themselves evaluated with `$result` bound, so they become checkable as the operators and functions they use are implemented. A test that needs anything not implemented yet, in the expression, its environment or its assertions, is "not judged", counted apart from passes and failures so the pass rate stays honest. CI runs evaluation as a report: its failures don't fail the job yet, but crashes and sanitizer errors do.
 - **Unit tests** for the parts that are easy to get subtly wrong: decimal arithmetic, double-to-string conversion, date and duration arithmetic, regex, document order with adjacent text nodes.
 - **Differential testing (optional):** compare results with Saxon on a corpus of real expressions, such as published Schematron rule sets. Saxon runs only in CI and is never a dependency.
 - **Fuzzers**, modelled on libxml2's `fuzz/xpath.c` with a dictionary of XPath tokens:

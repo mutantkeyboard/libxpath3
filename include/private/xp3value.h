@@ -18,6 +18,7 @@
 #include <libxml/tree.h>
 #include <libxml/xmlstring.h>
 
+#include <libxpath3/xpath3.h>
 #include "private/xp3decimal.h"
 #include "private/xp3error.h"
 #include "private/xp3types.h"
@@ -34,16 +35,9 @@
 typedef struct _xp3Atomic xp3Atomic;
 typedef struct _xp3Value xp3Value;
 
-/* Kinds of items. Functions, maps and arrays come with Part 12. */
-typedef enum {
-    XP3_ITEM_NODE = 0,          /* xmlNode, borrowed */
-    XP3_ITEM_ATOMIC,            /* xp3Atomic, counted */
-    XP3_ITEM_FUNCTION,          /* reserved */
-    XP3_ITEM_MAP,               /* reserved */
-    XP3_ITEM_ARRAY              /* reserved */
-} xp3ItemKind;
-
-/* An item, passed by value. */
+/* An item, passed by value. Its kind is xp3ItemKind from xpath3.h:
+ * nodes are borrowed xmlNode pointers and atomic values are counted;
+ * functions, maps and arrays come with Part 12. */
 typedef struct {
     xp3ItemKind kind;
     union {
@@ -111,11 +105,21 @@ typedef struct {
     uint64_t pos;
 } xp3Iter;
 
+/*
+ * Default limit on the number of items a builder collects, the same as
+ * libxml2's limit on node-sets (XPATH_MAX_NODESET_LENGTH). Dynamic
+ * contexts can change it. Ranges are not limited, because they are
+ * never expanded.
+ */
+#define XP3_MAX_SEQUENCE_ITEMS 10000000
+
 /* Collects items into a new sequence */
 typedef struct {
     xp3Item *items;
     size_t count;
     size_t cap;
+    size_t max;                 /* most items allowed, see
+                                 * xp3SeqBuilderInit() */
 } xp3SeqBuilder;
 
 /*
@@ -181,6 +185,9 @@ xp3ValueRange(int64_t first, int64_t last, xp3Value **res);
 
 xp3Value *
 xp3ValueRef(xp3Value *value);
+
+xmlChar *
+xp3AtomicToString(const xp3Atomic *atomic);
 
 void
 xp3ValueUnref(xp3Value *value);

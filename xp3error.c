@@ -36,6 +36,7 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_OK]        = "OK",
     [XP3_ERR_NO_MEMORY] = "NO_MEMORY",
     [XP3_ERR_LIMIT]     = "LIMIT",
+    [XP3_ERR_UNSUPPORTED] = "UNSUPPORTED",
     [XP3_ERR_XPST0003]  = "XPST0003",
     [XP3_ERR_XPST0008]  = "XPST0008",
     [XP3_ERR_XPST0010]  = "XPST0010",
@@ -46,10 +47,16 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_XQST0039]  = "XQST0039",
     [XP3_ERR_XQST0052]  = "XQST0052",
     [XP3_ERR_XQST0070]  = "XQST0070",
+    [XP3_ERR_XPDY0002]  = "XPDY0002",
+    [XP3_ERR_XPDY0050]  = "XPDY0050",
     [XP3_ERR_XPTY0004]  = "XPTY0004",
+    [XP3_ERR_XPTY0018]  = "XPTY0018",
+    [XP3_ERR_XPTY0019]  = "XPTY0019",
+    [XP3_ERR_XPTY0020]  = "XPTY0020",
     [XP3_ERR_FOAR0001]  = "FOAR0001",
     [XP3_ERR_FOAR0002]  = "FOAR0002",
     [XP3_ERR_FORG0001]  = "FORG0001",
+    [XP3_ERR_FORG0006]  = "FORG0006",
     [XP3_ERR_USER]      = NULL      /* the QName is stored in the object */
 };
 
@@ -234,8 +241,9 @@ xp3ErrorCode(const xp3Error *error) {
 /**
  * Get the namespace URI of the error code.
  *
- * W3C codes are in "http://www.w3.org/2005/xqt-errors". Out-of-memory
- * and resource-limit errors are not W3C codes and have no namespace.
+ * W3C codes are in "http://www.w3.org/2005/xqt-errors". Out-of-memory,
+ * resource-limit and not-implemented errors are not W3C codes and have
+ * no namespace.
  *
  * @param error  the error
  * @returns the namespace URI, or NULL
@@ -250,6 +258,7 @@ xp3ErrorNamespace(const xp3Error *error) {
         case XP3_ERR_OK:
         case XP3_ERR_NO_MEMORY:
         case XP3_ERR_LIMIT:
+        case XP3_ERR_UNSUPPORTED:
             return(NULL);
         default:
             return(BAD_CAST XP3_ERR_NS);

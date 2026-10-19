@@ -33,6 +33,7 @@ typedef enum
     XP3_ERR_OK = 0,
     XP3_ERR_NO_MEMORY, /* not a W3C code: allocation failed */
     XP3_ERR_LIMIT,     /* not a W3C code: resource limit hit */
+    XP3_ERR_UNSUPPORTED, /* not a W3C code: not implemented yet */
     XP3_ERR_XPST0003,  /* syntax error */
     XP3_ERR_XPST0008,  /* undeclared variable */
     XP3_ERR_XPST0010,  /* namespace axis not supported */
@@ -43,10 +44,16 @@ typedef enum
     XP3_ERR_XQST0039,  /* duplicate parameter name */
     XP3_ERR_XQST0052,  /* cast to an unknown or complex type */
     XP3_ERR_XQST0070,  /* the xmlns namespace in a name */
+    XP3_ERR_XPDY0002,  /* context item or variable value absent */
+    XP3_ERR_XPDY0050,  /* the root of the context node is no document */
     XP3_ERR_XPTY0004,  /* type error */
+    XP3_ERR_XPTY0018,  /* last step mixes nodes and other items */
+    XP3_ERR_XPTY0019,  /* non-node on the left of a path step */
+    XP3_ERR_XPTY0020,  /* the context item of an axis step is no node */
     XP3_ERR_FOAR0001,  /* division by zero */
     XP3_ERR_FOAR0002,  /* number too large, such as an arity */
     XP3_ERR_FORG0001,  /* invalid value for cast */
+    XP3_ERR_FORG0006,  /* no effective boolean value */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */
 } xp3ErrCode;
 

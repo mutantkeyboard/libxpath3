@@ -10,7 +10,7 @@ test('basic', testbasic)
 internal_test_args = ['-DXP3_STATIC']
 
 foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
-                'value', 'func', 'static', 'nodes']
+                'value', 'func', 'static', 'nodes', 'eval']
     exe = executable(
         'test' + name,
         'test' + name + '.c',

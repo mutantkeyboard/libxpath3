@@ -1,0 +1,1637 @@
+/*
+ * xp3eval.c: the dynamic context and evaluating compiled expressions
+ *
+ * The evaluator walks the analysed tree (doc/DESIGN.md 3 and 7.1). Every
+ * expression evaluates eagerly to a sequence with one reference, or to
+ * NULL with the first error recorded. Variables live in an array of
+ * slots that static analysis numbered, and the focus (XPath 3.1, 2.1.2)
+ * is kept in the evaluation state and saved around the expressions
+ * that change it: path steps, predicates and filters.
+ *
+ * Evaluation covers XPath 3.1 sections 3.1 (primary expressions), 3.3
+ * (paths), 3.4 (sequences, without the operators), 3.7.2 (and/or), 3.12
+ * (for), 3.13 (let), 3.14 (if) and 3.15 (quantified expressions). The
+ * rest raises UNSUPPORTED: operators come with Part 7c, function calls
+ * with Part 8, and maps, arrays and function items with Part 12.
+ *
+ * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
+ * See COPYING for the status of this software.
+ *
+ * Author: Antonio Nešić <nesic.antonio@gmail.com>
+ */
+
+#include <limits.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <libxml/tree.h>
+#include <libxml/xmlmemory.h>
+#include <libxml/xmlstring.h>
+
+#include "private/xp3ast.h"
+#include "private/xp3context.h"
+#include "private/xp3decimal.h"
+#include "private/xp3double.h"
+#include "private/xp3eval.h"
+#include "private/xp3nodes.h"
+#include "private/xp3static.h"
+#include "private/xp3types.h"
+
+/* Room for a name in a message, longer ones are cut */
+#define XP3_NAME_BUF 200
+
+/*
+ * Dynamic context
+ */
+
+/**
+ * Create a dynamic context: no context item, no variables, and the
+ * default limits.
+ *
+ * @returns the context, to be freed with xp3FreeDynamicContext(), or
+ *          NULL if memory allocation failed
+ */
+xp3DynamicContext *
+xp3NewDynamicContext(void) {
+    xp3DynamicContext *ctx = xmlMalloc(sizeof(*ctx));
+
+    if (ctx == NULL)
+        return(NULL);
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->maxSequenceLength = XP3_MAX_SEQUENCE_ITEMS;
+    return(ctx);
+}
+
+/**
+ * Free a dynamic context and release the values bound in it. NULL is
+ * ignored.
+ *
+ * @param ctx  the context
+ */
+void
+xp3FreeDynamicContext(xp3DynamicContext *ctx) {
+    int i;
+
+    if (ctx == NULL)
+        return;
+    for (i = 0; i < ctx->variableCount; i++) {
+        xmlFree(ctx->variables[i].uri);
+        xmlFree(ctx->variables[i].localName);
+        xp3ValueUnref(ctx->variables[i].value);
+    }
+    xmlFree(ctx->variables);
+    xmlFree(ctx);
+}
+
+/**
+ * Set the context node, which "." and relative paths start from. Any
+ * libxml2 node of a run of adjacent text nodes stands for the whole
+ * run (doc/DESIGN.md 4.5).
+ *
+ * @param ctx   the context
+ * @param node  the node, or NULL for no context item
+ * @returns 0, or -1 if ctx is NULL or the node is not part of the XDM
+ *          tree: a DTD, an entity reference, a namespace declaration,
+ *          or text without content
+ */
+int
+xp3SetContextNode(xp3DynamicContext *ctx, xmlNodePtr node) {
+    xmlNodePtr canonical = NULL;
+
+    if (ctx == NULL)
+        return(-1);
+    if (node != NULL) {
+        canonical = xp3NodeCanonical(node);
+        if (canonical == NULL)
+            return(-1);
+    }
+    ctx->contextNode = canonical;
+    return(0);
+}
+
+/**
+ * Bind a value to a variable, which expressions compiled with the
+ * variable declared (xp3DeclareVariable()) can use. Binding the same
+ * name again replaces the value.
+ *
+ * @param ctx        the context
+ * @param uri        the namespace URI of the name, or NULL or "" for
+ *                   no namespace
+ * @param localName  the local name
+ * @param value      the value, which gets a reference of its own; NULL
+ *                   removes the binding
+ * @returns 0, or -1 if an argument is invalid or memory allocation
+ *          failed
+ */
+int
+xp3BindVariable(xp3DynamicContext *ctx, const xmlChar *uri,
+                const xmlChar *localName, xp3Sequence *value) {
+    xp3BoundVariable *var;
+    int i;
+
+    if ((ctx == NULL) || (localName == NULL))
+        return(-1);
+    if ((uri != NULL) && (*uri == 0))
+        uri = NULL;
+
+    for (i = 0; i < ctx->variableCount; i++) {
+        var = &ctx->variables[i];
+        if (!xmlStrEqual(var->uri, uri) ||
+            !xmlStrEqual(var->localName, localName))
+            continue;
+        if (value == NULL) {
+            xmlFree(var->uri);
+            xmlFree(var->localName);
+            xp3ValueUnref(var->value);
+            ctx->variables[i] = ctx->variables[--ctx->variableCount];
+        } else {
+            xp3ValueRef(value);
+            xp3ValueUnref(var->value);
+            var->value = value;
+        }
+        return(0);
+    }
+    if (value == NULL)
+        return(0);
+
+    if (ctx->variableCount >= ctx->variableMax) {
+        xp3BoundVariable *vars;
+        int max;
+
+        if ((ctx->variableMax > INT_MAX / 2) ||
+            ((size_t) ctx->variableMax >
+             SIZE_MAX / 2 / sizeof(xp3BoundVariable)))
+            return(-1);
+        max = (ctx->variableMax > 0) ? ctx->variableMax * 2 : 8;
+        vars = xmlRealloc(ctx->variables,
+                          (size_t) max * sizeof(xp3BoundVariable));
+        if (vars == NULL)
+            return(-1);
+        ctx->variables = vars;
+        ctx->variableMax = max;
+    }
+    var = &ctx->variables[ctx->variableCount];
+    var->uri = (uri != NULL) ? xmlStrdup(uri) : NULL;
+    var->localName = xmlStrdup(localName);
+    if (((uri != NULL) && (var->uri == NULL)) || (var->localName == NULL)) {
+        xmlFree(var->uri);
+        xmlFree(var->localName);
+        return(-1);
+    }
+    var->value = xp3ValueRef(value);
+    ctx->variableCount++;
+    return(0);
+}
+
+/**
+ * Limit the number of items in the sequences an evaluation builds. A
+ * longer sequence raises the error LIMIT. The default is 10 million,
+ * the same as libxml2's limit on node-sets. Integer ranges such as
+ * (1 to 100000000) are not stored item by item and don't count.
+ *
+ * @param ctx  the context
+ * @param max  the most items, at least 1
+ * @returns 0, or -1 if an argument is invalid
+ */
+int
+xp3SetMaxSequenceLength(xp3DynamicContext *ctx, size_t max) {
+    if ((ctx == NULL) || (max == 0))
+        return(-1);
+    ctx->maxSequenceLength = max;
+    return(0);
+}
+
+/*
+ * Evaluation state
+ */
+
+/* The focus: the context item, position and size (XPath 3.1, 2.1.2) */
+typedef struct {
+    xp3Item item;               /* borrowed from the sequence iterated */
+    int present;
+    uint64_t position;          /* 1-based */
+    uint64_t size;
+} xp3Focus;
+
+typedef struct {
+    xp3Value **slots;           /* one reference each, or NULL */
+    int slotCount;
+    xp3Focus focus;
+    xp3DocOrder *order;         /* created when first needed */
+    size_t maxItems;
+    xp3Error *err;              /* the first error */
+} xp3Eval;
+
+static xp3Value *
+evalExpr(xp3Eval *ev, const xp3AstNode *node);
+
+/* Record an error at a node, unless one is recorded already. */
+static void
+evalError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node,
+          const char *format, ...) {
+    va_list args;
+
+    if (ev->err != NULL)
+        return;
+    if (code == XP3_ERR_NO_MEMORY) {
+        ev->err = xp3ErrorNoMemory();
+        return;
+    }
+    va_start(args, format);
+    ev->err = xp3ErrorNewV(code, (node != NULL) ? node->line : 0,
+                           (node != NULL) ? node->column : 0, format, args);
+    va_end(args);
+}
+
+static void
+evalNoMemory(xp3Eval *ev) {
+    evalError(ev, XP3_ERR_NO_MEMORY, NULL, NULL);
+}
+
+/* Record the failure of a builder or iterator: memory or the limit */
+static void
+evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
+    if (code == XP3_ERR_LIMIT)
+        evalError(ev, XP3_ERR_LIMIT, node,
+                  "a sequence would have more than %lu items",
+                  (unsigned long) ev->maxItems);
+    else
+        evalNoMemory(ev);
+}
+
+static void
+builderInit(const xp3Eval *ev, xp3SeqBuilder *builder) {
+    xp3SeqBuilderInit(builder);
+    builder->max = ev->maxItems;
+}
+
+static xp3Value *
+builderFinish(xp3Eval *ev, xp3SeqBuilder *builder) {
+    xp3Value *value = xp3SeqBuilderFinish(builder);
+
+    if (value == NULL)
+        evalNoMemory(ev);
+    return(value);
+}
+
+/* A sequence of one item, taking over its reference */
+static xp3Value *
+evalSingle(xp3Eval *ev, xp3Item item) {
+    xp3Value *value = xp3ValueSingle(item);
+
+    if (value == NULL)
+        evalNoMemory(ev);
+    return(value);
+}
+
+static xp3Value *
+evalBoolean(xp3Eval *ev, int value) {
+    xp3Atomic *atomic = xp3AtomicNewBoolean(value);
+
+    if (atomic == NULL) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    return(evalSingle(ev, xp3ItemFromAtomic(atomic)));
+}
+
+/* The name of a node as written, for messages. Unprefixed function
+ * names resolve to the fn namespace and are shown without it. */
+static const char *
+displayName(const xp3AstNode *node, char *buf, size_t size) {
+    const char *local = node->text ? (const char *) node->text : "";
+
+    if (node->prefix != NULL)
+        snprintf(buf, size, "%s:%s", (const char *) node->prefix, local);
+    else if ((node->uri != NULL) &&
+             !xmlStrEqual(node->uri, BAD_CAST XP3_NS_FN))
+        snprintf(buf, size, "Q{%s}%s", (const char *) node->uri, local);
+    else
+        snprintf(buf, size, "%s", local);
+    return(buf);
+}
+
+/*
+ * Effective boolean value
+ */
+
+/* Whether a type is xs:string, a type derived from it, xs:anyURI or
+ * xs:untypedAtomic */
+static int
+isStringLike(xp3TypeId type) {
+    return(xp3TypeDerivesFrom(type, XP3_TYPE_STRING) ||
+           (type == XP3_TYPE_ANY_URI) || (type == XP3_TYPE_UNTYPED_ATOMIC));
+}
+
+/**
+ * Compute the effective boolean value of a sequence (XPath 3.1,
+ * 2.4.3): false for the empty sequence, true if the first item is a
+ * node, and for a single atomic value its boolean value, string
+ * length or numeric value.
+ *
+ * @param value   the sequence
+ * @param result  set to 0 or 1
+ * @returns XP3_ERR_OK, XP3_ERR_FORG0006 if the sequence has none, or
+ *          XP3_ERR_NO_MEMORY
+ */
+xp3ErrCode
+xp3EffectiveBoolean(const xp3Value *value, int *result) {
+    const xp3Atomic *atomic;
+    xp3ErrCode ret = XP3_ERR_OK;
+    xp3Item item;
+    int found;
+
+    *result = 0;
+    found = xp3ValueItemAt(value, 0, &item);
+    if (found < 0)
+        return(XP3_ERR_NO_MEMORY);
+    if (found == 0)
+        return(XP3_ERR_OK);
+    if (item.kind == XP3_ITEM_NODE) {
+        *result = 1;
+        return(XP3_ERR_OK);
+    }
+    if ((item.kind != XP3_ITEM_ATOMIC) || (xp3ValueCount(value) > 1)) {
+        xp3ItemUnref(item);
+        return(XP3_ERR_FORG0006);
+    }
+
+    atomic = item.u.atomic;
+    switch (xp3TypeRepresentation(atomic->type)) {
+        case XP3_REP_BOOLEAN:
+            *result = atomic->u.boolean;
+            break;
+        case XP3_REP_STRING:
+            if (isStringLike(atomic->type))
+                *result = (atomic->u.str[0] != 0);
+            else
+                ret = XP3_ERR_FORG0006;
+            break;
+        case XP3_REP_DECIMAL:
+            *result = (xp3DecimalSign(atomic->u.dec) != 0);
+            break;
+        case XP3_REP_FLOAT:
+            *result = (atomic->u.f != 0) && !isnan(atomic->u.f);
+            break;
+        case XP3_REP_DOUBLE:
+            *result = (atomic->u.d != 0) && !isnan(atomic->u.d);
+            break;
+        default:
+            ret = XP3_ERR_FORG0006;
+            break;
+    }
+    xp3ItemUnref(item);
+    return(ret);
+}
+
+/*
+ * Evaluate an expression to its effective boolean value. Returns 0 or
+ * 1, or -1 on error.
+ */
+static int
+evalCondition(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalExpr(ev, node);
+    xp3ErrCode err;
+    int result;
+
+    if (value == NULL)
+        return(-1);
+    err = xp3EffectiveBoolean(value, &result);
+    xp3ValueUnref(value);
+    if (err == XP3_ERR_OK)
+        return(result);
+    if (err == XP3_ERR_FORG0006)
+        evalError(ev, err, node, "the condition has no effective "
+                  "boolean value: it is not empty, does not start with a "
+                  "node, and is not a single boolean, string or number");
+    else
+        evalNoMemory(ev);
+    return(-1);
+}
+
+/*
+ * Primary expressions
+ */
+
+static xp3Value *
+evalLiteral(xp3Eval *ev, const xp3AstNode *node) {
+    size_t len = strlen((const char *) node->text);
+    xp3Atomic *atomic = NULL;
+
+    switch (node->kind) {
+        case XP3_AST_INTEGER:
+        case XP3_AST_DECIMAL: {
+            int isInteger = (node->kind == XP3_AST_INTEGER);
+            xp3Decimal *dec;
+            xp3ErrCode err;
+
+            err = xp3DecimalParse(node->text, len, isInteger, &dec);
+            if (err == XP3_ERR_LIMIT) {
+                evalError(ev, err, node, "the number %.40s... has too "
+                          "many digits", (const char *) node->text);
+                return(NULL);
+            }
+            if (err != XP3_ERR_OK) {
+                evalNoMemory(ev);
+                return(NULL);
+            }
+            atomic = xp3AtomicNewDecimal(isInteger ? XP3_TYPE_INTEGER :
+                                                     XP3_TYPE_DECIMAL, dec);
+            break;
+        }
+        case XP3_AST_DOUBLE:
+            atomic = xp3AtomicNewDouble(xp3DoubleParse(
+                (const char *) node->text));
+            break;
+        default:
+            atomic = xp3AtomicNewString(XP3_TYPE_STRING, node->text, len);
+            break;
+    }
+    if (atomic == NULL) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    return(evalSingle(ev, xp3ItemFromAtomic(atomic)));
+}
+
+static xp3Value *
+evalVarRef(xp3Eval *ev, const xp3AstNode *node) {
+    char name[XP3_NAME_BUF];
+
+    if ((node->op < 0) || (node->op >= ev->slotCount) ||
+        (ev->slots[node->op] == NULL)) {
+        evalError(ev, XP3_ERR_XPDY0002, node, "variable $%s has no value",
+                  displayName(node, name, sizeof(name)));
+        return(NULL);
+    }
+    return(xp3ValueRef(ev->slots[node->op]));
+}
+
+static xp3Value *
+evalContextItem(xp3Eval *ev, const xp3AstNode *node) {
+    if (!ev->focus.present) {
+        evalError(ev, XP3_ERR_XPDY0002, node, "the context item is absent");
+        return(NULL);
+    }
+    return(evalSingle(ev, xp3ItemRef(ev->focus.item)));
+}
+
+/* a, b, c: the items of each in turn */
+static xp3Value *
+evalSequence(xp3Eval *ev, const xp3AstNode *node) {
+    const xp3AstNode *child;
+    xp3SeqBuilder builder;
+
+    builderInit(ev, &builder);
+    for (child = node->first; child != NULL; child = child->next) {
+        xp3Value *value = evalExpr(ev, child);
+        xp3ErrCode err;
+
+        if (value == NULL) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        err = xp3SeqBuilderAddValue(&builder, value);
+        xp3ValueUnref(value);
+        if (err != XP3_ERR_OK) {
+            evalBuildError(ev, err, node);
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+    }
+    return(builderFinish(ev, &builder));
+}
+
+/*
+ * Predicates
+ */
+
+/* Whether a numeric value equals a position */
+static int
+numericEquals(const xp3Atomic *atomic, uint64_t position) {
+    int64_t integer;
+
+    switch (xp3TypeRepresentation(atomic->type)) {
+        case XP3_REP_DECIMAL:
+            return((xp3DecimalToInt64(atomic->u.dec, &integer) == 0) &&
+                   (integer > 0) && ((uint64_t) integer == position));
+        case XP3_REP_FLOAT:
+            return((double) atomic->u.f == (double) position);
+        default:
+            return(atomic->u.d == (double) position);
+    }
+}
+
+/*
+ * Whether an item passes a predicate (XPath 3.1, 3.3.3): a single
+ * number selects the item at that position, anything else counts by
+ * its effective boolean value. The focus is set by the caller. Returns
+ * 0 or 1, or -1 on error.
+ */
+static int
+predicateKeeps(xp3Eval *ev, const xp3AstNode *pred) {
+    const xp3AstNode *expr = pred->first;
+    xp3Value *value;
+    xp3Item item;
+    int ret = -2;
+
+    value = evalExpr(ev, expr);
+    if (value == NULL)
+        return(-1);
+    if (xp3ValueCount(value) == 1) {
+        int found = xp3ValueItemAt(value, 0, &item);
+
+        if (found < 0) {
+            evalNoMemory(ev);
+            ret = -1;
+        } else if ((item.kind == XP3_ITEM_ATOMIC) &&
+                   ((xp3TypeRepresentation(item.u.atomic->type) ==
+                     XP3_REP_DECIMAL) ||
+                    (xp3TypeRepresentation(item.u.atomic->type) ==
+                     XP3_REP_FLOAT) ||
+                    (xp3TypeRepresentation(item.u.atomic->type) ==
+                     XP3_REP_DOUBLE))) {
+            ret = numericEquals(item.u.atomic, ev->focus.position);
+        }
+        if (found > 0)
+            xp3ItemUnref(item);
+    }
+    if (ret == -2) {
+        xp3ErrCode err;
+        int result;
+
+        err = xp3EffectiveBoolean(value, &result);
+        if (err == XP3_ERR_OK) {
+            ret = result;
+        } else {
+            ret = -1;
+            if (err == XP3_ERR_FORG0006)
+                evalError(ev, err, expr, "the predicate is neither a "
+                          "number nor has an effective boolean value");
+            else
+                evalNoMemory(ev);
+        }
+    }
+    xp3ValueUnref(value);
+    return(ret);
+}
+
+/*
+ * Filter items in place with a predicate, their positions counted in
+ * the order given. The items dropped are released. Returns 0 or -1.
+ */
+static int
+applyPredicate(xp3Eval *ev, const xp3AstNode *pred, xp3Item *items,
+               size_t *count) {
+    xp3Focus saved = ev->focus;
+    size_t kept = 0;
+    size_t i;
+    int ret = 0;
+
+    for (i = 0; i < *count; i++) {
+        int keep = 0;
+
+        if (ret == 0) {
+            ev->focus.item = items[i];
+            ev->focus.present = 1;
+            ev->focus.position = i + 1;
+            ev->focus.size = *count;
+            keep = predicateKeeps(ev, pred);
+            if (keep < 0)
+                ret = -1;
+        }
+        if (keep > 0)
+            items[kept++] = items[i];
+        else
+            xp3ItemUnref(items[i]);
+    }
+    *count = kept;
+    ev->focus = saved;
+    return(ret);
+}
+
+/*
+ * Steps
+ */
+
+/* Whether a node matches a NAME_TEST, which also needs the principal
+ * node kind of the axis: attributes on the attribute axis, elements
+ * elsewhere */
+static int
+matchesName(const xp3AstNode *test, xmlNodePtr node, xp3NodeKind kind) {
+    if (xp3NodeGetKind(node) != kind)
+        return(0);
+    switch (test->op) {
+        case XP3_NAMETEST_ANY:
+            return(1);
+        case XP3_NAMETEST_ANY_LOCAL:
+            return(xmlStrEqual(test->uri, xp3NodeNamespaceUri(node)));
+        case XP3_NAMETEST_ANY_NS:
+            return(xmlStrEqual(test->text, xp3NodeLocalName(node)));
+        default:
+            return(xmlStrEqual(test->text, xp3NodeLocalName(node)) &&
+                   xmlStrEqual(test->uri, xp3NodeNamespaceUri(node)));
+    }
+}
+
+/*
+ * Whether the type annotation of an untyped node matches the type T in
+ * element(N, T) or attribute(N, T). Without a schema, elements are
+ * xs:untyped and attributes xs:untypedAtomic, so T must be one of
+ * those or an ancestor type (XPath 3.1, 2.5.5.3 and 2.5.5.5).
+ */
+static int
+matchesAnnotation(const xp3AstNode *seqType, xp3NodeKind kind) {
+    int type = seqType->first->op;
+
+    if (kind == XP3_NODE_ELEMENT)
+        return((type == XP3_SCHEMA_UNTYPED) || (type == XP3_SCHEMA_ANY));
+    return((type == XP3_TYPE_UNTYPED_ATOMIC) ||
+           (type == XP3_TYPE_ANY_ATOMIC) || (type == XP3_SCHEMA_ANY_SIMPLE) ||
+           (type == XP3_SCHEMA_ANY));
+}
+
+static int
+matchesKind(const xp3AstNode *test, xmlNodePtr node);
+
+/* document-node(E): exactly one element child, which matches E, and
+ * no text children (XPath 3.1, 2.5.5.2) */
+static int
+matchesDocument(const xp3AstNode *test, xmlNodePtr node) {
+    xmlNodePtr child = NULL;
+    xmlNodePtr element = NULL;
+
+    if (xp3NodeGetKind(node) != XP3_NODE_DOCUMENT)
+        return(0);
+    if (test->first == NULL)
+        return(1);
+    while ((child = xp3AxisNext(XP3_AXIS_CHILD, node, child)) != NULL) {
+        xp3NodeKind kind = xp3NodeGetKind(child);
+
+        if ((kind == XP3_NODE_TEXT) ||
+            ((kind == XP3_NODE_ELEMENT) && (element != NULL)))
+            return(0);
+        if (kind == XP3_NODE_ELEMENT)
+            element = child;
+    }
+    return((element != NULL) && matchesKind(test->first, element));
+}
+
+/* Whether a node matches a KIND_TEST */
+static int
+matchesKind(const xp3AstNode *test, xmlNodePtr node) {
+    xp3NodeKind kind = xp3NodeGetKind(node);
+    const xp3AstNode *child;
+
+    switch (test->op) {
+        case XP3_KIND_ANY:
+            return(1);
+        case XP3_KIND_TEXT:
+            return(kind == XP3_NODE_TEXT);
+        case XP3_KIND_COMMENT:
+            return(kind == XP3_NODE_COMMENT);
+        case XP3_KIND_PI:
+            return((kind == XP3_NODE_PI) &&
+                   ((test->text == NULL) ||
+                    xmlStrEqual(test->text, xp3NodeLocalName(node))));
+        case XP3_KIND_DOCUMENT:
+            return(matchesDocument(test, node));
+        case XP3_KIND_ELEMENT:
+        case XP3_KIND_ATTRIBUTE: {
+            xp3NodeKind wanted = (test->op == XP3_KIND_ELEMENT) ?
+                                 XP3_NODE_ELEMENT : XP3_NODE_ATTRIBUTE;
+
+            if (kind != wanted)
+                return(0);
+            for (child = test->first; child != NULL; child = child->next) {
+                if (child->kind == XP3_AST_NAME_TEST) {
+                    if (!matchesName(child, node, wanted))
+                        return(0);
+                } else if (!matchesAnnotation(child, wanted)) {
+                    return(0);
+                }
+            }
+            return(1);
+        }
+        default:
+            /* namespace-node() and the schema tests, which static
+             * analysis rejects */
+            return(0);
+    }
+}
+
+static int
+isReverseAxis(xp3Axis axis) {
+    return((axis == XP3_AXIS_PARENT) || (axis == XP3_AXIS_ANCESTOR) ||
+           (axis == XP3_AXIS_ANCESTOR_OR_SELF) ||
+           (axis == XP3_AXIS_PRECEDING_SIBLING) ||
+           (axis == XP3_AXIS_PRECEDING));
+}
+
+/*
+ * An axis step from the context node (XPath 3.1, 3.3.2): the nodes of
+ * the axis that match the node test, filtered by the predicates with
+ * positions in axis order, and returned in document order.
+ */
+static xp3Value *
+evalStep(xp3Eval *ev, const xp3AstNode *step) {
+    const xp3AstNode *test = step->first;
+    const xp3AstNode *pred;
+    xp3Axis axis = (xp3Axis) step->op;
+    xp3NodeKind principal = (axis == XP3_AXIS_ATTRIBUTE) ?
+                            XP3_NODE_ATTRIBUTE : XP3_NODE_ELEMENT;
+    xp3SeqBuilder builder;
+    xmlNodePtr context;
+    xmlNodePtr node = NULL;
+
+    if (!ev->focus.present) {
+        evalError(ev, XP3_ERR_XPDY0002, step,
+                  "an axis step needs a context node, and the context "
+                  "item is absent");
+        return(NULL);
+    }
+    if (ev->focus.item.kind != XP3_ITEM_NODE) {
+        evalError(ev, XP3_ERR_XPTY0020, step,
+                  "the context item of an axis step is not a node");
+        return(NULL);
+    }
+    context = ev->focus.item.u.node;
+
+    builderInit(ev, &builder);
+    while ((node = xp3AxisNext(axis, context, node)) != NULL) {
+        int match = (test->kind == XP3_AST_NAME_TEST) ?
+                    matchesName(test, node, principal) :
+                    matchesKind(test, node);
+        xp3ErrCode err;
+
+        if (!match)
+            continue;
+        err = xp3SeqBuilderAdd(&builder, xp3ItemFromNode(node));
+        if (err != XP3_ERR_OK) {
+            evalBuildError(ev, err, step);
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+    }
+
+    for (pred = test->next; pred != NULL; pred = pred->next) {
+        if (applyPredicate(ev, pred, builder.items, &builder.count) < 0) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+    }
+
+    if (isReverseAxis(axis) && (builder.count > 1)) {
+        size_t low = 0;
+        size_t high = builder.count - 1;
+
+        while (low < high) {
+            xp3Item tmp = builder.items[low];
+
+            builder.items[low++] = builder.items[high];
+            builder.items[high--] = tmp;
+        }
+    }
+    return(builderFinish(ev, &builder));
+}
+
+/*
+ * Paths
+ */
+
+static xp3ErrCode
+evalSortNodes(xp3Eval *ev, xp3SeqBuilder *builder) {
+    if (ev->order == NULL) {
+        ev->order = xp3DocOrderNew();
+        if (ev->order == NULL)
+            return(XP3_ERR_NO_MEMORY);
+    }
+    return(xp3DocOrderSort(ev->order, builder->items, &builder->count));
+}
+
+/* "/" at the start of a path: the root of the context node, which must
+ * be a document node (XPath 3.1, 3.3) */
+static xp3Value *
+evalRoot(xp3Eval *ev, const xp3AstNode *path) {
+    xmlNodePtr root;
+
+    if (!ev->focus.present) {
+        evalError(ev, XP3_ERR_XPDY0002, path,
+                  "a path starting with / needs a context node, and the "
+                  "context item is absent");
+        return(NULL);
+    }
+    if (ev->focus.item.kind != XP3_ITEM_NODE) {
+        evalError(ev, XP3_ERR_XPTY0020, path,
+                  "a path starting with / needs a context node, and the "
+                  "context item is not a node");
+        return(NULL);
+    }
+    root = xp3NodeRoot(ev->focus.item.u.node);
+    if (xp3NodeGetKind(root) != XP3_NODE_DOCUMENT) {
+        evalError(ev, XP3_ERR_XPDY0050, path,
+                  "the root of the context node is not a document node");
+        return(NULL);
+    }
+    return(evalSingle(ev, xp3ItemFromNode(root)));
+}
+
+/*
+ * E1/E2 (XPath 3.1, 3.3.1.1): E2 for each node of E1 as the context
+ * item. A result of nodes only is sorted into document order without
+ * duplicates; a result without nodes is kept in order; a mix is an
+ * error.
+ */
+static xp3Value *
+evalPathStep(xp3Eval *ev, xp3Value *input, const xp3AstNode *right) {
+    uint64_t size = xp3ValueCount(input);
+    xp3Focus saved = ev->focus;
+    xp3SeqBuilder builder;
+    xp3Iter iter;
+    xp3Item item;
+    size_t nodes = 0;
+    size_t others = 0;
+    int found;
+
+    builderInit(ev, &builder);
+    xp3IterInit(&iter, input);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3Value *value;
+        xp3Iter results;
+        xp3Item result;
+        int more;
+
+        if (item.kind != XP3_ITEM_NODE) {
+            xp3ItemUnref(item);
+            evalError(ev, XP3_ERR_XPTY0019, right,
+                      "the left side of / contains an item that is not a "
+                      "node");
+            goto error;
+        }
+        ev->focus.item = item;
+        ev->focus.present = 1;
+        ev->focus.position = iter.pos;
+        ev->focus.size = size;
+        value = evalExpr(ev, right);
+        ev->focus = saved;
+        xp3ItemUnref(item);
+        if (value == NULL)
+            goto error;
+
+        xp3IterInit(&results, value);
+        while ((more = xp3IterNext(&results, &result)) > 0) {
+            xp3ErrCode err;
+
+            if (result.kind == XP3_ITEM_NODE)
+                nodes++;
+            else
+                others++;
+            err = xp3SeqBuilderAdd(&builder, result);
+            if (err != XP3_ERR_OK) {
+                evalBuildError(ev, err, right);
+                xp3ValueUnref(value);
+                goto error;
+            }
+        }
+        xp3ValueUnref(value);
+        if (more < 0) {
+            evalNoMemory(ev);
+            goto error;
+        }
+    }
+    if (found < 0) {
+        evalNoMemory(ev);
+        goto error;
+    }
+
+    if ((nodes > 0) && (others > 0)) {
+        evalError(ev, XP3_ERR_XPTY0018, right,
+                  "the last step of a path returns both nodes and other "
+                  "items");
+        goto error;
+    }
+    /* One context node and an axis step give document order already */
+    if ((nodes > 1) && ((size > 1) || (right->kind != XP3_AST_STEP))) {
+        xp3ErrCode err = evalSortNodes(ev, &builder);
+
+        if (err != XP3_ERR_OK) {
+            if (err == XP3_ERR_NO_MEMORY)
+                evalNoMemory(ev);
+            else
+                evalError(ev, err, right, "a node of the result is not "
+                          "part of the data model");
+            goto error;
+        }
+    }
+    return(builderFinish(ev, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    return(NULL);
+}
+
+static xp3Value *
+evalPath(xp3Eval *ev, const xp3AstNode *path) {
+    const xp3AstNode *child = path->first;
+    xp3Value *current;
+
+    if (path->op == XP3_PATH_ROOT) {
+        current = evalRoot(ev, path);
+    } else {
+        current = evalExpr(ev, child);
+        child = child->next;
+    }
+    for (; (child != NULL) && (current != NULL); child = child->next) {
+        xp3Value *next = evalPathStep(ev, current, child);
+
+        xp3ValueUnref(current);
+        current = next;
+    }
+    return(current);
+}
+
+/* A primary expression with predicates (XPath 3.1, 3.3.3), positions
+ * counted in sequence order */
+static xp3Value *
+evalFilter(xp3Eval *ev, const xp3AstNode *node) {
+    const xp3AstNode *child = node->first;
+    xp3SeqBuilder builder;
+    xp3Value *value;
+    xp3ErrCode err;
+
+    value = evalExpr(ev, child);
+    if (value == NULL)
+        return(NULL);
+    builderInit(ev, &builder);
+    err = xp3SeqBuilderAddValue(&builder, value);
+    xp3ValueUnref(value);
+    if (err != XP3_ERR_OK) {
+        evalBuildError(ev, err, node);
+        xp3SeqBuilderClear(&builder);
+        return(NULL);
+    }
+    for (child = child->next; child != NULL; child = child->next) {
+        if (child->kind != XP3_AST_PREDICATE) {
+            evalError(ev, XP3_ERR_UNSUPPORTED, child, "%s is not "
+                      "implemented yet", (child->kind == XP3_AST_LOOKUP) ?
+                      "the lookup operator" : "calling a function item");
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        if (applyPredicate(ev, child, builder.items, &builder.count) < 0) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+    }
+    return(builderFinish(ev, &builder));
+}
+
+/*
+ * for, let, some and every
+ *
+ * These loop over their bindings instead of recursing per binding: a
+ * long list of bindings is not nesting, so the parser's depth limit
+ * doesn't bound it, and recursion would overflow the stack.
+ */
+
+/* One binding of a for or quantified expression while it iterates */
+typedef struct {
+    const xp3AstNode *binding;
+    xp3Value *value;            /* the sequence it ranges over */
+    xp3Iter iter;
+    xp3Value *current;          /* the item bound now, as a sequence */
+    xp3Value *saved;            /* the slot before */
+} xp3ClauseState;
+
+/* Called with every combination of items bound: 0 to go on, 1 to
+ * stop, -1 on error */
+typedef int (*xp3ClauseVisit)(xp3Eval *ev, const xp3AstNode *last,
+                              void *data);
+
+/*
+ * Bind each combination of the items of the BINDING nodes from first
+ * on, in order, and call visit with the expression after them.
+ * Returns 0 when done, 1 if visit stopped, or -1 on error.
+ */
+static int
+forEachBinding(xp3Eval *ev, const xp3AstNode *first, xp3ClauseVisit visit,
+               void *data) {
+    const xp3AstNode *last = first;
+    xp3ClauseState *states;
+    size_t count = 0;
+    size_t depth;
+    size_t i;
+    int ret = 0;
+
+    while (last->kind == XP3_AST_BINDING) {
+        count++;
+        last = last->next;
+    }
+    if (count > SIZE_MAX / sizeof(xp3ClauseState)) {
+        evalNoMemory(ev);
+        return(-1);
+    }
+    states = xmlMalloc(count * sizeof(xp3ClauseState));
+    if (states == NULL) {
+        evalNoMemory(ev);
+        return(-1);
+    }
+    for (i = 0; i < count; i++) {
+        states[i].binding = (i == 0) ? first : states[i - 1].binding->next;
+        states[i].value = NULL;
+        states[i].current = NULL;
+        states[i].saved = ev->slots[states[i].binding->op];
+    }
+
+    /* Odometer: depth is the binding whose next item comes next */
+    depth = 0;
+    states[0].value = evalExpr(ev, first->first);
+    if (states[0].value == NULL)
+        ret = -1;
+    else
+        xp3IterInit(&states[0].iter, states[0].value);
+    while (ret == 0) {
+        xp3ClauseState *state = &states[depth];
+        xp3Item item;
+        int found = xp3IterNext(&state->iter, &item);
+
+        if (found < 0) {
+            evalNoMemory(ev);
+            ret = -1;
+            break;
+        }
+        if (found == 0) {
+            /* This binding is done: back to the one before */
+            ev->slots[state->binding->op] = state->saved;
+            xp3ValueUnref(state->current);
+            state->current = NULL;
+            xp3ValueUnref(state->value);
+            state->value = NULL;
+            if (depth == 0)
+                break;
+            depth--;
+            continue;
+        }
+        /* Unbind the previous item before releasing it */
+        ev->slots[state->binding->op] = state->saved;
+        xp3ValueUnref(state->current);
+        state->current = evalSingle(ev, item);
+        if (state->current == NULL) {
+            ret = -1;
+            break;
+        }
+        ev->slots[state->binding->op] = state->current;
+        if (depth + 1 == count) {
+            ret = visit(ev, last, data);
+            continue;
+        }
+        depth++;
+        state = &states[depth];
+        state->value = evalExpr(ev, state->binding->first);
+        if (state->value == NULL) {
+            ret = -1;
+            break;
+        }
+        xp3IterInit(&state->iter, state->value);
+    }
+
+    /* Restore the slots, innermost first, after an error or a stop */
+    for (i = count; i > 0; i--) {
+        xp3ClauseState *state = &states[i - 1];
+
+        if (state->current != NULL)
+            ev->slots[state->binding->op] = state->saved;
+        xp3ValueUnref(state->current);
+        xp3ValueUnref(state->value);
+    }
+    xmlFree(states);
+    return(ret);
+}
+
+/* for: add the value of the return expression to the builder */
+static int
+visitFor(xp3Eval *ev, const xp3AstNode *last, void *data) {
+    xp3SeqBuilder *builder = data;
+    xp3Value *value = evalExpr(ev, last);
+    xp3ErrCode err;
+
+    if (value == NULL)
+        return(-1);
+    err = xp3SeqBuilderAddValue(builder, value);
+    xp3ValueUnref(value);
+    if (err != XP3_ERR_OK) {
+        evalBuildError(ev, err, last);
+        return(-1);
+    }
+    return(0);
+}
+
+static xp3Value *
+evalFor(xp3Eval *ev, const xp3AstNode *node) {
+    xp3SeqBuilder builder;
+
+    builderInit(ev, &builder);
+    if (forEachBinding(ev, node->first, visitFor, &builder) < 0) {
+        xp3SeqBuilderClear(&builder);
+        return(NULL);
+    }
+    return(builderFinish(ev, &builder));
+}
+
+/* some and every: stop at the first binding that decides the result */
+typedef struct {
+    int isSome;
+    int result;
+} xp3Quantifier;
+
+static int
+visitQuantified(xp3Eval *ev, const xp3AstNode *last, void *data) {
+    xp3Quantifier *quantifier = data;
+    int result = evalCondition(ev, last);
+
+    if (result < 0)
+        return(-1);
+    if (result != quantifier->isSome)
+        return(0);
+    quantifier->result = result;
+    return(1);
+}
+
+static xp3Value *
+evalQuantified(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Quantifier quantifier;
+
+    quantifier.isSome = (node->kind == XP3_AST_SOME);
+    quantifier.result = !quantifier.isSome;
+    if (forEachBinding(ev, node->first, visitQuantified, &quantifier) < 0)
+        return(NULL);
+    return(evalBoolean(ev, quantifier.result));
+}
+
+/* let $x := E, ...: bind each value in turn, then the return
+ * expression */
+static xp3Value *
+evalLet(xp3Eval *ev, const xp3AstNode *node) {
+    const xp3AstNode *clause;
+    struct {
+        const xp3AstNode *binding;
+        xp3Value *saved;        /* the slot before */
+    } *bindings;
+    xp3Value *ret = NULL;
+    size_t count = 0;
+    size_t bound = 0;
+
+    for (clause = node->first; clause->kind == XP3_AST_BINDING;
+         clause = clause->next)
+        count++;
+    if (count > SIZE_MAX / sizeof(*bindings)) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    bindings = xmlMalloc(count * sizeof(*bindings));
+    if (bindings == NULL) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    for (clause = node->first; clause->kind == XP3_AST_BINDING;
+         clause = clause->next) {
+        xp3Value *value = evalExpr(ev, clause->first);
+
+        if (value == NULL)
+            break;
+        bindings[bound].binding = clause;
+        bindings[bound].saved = ev->slots[clause->op];
+        bound++;
+        ev->slots[clause->op] = value;
+    }
+    if (bound == count)
+        ret = evalExpr(ev, clause);
+
+    /* Unbind in reverse order */
+    while (bound > 0) {
+        bound--;
+        xp3ValueUnref(ev->slots[bindings[bound].binding->op]);
+        ev->slots[bindings[bound].binding->op] = bindings[bound].saved;
+    }
+    xmlFree(bindings);
+    return(ret);
+}
+
+/*
+ * Conditionals and logic
+ */
+
+static xp3Value *
+evalIf(xp3Eval *ev, const xp3AstNode *node) {
+    int condition = evalCondition(ev, node->first);
+
+    if (condition < 0)
+        return(NULL);
+    return(evalExpr(ev, condition ? node->first->next : node->last));
+}
+
+/* and, or: the left side first, the right side only if needed */
+static xp3Value *
+evalLogical(xp3Eval *ev, const xp3AstNode *node) {
+    int isOr = (node->op == XP3_OP_OR);
+    int result = evalCondition(ev, node->first);
+
+    if (result < 0)
+        return(NULL);
+    if (result != isOr) {
+        result = evalCondition(ev, node->last);
+        if (result < 0)
+            return(NULL);
+    }
+    return(evalBoolean(ev, result));
+}
+
+/*
+ * Not implemented yet
+ */
+
+static const char *const xp3OperatorNames[] = {
+    "or", "and", "=", "!=", "<", "<=", ">", ">=", "eq", "ne", "lt", "le",
+    "gt", "ge", "is", "<<", ">>", "||", "to", "+", "-", "*", "div", "idiv",
+    "mod", "union", "intersect", "except", "!"
+};
+
+static xp3Value *
+evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
+    char name[XP3_NAME_BUF];
+
+    switch (node->kind) {
+        case XP3_AST_FUNCTION_CALL:
+            evalError(ev, XP3_ERR_UNSUPPORTED, node, "the function %s#%d "
+                      "is not implemented yet",
+                      displayName(node, name, sizeof(name)),
+                      (int) xp3AstChildCount(node));
+            break;
+        case XP3_AST_BINARY:
+        case XP3_AST_UNARY:
+            evalError(ev, XP3_ERR_UNSUPPORTED, node, "the operator %s is "
+                      "not implemented yet",
+                      ((node->op >= 0) &&
+                       ((size_t) node->op < sizeof(xp3OperatorNames) /
+                                            sizeof(xp3OperatorNames[0]))) ?
+                      xp3OperatorNames[node->op] : "?");
+            break;
+        default:
+            evalError(ev, XP3_ERR_UNSUPPORTED, node, "%s expressions are "
+                      "not implemented yet", xp3AstKindName(node->kind));
+            break;
+    }
+    return(NULL);
+}
+
+/*
+ * Dispatch
+ */
+
+static xp3Value *
+evalExpr(xp3Eval *ev, const xp3AstNode *node) {
+    switch (node->kind) {
+        case XP3_AST_INTEGER:
+        case XP3_AST_DECIMAL:
+        case XP3_AST_DOUBLE:
+        case XP3_AST_STRING:
+            return(evalLiteral(ev, node));
+        case XP3_AST_VARREF:
+            return(evalVarRef(ev, node));
+        case XP3_AST_CONTEXT_ITEM:
+            return(evalContextItem(ev, node));
+        case XP3_AST_SEQUENCE:
+            return(evalSequence(ev, node));
+        case XP3_AST_EMPTY_SEQUENCE:
+            return(xp3ValueEmpty());
+        case XP3_AST_FOR:
+            return(evalFor(ev, node));
+        case XP3_AST_LET:
+            return(evalLet(ev, node));
+        case XP3_AST_SOME:
+        case XP3_AST_EVERY:
+            return(evalQuantified(ev, node));
+        case XP3_AST_IF:
+            return(evalIf(ev, node));
+        case XP3_AST_BINARY:
+            if ((node->op == XP3_OP_OR) || (node->op == XP3_OP_AND))
+                return(evalLogical(ev, node));
+            return(evalUnsupported(ev, node));
+        case XP3_AST_PATH:
+            return(evalPath(ev, node));
+        case XP3_AST_STEP:
+            return(evalStep(ev, node));
+        case XP3_AST_FILTER:
+            return(evalFilter(ev, node));
+        default:
+            return(evalUnsupported(ev, node));
+    }
+}
+
+/*
+ * Evaluating
+ */
+
+/* Bind the declared variables to the values in the dynamic context,
+ * and set the focus to its context node. Returns 0 or -1. */
+static int
+evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
+    int i;
+
+    ev->maxItems = (ctx != NULL) ? ctx->maxSequenceLength :
+                                   XP3_MAX_SEQUENCE_ITEMS;
+    if ((ctx != NULL) && (ctx->contextNode != NULL)) {
+        ev->focus.item = xp3ItemFromNode(ctx->contextNode);
+        ev->focus.present = 1;
+        ev->focus.position = 1;
+        ev->focus.size = 1;
+    }
+    if (expr->slotCount > 0) {
+        ev->slots = xmlMalloc((size_t) expr->slotCount * sizeof(xp3Value *));
+        if (ev->slots == NULL) {
+            evalNoMemory(ev);
+            return(-1);
+        }
+        memset(ev->slots, 0, (size_t) expr->slotCount * sizeof(xp3Value *));
+        ev->slotCount = expr->slotCount;
+    }
+
+    for (i = 0; i < expr->variableCount; i++) {
+        const xp3ExprVariable *var = &expr->variables[i];
+        int j;
+
+        for (j = 0; (ctx != NULL) && (j < ctx->variableCount); j++) {
+            const xp3BoundVariable *bound = &ctx->variables[j];
+
+            if (xmlStrEqual(bound->uri, var->uri) &&
+                xmlStrEqual(bound->localName, var->localName)) {
+                ev->slots[var->slot] = xp3ValueRef(bound->value);
+                break;
+            }
+        }
+        if (ev->slots[var->slot] == NULL) {
+            if (var->uri != NULL)
+                evalError(ev, XP3_ERR_XPDY0002, NULL, "no value is bound "
+                          "to the variable $Q{%s}%s",
+                          (const char *) var->uri,
+                          (const char *) var->localName);
+            else
+                evalError(ev, XP3_ERR_XPDY0002, NULL, "no value is bound "
+                          "to the variable $%s",
+                          (const char *) var->localName);
+            return(-1);
+        }
+    }
+    return(0);
+}
+
+static void
+evalCleanup(xp3Eval *ev) {
+    int i;
+
+    for (i = 0; i < ev->slotCount; i++)
+        xp3ValueUnref(ev->slots[i]);
+    xmlFree(ev->slots);
+    xp3DocOrderFree(ev->order);
+}
+
+/**
+ * Evaluate a compiled expression.
+ *
+ * The dynamic context gives the context node and the values of the
+ * variables the expression was compiled with; each of those variables
+ * needs a value. Node identity and document order are those of the
+ * libxml2 tree as it is during the evaluation, which must not change
+ * it. The documents must outlive the result, which refers to their
+ * nodes.
+ *
+ * Threads can evaluate one compiled expression at the same time, each
+ * with a dynamic context of its own: contexts and sequences are
+ * reference counted without locks, so each belongs to one thread at a
+ * time.
+ *
+ * @param expr   the compiled expression
+ * @param ctx    the dynamic context, or NULL for none: no context item
+ *               and no variables
+ * @param error  where to store the error, or NULL. It is set to NULL
+ *               on success, and must be freed with xp3ErrorFree()
+ *               otherwise.
+ * @returns the result, to be freed with xp3FreeSequence(), or NULL on
+ *          error or if expr is NULL
+ */
+xp3Sequence *
+xp3Evaluate(const xp3Expr *expr, xp3DynamicContext *ctx, xp3Error **error) {
+    xp3Value *result = NULL;
+    xp3Eval ev;
+
+    if (error != NULL)
+        *error = NULL;
+    if (expr == NULL)
+        return(NULL);
+    memset(&ev, 0, sizeof(ev));
+    if (evalSetup(&ev, expr, ctx) == 0)
+        result = evalExpr(&ev, expr->ast->root);
+    evalCleanup(&ev);
+
+    if ((result == NULL) && (ev.err == NULL))
+        evalNoMemory(&ev);
+    if (result != NULL) {
+        xp3ErrorFree(ev.err);
+    } else if (error != NULL) {
+        *error = ev.err;
+    } else {
+        xp3ErrorFree(ev.err);
+    }
+    return(result);
+}
+
+/**
+ * Evaluate a compiled expression to its effective boolean value
+ * (XPath 3.1, 2.4.3), as the test of an if expression does: false for
+ * the empty sequence, true for nodes, and the boolean value of a
+ * single boolean, string or number.
+ *
+ * @param expr   the compiled expression
+ * @param ctx    the dynamic context, or NULL for none
+ * @param error  where to store the error, or NULL, as for xp3Evaluate()
+ * @returns 1 for true, 0 for false, or -1 on error, such as FORG0006
+ *          for a sequence without an effective boolean value
+ */
+int
+xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
+                   xp3Error **error) {
+    xp3Value *value = xp3Evaluate(expr, ctx, error);
+    const xp3AstNode *root;
+    xp3ErrCode err;
+    int result;
+
+    if (value == NULL)
+        return(-1);
+    err = xp3EffectiveBoolean(value, &result);
+    xp3ValueUnref(value);
+    if (err == XP3_ERR_OK)
+        return(result);
+    if (error != NULL) {
+        root = expr->ast->root;
+        if (err == XP3_ERR_FORG0006)
+            *error = xp3ErrorNew(err, root->line, root->column,
+                                 "the result has no effective boolean "
+                                 "value");
+        else
+            *error = xp3ErrorNoMemory();
+    }
+    return(-1);
+}
+
+/*
+ * Sequences
+ */
+
+/**
+ * Create a sequence of nodes, in the order given. Any libxml2 node of
+ * a run of adjacent text nodes stands for the whole run.
+ *
+ * @param nodes  the nodes, may be NULL if count is 0
+ * @param count  the number of nodes
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if a node is not part of the XDM tree, there are more than
+ *          10 million nodes, or memory allocation failed
+ */
+xp3Sequence *
+xp3NewNodeSequence(xmlNodePtr *nodes, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if ((nodes == NULL) && (count > 0))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        xmlNodePtr canonical = xp3NodeCanonical(nodes[i]);
+
+        if ((canonical == NULL) ||
+            (xp3SeqBuilderAdd(&builder, xp3ItemFromNode(canonical)) !=
+             XP3_ERR_OK)) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of one xs:string.
+ *
+ * @param str  the string in UTF-8
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if str is NULL or not valid UTF-8, or memory allocation
+ *          failed
+ */
+xp3Sequence *
+xp3NewStringSequence(const xmlChar *str) {
+    xp3Atomic *atomic;
+
+    if ((str == NULL) || (!xmlCheckUTF8(str)))
+        return(NULL);
+    atomic = xp3AtomicNewString(XP3_TYPE_STRING, str,
+                                strlen((const char *) str));
+    if (atomic == NULL)
+        return(NULL);
+    return(xp3ValueSingle(xp3ItemFromAtomic(atomic)));
+}
+
+/**
+ * Release a sequence. NULL is ignored.
+ *
+ * @param seq  the sequence
+ */
+void
+xp3FreeSequence(xp3Sequence *seq) {
+    xp3ValueUnref(seq);
+}
+
+/**
+ * Get the number of items in a sequence.
+ *
+ * @param seq  the sequence
+ * @returns the number of items, 0 for NULL. A range of integers too
+ *          long for size_t, as (1 to 9999999999) on a 32-bit system,
+ *          gives SIZE_MAX.
+ */
+size_t
+xp3SequenceLength(const xp3Sequence *seq) {
+    uint64_t count = xp3ValueCount(seq);
+
+    return((count > SIZE_MAX) ? SIZE_MAX : (size_t) count);
+}
+
+/**
+ * Get the kind of an item.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns an xp3ItemKind, or -1 if there is no such item
+ */
+int
+xp3SequenceItemKind(const xp3Sequence *seq, size_t index) {
+    xp3Item item;
+    int found;
+
+    if (index >= xp3ValueCount(seq))
+        return(-1);
+    if (seq->shape == XP3_SEQ_RANGE)
+        return(XP3_ITEM_ATOMIC);
+    found = xp3ValueItemAt(seq, index, &item);
+    if (found <= 0)
+        return(-1);
+    xp3ItemUnref(item);
+    return(item.kind);
+}
+
+/**
+ * Get a node of a sequence.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns the node, or NULL if the item is not a node or there is no
+ *          such item
+ */
+xmlNodePtr
+xp3SequenceNode(const xp3Sequence *seq, size_t index) {
+    xp3Item item;
+
+    if ((xp3SequenceItemKind(seq, index) != XP3_ITEM_NODE) ||
+        (xp3ValueItemAt(seq, index, &item) <= 0))
+        return(NULL);
+    return(item.u.node);
+}
+
+/**
+ * Get the string value of an item: of a node (XDM 3.1, 5.12), or of
+ * an atomic value as cast to xs:string.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns the string, to be freed with xmlFree(), or NULL if there is
+ *          no such item, it is a function, map or array, or memory
+ *          allocation failed
+ */
+xmlChar *
+xp3SequenceStringValue(const xp3Sequence *seq, size_t index) {
+    xmlChar *str = NULL;
+    xp3Item item;
+
+    if ((index >= xp3ValueCount(seq)) ||
+        (xp3ValueItemAt(seq, index, &item) <= 0))
+        return(NULL);
+    if (item.kind == XP3_ITEM_NODE) {
+        if (xp3NodeStringValue(item.u.node, &str, NULL) != XP3_ERR_OK)
+            str = NULL;
+    } else if (item.kind == XP3_ITEM_ATOMIC) {
+        str = xp3AtomicToString(item.u.atomic);
+    }
+    xp3ItemUnref(item);
+    return(str);
+}
