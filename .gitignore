@@ -26,3 +26,4 @@ oom-*
 
 # The coverage report the README suggests producing locally
 /coverage-report/
+/qt3-eval.txt

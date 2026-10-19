@@ -29,7 +29,7 @@ Conformance is measured against the W3C [QT3 test suite](https://github.com/w3c/
 
 Where the specifications leave a choice to the implementation, libxpath3 should behave like [Saxon](https://www.saxonica.com/), the de facto reference implementation that most existing stylesheets and Schematron rule sets are tested against. The same input then gives the same result in both. The first such choice is the precision of decimal division, which was measured with Saxon-HE 10.9 and 12.5; `doc/DESIGN.md` (section 4.3) has the rule and how to repeat the measurement. However, where the specifications are explicit, they win over Saxon.
 
-Evaluation does not exist yet, so QT3 runs in compile-only mode: each expression is compiled with the namespaces and variables of its test environment. A test passes if it compiles when the expected result allows that, or fails with the expected error code. An expected static error (`XPST…`, `XQST…`) must be raised by compiling, unless the expression calls `fn:error`, which can raise any code when it runs. Tests that need features outside the scope above (schema awareness, the namespace axis, XQuery, XSLT) are not applicable. Against QT3 commit `201a6e4`:
+The gate is compile-only mode: each expression is compiled with the namespaces and variables of its test environment. A test passes if it compiles when the expected result allows that, or fails with the expected error code. An expected static error (`XPST…`, `XQST…`) must be raised by compiling, unless the expression calls `fn:error`, which can raise any code when it runs. Tests that need features outside the scope above (schema awareness, the namespace axis, XQuery, XSLT) are not applicable. Against QT3 commit `201a6e4`:
 
 | Spec | Passed | Failed | Not applicable |
 |---|---|---|---|
@@ -38,6 +38,8 @@ Evaluation does not exist yet, so QT3 runs in compile-only mode: each expression
 | XPath 3.1 | 22,030 | 1 (known) | 9,790 |
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
+
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, `and` and `or` are evaluated, while operators and function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 978 tests passed, 1 failed (the known failure above) and 21,052 not judged. CI runs this as a report, which doesn't fail the pipeline yet.
 
 To run it yourself, check out the test suite at the same commit and pass its directory to Meson. `meson test --suite qt3` then runs all three levels:
 
@@ -48,7 +50,7 @@ meson setup build -Dqt3=$PWD/qt3tests
 meson test -C build --suite qt3
 ```
 
-`build/qt3/qt3run -s XP31 -v qt3tests/catalog.xml` shows each failing expression with the expected and actual result, and `-t PREFIX` limits the run to test sets whose name starts with `PREFIX`. With CMake, set `-DXP3_QT3_DIR=...`.
+`build/qt3/qt3run -s XP31 -v qt3tests/catalog.xml` shows each failing expression with the expected and actual result, `-t PREFIX` limits the run to test sets whose name starts with `PREFIX`, and `-e` evaluates. With CMake, set `-DXP3_QT3_DIR=...`.
 
 Failures that are accepted for now are listed in `qt3/known-failures-XP20.txt`, `-XP30.txt` and `-XP31.txt`, one `test-set/test-case` per line. Any failure not listed there fails the run. So does a listed test that now passes, which must then be removed from the list, so the lists stay accurate.
 
