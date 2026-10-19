@@ -485,6 +485,64 @@ testLocale(void) {
 }
 
 /*
+ * Atomic values as strings
+ */
+
+static void
+checkAtomicString(xp3Atomic *atomic, const char *expected,
+                  const char *what) {
+    xmlChar *str = xp3AtomicToString(atomic);
+
+    if ((str == NULL) || (strcmp((const char *) str, expected) != 0)) {
+        fprintf(stderr, "FAIL: %s: \"%s\", expected \"%s\"\n", what,
+                (str != NULL) ? (const char *) str : "NULL", expected);
+        failures++;
+    }
+    xmlFree(str);
+    xp3AtomicUnref(atomic);
+}
+
+static void
+testAtomicStrings(void) {
+    xp3Decimal *dec = NULL;
+
+    checkAtomicString(xp3AtomicNewString(XP3_TYPE_STRING, BAD_CAST "ab", 2),
+                      "ab", "string");
+    checkAtomicString(xp3AtomicNewBoolean(1), "true", "true");
+    checkAtomicString(xp3AtomicNewBoolean(0), "false", "false");
+    checkAtomicString(xp3AtomicNewInteger(-42), "-42", "integer");
+    if (xp3DecimalParse(BAD_CAST "1.50", 4, 0, &dec) == XP3_ERR_OK)
+        checkAtomicString(xp3AtomicNewDecimal(XP3_TYPE_DECIMAL, dec), "1.5",
+                          "decimal");
+    checkAtomicString(xp3AtomicNewFloat(0.1f), "0.1", "float");
+    checkAtomicString(xp3AtomicNewDouble(1e7), "1.0E7", "double");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_HEX_BINARY,
+                                         (const unsigned char *) "\x0f\xa0",
+                                         2), "0FA0", "hexBinary");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_HEX_BINARY, NULL, 0), "",
+                      "empty hexBinary");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_BASE64_BINARY,
+                                         (const unsigned char *) "Man", 3),
+                      "TWFu", "base64Binary, no padding");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_BASE64_BINARY,
+                                         (const unsigned char *) "Ma", 2),
+                      "TWE=", "base64Binary, one =");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_BASE64_BINARY,
+                                         (const unsigned char *) "M", 1),
+                      "TQ==", "base64Binary, two =");
+    checkAtomicString(xp3AtomicNewBinary(XP3_TYPE_BASE64_BINARY,
+                                         (const unsigned char *) "\xff\xfe"
+                                         "\xfd\xfc", 4),
+                      "//79/A==", "base64Binary, high bytes");
+    checkAtomicString(xp3AtomicNewQName(BAD_CAST "urn:x", BAD_CAST "p",
+                                        BAD_CAST "local"), "p:local",
+                      "QName with prefix");
+    checkAtomicString(xp3AtomicNewQName(NULL, NULL, BAD_CAST "local"),
+                      "local", "QName without prefix");
+    check(xp3AtomicToString(NULL) == NULL, "NULL has no string");
+}
+
+/*
  * Allocation failures
  */
 
@@ -594,6 +652,7 @@ main(void) {
     testRanges();
     testNumberStrings("");
     testLocale();
+    testAtomicStrings();
     testAllocationFailures();
 
     if (failures == 0)

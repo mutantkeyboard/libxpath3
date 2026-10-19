@@ -1,15 +1,25 @@
 /*
  * qt3run.c: run the W3C QT3 test suite against libxpath3
  *
- * Evaluation does not exist yet, so every test runs in compile-only
- * mode: the expression is compiled with the namespaces and variables of
- * its environment. A test passes if it compiles and the expected result
- * allows that, or if compiling fails with an error code the expected
- * result names. Static errors (XPST, XQST) must be raised by
- * compiling; any other expected error counts as "may compile", because
- * evaluation raises it.
+ * Compile-only mode, the default, compiles each expression with the
+ * namespaces and variables of its environment. A test passes if it
+ * compiles and the expected result allows that, or if compiling fails
+ * with an error code the expected result names. Static errors (XPST,
+ * XQST) must be raised by compiling; any other expected error counts
+ * as "may compile", because evaluation raises it.
  *
- * Usage: qt3run [-s XP20|XP30|XP31] [-t PREFIX] [-k FILE] [-v] CATALOG
+ * Evaluation mode (-e) also evaluates the expression, with the source
+ * documents and parameters of its environment, and checks the result
+ * against the assertions. Assertions written in XPath (assert,
+ * assert-eq, assert-deep-eq, assert-type) are evaluated with $result
+ * bound to the result. A test that needs something not implemented
+ * yet, in the expression, its environment or its assertions, is "not
+ * judged": it neither passes nor fails. Without -k, failures in this
+ * mode are reported but don't change the exit status, so it can run
+ * as a report while evaluation is incomplete.
+ *
+ * Usage: qt3run [-e] [-s XP20|XP30|XP31] [-t PREFIX] [-k FILE] [-v]
+ *               CATALOG
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -30,7 +40,10 @@
 #include <libxpath3/xpath3.h>
 #include "private/xp3context.h"
 #include "private/xp3func.h"
+#include "private/xp3nodes.h"
 #include "private/xp3static.h"
+#include "private/xp3types.h"
+#include "private/xp3value.h"
 
 #define QT3_NS "http://www.w3.org/2010/09/qt-fots-catalog"
 
@@ -42,15 +55,34 @@ typedef struct {
     const char *spec;           /* "XP20", "XP30" or "XP31" */
     const char *prefix;         /* only test sets starting with this */
     int verbose;
+    int evaluate;               /* evaluation mode */
     xmlNodePtr catalogRoot;     /* for environments shared by test sets */
     xmlHashTable *known;        /* "set/case" of known failures */
+    xmlHashTable *docs;         /* source documents by path */
 
     int passed;
     int failed;                 /* not in the known failures */
     int knownFailed;
     int fixed;                  /* known failures that now pass */
     int notApplicable;
+    int notJudged;
 } qt3Run;
+
+/* How a test came out */
+typedef enum {
+    QT3_FAIL = 0,
+    QT3_PASS,
+    QT3_NOT_JUDGED
+} qt3Outcome;
+
+/* The evaluation of one test case */
+typedef struct {
+    xmlNodePtr env;             /* its environment, or NULL */
+    const char *setPath;        /* its test set file */
+    xp3DynamicContext *ctx;
+    xp3Sequence *result;        /* NULL if evaluation failed */
+    xp3Error *err;              /* the error otherwise */
+} qt3Eval;
 
 /*
  * Dependencies the implementation does not satisfy. A NULL value
@@ -468,33 +500,637 @@ findEnvironment(const qt3Run *run, xmlNodePtr setRoot, const xmlChar *name) {
  * The static context of a test case: the language level of the run and
  * the declarations of its environment. Returns NULL on failure.
  */
-static xp3StaticContext *
-testContext(const qt3Run *run, xmlNodePtr setRoot, xmlNodePtr testCase) {
-    xp3StaticContext *ctx = xp3NewStaticContext();
+/* The environment of a test case, following a reference, or NULL */
+static xmlNodePtr
+testEnvironment(const qt3Run *run, xmlNodePtr setRoot, xmlNodePtr testCase) {
     xmlNodePtr env = firstChild(testCase, "environment");
+    xmlChar *ref;
 
-    if ((ctx == NULL) ||
-        (xp3SetStaticContextLanguageLevel(ctx,
-                                          (xp3LanguageLevel) run->level) < 0))
-        goto error;
-    if (env != NULL) {
-        xmlChar *ref = xmlGetProp(env, BAD_CAST "ref");
-
-        if (ref != NULL) {
-            env = findEnvironment(run, setRoot, ref);
-            xmlFree(ref);
-        }
-        if ((env != NULL) && (applyEnvironment(ctx, env) < 0))
-            goto error;
+    if (env == NULL)
+        return(NULL);
+    ref = xmlGetProp(env, BAD_CAST "ref");
+    if (ref != NULL) {
+        env = findEnvironment(run, setRoot, ref);
+        xmlFree(ref);
     }
-    return(ctx);
-
-error:
-    xp3FreeStaticContext(ctx);
-    return(NULL);
+    return(env);
 }
 
-/* Compile the expression of one test case and check the outcome. */
+/*
+ * A static context with a language level and the declarations of an
+ * environment, which may be NULL. Returns NULL on failure.
+ */
+static xp3StaticContext *
+envContext(int level, xmlNodePtr env) {
+    xp3StaticContext *ctx = xp3NewStaticContext();
+
+    if ((ctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(ctx, (xp3LanguageLevel) level) < 0)
+        || ((env != NULL) && (applyEnvironment(ctx, env) < 0))) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    return(ctx);
+}
+
+/*
+ * Evaluation mode: the dynamic context
+ */
+
+static void
+freeDoc(void *payload, const xmlChar *name) {
+    (void) name;
+    xmlFreeDoc((xmlDocPtr) payload);
+}
+
+/* A source document, parsed once per run as libxslt parses documents */
+static xmlDocPtr
+loadSource(qt3Run *run, const char *path) {
+    xmlDocPtr doc;
+
+    if (run->docs == NULL) {
+        run->docs = xmlHashCreate(0);
+        if (run->docs == NULL)
+            return(NULL);
+    }
+    doc = xmlHashLookup(run->docs, BAD_CAST path);
+    if (doc != NULL)
+        return(doc);
+    doc = xmlReadFile(path, NULL, XML_PARSE_NOENT | XML_PARSE_DTDLOAD |
+                                  XML_PARSE_DTDATTR | XML_PARSE_NONET);
+    if ((doc != NULL) &&
+        (xmlHashAddEntry(run->docs, BAD_CAST path, doc) < 0)) {
+        xmlFreeDoc(doc);
+        return(NULL);
+    }
+    return(doc);
+}
+
+/*
+ * Bind a value to the variable a name like "name" or "prefix:name"
+ * refers to, with the prefix bound where the name is written.
+ */
+static int
+bindName(xp3DynamicContext *ctx, xmlNodePtr node, const xmlChar *name,
+         xp3Sequence *value) {
+    const xmlChar *colon = xmlStrchr(name, ':');
+    xmlChar *prefix;
+    xmlNsPtr ns;
+
+    if (colon == NULL)
+        return(xp3BindVariable(ctx, NULL, name, value));
+    prefix = xmlStrndup(name, (int) (colon - name));
+    if (prefix == NULL)
+        return(-1);
+    ns = xmlSearchNs(node->doc, node, prefix);
+    xmlFree(prefix);
+    if (ns == NULL)
+        return(-1);
+    return(xp3BindVariable(ctx, ns->href, colon + 1, value));
+}
+
+/* <source role="." or "$name" file="...">: a document */
+static qt3Outcome
+applySource(qt3Run *run, xp3DynamicContext *ctx, xmlNodePtr source) {
+    xmlChar *role = xmlGetProp(source, BAD_CAST "role");
+    xmlChar *file = xmlGetProp(source, BAD_CAST "file");
+    xmlChar *validation = xmlGetProp(source, BAD_CAST "validation");
+    qt3Outcome ret = QT3_NOT_JUDGED;
+    char *path = NULL;
+    xmlDocPtr doc;
+
+    /* Sources without a role are for fn:doc(), and typed ones need a
+     * schema */
+    if ((role == NULL) || (file == NULL) ||
+        ((validation != NULL) && !xmlStrEqual(validation, BAD_CAST "skip")))
+        goto done;
+    path = resolvePath((const char *) source->doc->URL, (const char *) file);
+    doc = (path != NULL) ? loadSource(run, path) : NULL;
+    if (doc == NULL) {
+        printf("ERROR: cannot read the source %s\n", (const char *) file);
+        ret = QT3_FAIL;
+    } else if (xmlStrEqual(role, BAD_CAST ".")) {
+        if (xp3SetContextNode(ctx, (xmlNodePtr) doc) == 0)
+            ret = QT3_PASS;
+    } else if (role[0] == '$') {
+        xmlNodePtr node = (xmlNodePtr) doc;
+        xp3Sequence *value = xp3NewNodeSequence(&node, 1);
+
+        if ((value != NULL) && (bindName(ctx, source, role + 1, value) == 0))
+            ret = QT3_PASS;
+        xp3FreeSequence(value);
+    }
+
+done:
+    free(path);
+    xmlFree(role);
+    xmlFree(file);
+    xmlFree(validation);
+    return(ret);
+}
+
+/* <param name="..." select="...">: the value of an expression */
+static qt3Outcome
+applyParam(xmlNodePtr env, xp3DynamicContext *ctx, xmlNodePtr param) {
+    xmlChar *name = xmlGetProp(param, BAD_CAST "name");
+    xmlChar *select = xmlGetProp(param, BAD_CAST "select");
+    qt3Outcome ret = QT3_NOT_JUDGED;
+    xp3StaticContext *sctx = NULL;
+    xp3Sequence *value = NULL;
+    xp3Expr *expr = NULL;
+
+    if ((name == NULL) || (select == NULL))
+        goto done;
+    sctx = envContext(XP3_XPATH_31, env);
+    if (sctx != NULL)
+        expr = xp3Compile(sctx, select, NULL);
+    if (expr != NULL)
+        value = xp3Evaluate(expr, NULL, NULL);
+    if ((value != NULL) && (bindName(ctx, param, name, value) == 0))
+        ret = QT3_PASS;
+
+done:
+    xp3FreeSequence(value);
+    xp3FreeExpr(expr);
+    xp3FreeStaticContext(sctx);
+    xmlFree(name);
+    xmlFree(select);
+    return(ret);
+}
+
+/*
+ * Set up the dynamic context of an environment: QT3_PASS when done,
+ * QT3_NOT_JUDGED if it needs something not supported, such as
+ * collections, resources or a typed source.
+ */
+static qt3Outcome
+applyDynamic(qt3Run *run, xmlNodePtr env, xp3DynamicContext *ctx) {
+    xmlNodePtr cur;
+    qt3Outcome ret = QT3_PASS;
+
+    for (cur = env->children; (cur != NULL) && (ret == QT3_PASS);
+         cur = cur->next) {
+        if (cur->type != XML_ELEMENT_NODE)
+            continue;
+        if (isElement(cur, "source")) {
+            ret = applySource(run, ctx, cur);
+        } else if (isElement(cur, "param")) {
+            ret = applyParam(env, ctx, cur);
+        } else if (isElement(cur, "collation")) {
+            xmlChar *uri = xmlGetProp(cur, BAD_CAST "uri");
+
+            if (!xmlStrEqual(uri, BAD_CAST "http://www.w3.org/2005/"
+                             "xpath-functions/collation/codepoint"))
+                ret = QT3_NOT_JUDGED;
+            xmlFree(uri);
+        } else if (!isElement(cur, "namespace") &&
+                   !isElement(cur, "description") &&
+                   !isElement(cur, "created") &&
+                   !isElement(cur, "modified")) {
+            /* collection, resource, context-item, decimal-format,
+             * static-base-uri, schema */
+            ret = QT3_NOT_JUDGED;
+        }
+    }
+    return(ret);
+}
+
+/*
+ * Evaluation mode: assertions
+ */
+
+/* The string value of every item, separated by spaces, or NULL if an
+ * item has none yet */
+static xmlChar *
+joinStrings(const xp3Sequence *seq) {
+    xmlChar *joined = xmlStrdup(BAD_CAST "");
+    size_t i;
+
+    for (i = 0; (joined != NULL) && (i < xp3SequenceLength(seq)); i++) {
+        xmlChar *str = xp3SequenceStringValue(seq, i);
+
+        if (str == NULL) {
+            xmlFree(joined);
+            return(NULL);
+        }
+        if (i > 0)
+            joined = xmlStrcat(joined, BAD_CAST " ");
+        if (joined != NULL)
+            joined = xmlStrcat(joined, str);
+        xmlFree(str);
+    }
+    return(joined);
+}
+
+/* Collapse whitespace to single spaces and trim it, in place */
+static void
+normalizeSpace(xmlChar *str) {
+    xmlChar *out = str;
+    const xmlChar *in = str;
+    int space = 0;
+
+    while ((*in == ' ') || (*in == '\t') || (*in == '\n') || (*in == '\r'))
+        in++;
+    for (; *in != 0; in++) {
+        if ((*in == ' ') || (*in == '\t') || (*in == '\n') ||
+            (*in == '\r')) {
+            space = 1;
+            continue;
+        }
+        if (space)
+            *out++ = ' ';
+        space = 0;
+        *out++ = *in;
+    }
+    *out = 0;
+}
+
+static qt3Outcome
+assertStringValue(const qt3Eval *ev, xmlNodePtr assertion) {
+    xmlChar *expected = xmlNodeGetContent(assertion);
+    xmlChar *normalize = xmlGetProp(assertion, BAD_CAST "normalize-space");
+    xmlChar *actual = joinStrings(ev->result);
+    qt3Outcome ret = QT3_NOT_JUDGED;
+
+    if ((expected != NULL) && (actual != NULL)) {
+        if (xmlStrEqual(normalize, BAD_CAST "true") ||
+            xmlStrEqual(normalize, BAD_CAST "1")) {
+            normalizeSpace(expected);
+            normalizeSpace(actual);
+        }
+        ret = xmlStrEqual(expected, actual) ? QT3_PASS : QT3_FAIL;
+    }
+    xmlFree(expected);
+    xmlFree(normalize);
+    xmlFree(actual);
+    return(ret);
+}
+
+/* Whether the result is a single xs:boolean of this value */
+static qt3Outcome
+assertBoolean(const qt3Eval *ev, int value) {
+    xp3Item item;
+    int ok = 0;
+
+    if ((xp3SequenceLength(ev->result) == 1) &&
+        (xp3ValueItemAt(ev->result, 0, &item) > 0)) {
+        ok = (item.kind == XP3_ITEM_ATOMIC) &&
+             (item.u.atomic->type == XP3_TYPE_BOOLEAN) &&
+             (item.u.atomic->u.boolean == value);
+        xp3ItemUnref(item);
+    }
+    return(ok ? QT3_PASS : QT3_FAIL);
+}
+
+static int
+deepEqualNodes(xmlNodePtr first, xmlNodePtr second);
+
+/* Whether the XDM children of two nodes are deep-equal */
+static int
+deepEqualChildren(xmlNodePtr first, xmlNodePtr second) {
+    xmlNodePtr firstChild = NULL;
+    xmlNodePtr secondChild = NULL;
+
+    for (;;) {
+        firstChild = xp3AxisNext(XP3_AXIS_CHILD, first, firstChild);
+        secondChild = xp3AxisNext(XP3_AXIS_CHILD, second, secondChild);
+        if ((firstChild == NULL) || (secondChild == NULL))
+            return(firstChild == secondChild);
+        if (!deepEqualNodes(firstChild, secondChild))
+            return(0);
+    }
+}
+
+/* Whether the string values of two nodes are equal */
+static int
+sameStringValue(xmlNodePtr first, xmlNodePtr second) {
+    xmlChar *firstValue = NULL;
+    xmlChar *secondValue = NULL;
+    int ret;
+
+    xp3NodeStringValue(first, &firstValue, NULL);
+    xp3NodeStringValue(second, &secondValue, NULL);
+    ret = (firstValue != NULL) && xmlStrEqual(firstValue, secondValue);
+    xmlFree(firstValue);
+    xmlFree(secondValue);
+    return(ret);
+}
+
+/* Deep equality of untyped nodes, as fn:deep-equal defines it, with
+ * comments and processing instructions compared too */
+static int
+deepEqualNodes(xmlNodePtr first, xmlNodePtr second) {
+    xp3NodeKind kind = xp3NodeGetKind(first);
+    xmlNodePtr attr = NULL;
+    int count = 0;
+
+    if ((kind != xp3NodeGetKind(second)) ||
+        !xmlStrEqual(xp3NodeLocalName(first), xp3NodeLocalName(second)) ||
+        !xmlStrEqual(xp3NodeNamespaceUri(first), xp3NodeNamespaceUri(second)))
+        return(0);
+    if (kind == XP3_NODE_DOCUMENT)
+        return(deepEqualChildren(first, second));
+    if (kind != XP3_NODE_ELEMENT)
+        return(sameStringValue(first, second));
+
+    while ((attr = xp3AxisNext(XP3_AXIS_ATTRIBUTE, first, attr)) != NULL) {
+        xmlNodePtr other = NULL;
+
+        count++;
+        while (((other = xp3AxisNext(XP3_AXIS_ATTRIBUTE, second, other)) !=
+                NULL) && !deepEqualNodes(attr, other))
+            ;
+        if (other == NULL)
+            return(0);
+    }
+    while ((attr = xp3AxisNext(XP3_AXIS_ATTRIBUTE, second, attr)) != NULL)
+        count--;
+    return((count == 0) && deepEqualChildren(first, second));
+}
+
+/*
+ * <assert-xml>: the result, serialized, is the XML given. Compared
+ * here as trees: the result nodes, with document nodes replaced by
+ * their children, against the nodes of the expected XML.
+ */
+static qt3Outcome
+assertXml(const qt3Eval *ev, xmlNodePtr assertion) {
+    xmlChar *file = xmlGetProp(assertion, BAD_CAST "file");
+    xmlChar *xml = NULL;
+    xmlChar *wrapped = NULL;
+    xmlDocPtr doc = NULL;
+    xmlNodePtr expected = NULL;
+    qt3Outcome ret = QT3_NOT_JUDGED;
+    size_t len;
+    size_t i;
+
+    if (file != NULL) {
+        char *path = resolvePath(ev->setPath, (const char *) file);
+
+        if (path != NULL)
+            xml = readFile(path, &len);
+        free(path);
+    } else {
+        xml = xmlNodeGetContent(assertion);
+    }
+    if (xml == NULL)
+        goto done;
+    /* Drop an XML declaration, which can't be wrapped */
+    if (xmlStrncmp(xml, BAD_CAST "<?xml ", 6) == 0) {
+        const xmlChar *end = xmlStrstr(xml, BAD_CAST "?>");
+
+        if (end != NULL)
+            memmove(xml, end + 2, (size_t) xmlStrlen(end + 2) + 1);
+    }
+    wrapped = xmlStrdup(BAD_CAST "<qt3-wrapper>");
+    wrapped = xmlStrcat(wrapped, xml);
+    wrapped = xmlStrcat(wrapped, BAD_CAST "</qt3-wrapper>");
+    if (wrapped != NULL)
+        doc = xmlReadMemory((const char *) wrapped, xmlStrlen(wrapped),
+                            "expected.xml", NULL, XML_PARSE_NOENT);
+    if (doc == NULL)
+        goto done;
+
+    ret = QT3_PASS;
+    for (i = 0; (i < xp3SequenceLength(ev->result)) && (ret == QT3_PASS);
+         i++) {
+        xmlNodePtr node = xp3SequenceNode(ev->result, i);
+        xmlNodePtr child = NULL;
+        int isDocument;
+
+        if ((node == NULL) ||
+            (xp3NodeGetKind(node) == XP3_NODE_ATTRIBUTE)) {
+            ret = QT3_NOT_JUDGED;
+            break;
+        }
+        isDocument = (xp3NodeGetKind(node) == XP3_NODE_DOCUMENT);
+        if (isDocument)
+            child = xp3AxisNext(XP3_AXIS_CHILD, node, NULL);
+        else
+            child = node;
+        for (; child != NULL;
+             child = isDocument ? xp3AxisNext(XP3_AXIS_CHILD, node, child) :
+                                  NULL) {
+            expected = xp3AxisNext(XP3_AXIS_CHILD,
+                                   xmlDocGetRootElement(doc), expected);
+            if ((expected == NULL) || !deepEqualNodes(child, expected)) {
+                ret = QT3_FAIL;
+                break;
+            }
+        }
+    }
+    if ((ret == QT3_PASS) &&
+        (xp3AxisNext(XP3_AXIS_CHILD, xmlDocGetRootElement(doc), expected) !=
+         NULL))
+        ret = QT3_FAIL;
+
+done:
+    xmlFreeDoc(doc);
+    xmlFree(wrapped);
+    xmlFree(xml);
+    xmlFree(file);
+    return(ret);
+}
+
+/*
+ * An assertion written in XPath: before, the assertion, and after,
+ * evaluated with $result bound to the result, at the highest language
+ * level and with the namespaces of the environment. QT3_NOT_JUDGED if
+ * it needs something not implemented yet.
+ */
+static qt3Outcome
+assertExpression(const qt3Eval *ev, const char *before,
+                 xmlNodePtr assertion, const char *after) {
+    xmlChar *body = xmlNodeGetContent(assertion);
+    xmlChar *text = xmlStrdup(BAD_CAST before);
+    xp3StaticContext *sctx = envContext(XP3_XPATH_31, ev->env);
+    qt3Outcome ret = QT3_FAIL;
+    xp3Error *err = NULL;
+    xp3Expr *expr = NULL;
+    int value;
+
+    text = xmlStrcat(text, body);
+    text = xmlStrcat(text, BAD_CAST after);
+    if ((text == NULL) || (sctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "result") < 0) ||
+        (xp3BindVariable(ev->ctx, NULL, BAD_CAST "result", ev->result) < 0)) {
+        ret = QT3_NOT_JUDGED;
+        goto done;
+    }
+    expr = xp3Compile(sctx, text, &err);
+    if (expr == NULL) {
+        if (err != NULL)
+            printf("    the assertion does not compile: %s\n",
+                   (const char *) xp3ErrorMessage(err));
+        goto done;
+    }
+    value = xp3EvaluateBoolean(expr, ev->ctx, &err);
+    if ((value < 0) &&
+        xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED"))
+        ret = QT3_NOT_JUDGED;
+    else if (value > 0)
+        ret = QT3_PASS;
+
+done:
+    xp3BindVariable(ev->ctx, NULL, BAD_CAST "result", NULL);
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    xp3FreeStaticContext(sctx);
+    xmlFree(body);
+    xmlFree(text);
+    return(ret);
+}
+
+/* Whether an error code matches an <error code="..."/> */
+static qt3Outcome
+assertError(const qt3Eval *ev, xmlNodePtr assertion) {
+    xmlChar *expected = xmlGetProp(assertion, BAD_CAST "code");
+    int ok;
+
+    if (ev->result != NULL) {
+        xmlFree(expected);
+        return(QT3_FAIL);
+    }
+    ok = xmlStrEqual(expected, BAD_CAST "*") ||
+         xmlStrEqual(expected, xp3ErrorCode(ev->err));
+    xmlFree(expected);
+    return(ok ? QT3_PASS : QT3_FAIL);
+}
+
+/* Check an evaluation against the expected result */
+static qt3Outcome
+judge(const qt3Eval *ev, xmlNodePtr expected) {
+    xmlNodePtr cur;
+    qt3Outcome ret;
+    xmlChar *text;
+
+    if (isElement(expected, "result") || isElement(expected, "any-of")) {
+        ret = QT3_FAIL;
+        for (cur = expected->children; cur != NULL; cur = cur->next) {
+            qt3Outcome outcome;
+
+            if (cur->type != XML_ELEMENT_NODE)
+                continue;
+            outcome = judge(ev, cur);
+            if (outcome == QT3_PASS)
+                return(QT3_PASS);
+            if (outcome == QT3_NOT_JUDGED)
+                ret = QT3_NOT_JUDGED;
+        }
+        return(ret);
+    }
+    if (isElement(expected, "all-of")) {
+        ret = QT3_PASS;
+        for (cur = expected->children; cur != NULL; cur = cur->next) {
+            qt3Outcome outcome;
+
+            if (cur->type != XML_ELEMENT_NODE)
+                continue;
+            outcome = judge(ev, cur);
+            if (outcome == QT3_FAIL)
+                return(QT3_FAIL);
+            if (outcome == QT3_NOT_JUDGED)
+                ret = QT3_NOT_JUDGED;
+        }
+        return(ret);
+    }
+    if (isElement(expected, "not")) {
+        for (cur = expected->children; cur != NULL; cur = cur->next) {
+            if (cur->type == XML_ELEMENT_NODE)
+                break;
+        }
+        ret = (cur != NULL) ? judge(ev, cur) : QT3_NOT_JUDGED;
+        if (ret == QT3_NOT_JUDGED)
+            return(ret);
+        return((ret == QT3_PASS) ? QT3_FAIL : QT3_PASS);
+    }
+    if (isElement(expected, "error"))
+        return(assertError(ev, expected));
+
+    /* Assertions about the value */
+    if (ev->result == NULL)
+        return(QT3_FAIL);
+    if (isElement(expected, "assert-empty"))
+        return((xp3SequenceLength(ev->result) == 0) ? QT3_PASS : QT3_FAIL);
+    if (isElement(expected, "assert-count")) {
+        text = xmlNodeGetContent(expected);
+        ret = ((text != NULL) &&
+               ((size_t) atol((const char *) text) ==
+                xp3SequenceLength(ev->result))) ? QT3_PASS : QT3_FAIL;
+        xmlFree(text);
+        return(ret);
+    }
+    if (isElement(expected, "assert-true"))
+        return(assertBoolean(ev, 1));
+    if (isElement(expected, "assert-false"))
+        return(assertBoolean(ev, 0));
+    if (isElement(expected, "assert-string-value"))
+        return(assertStringValue(ev, expected));
+    if (isElement(expected, "assert-xml"))
+        return(assertXml(ev, expected));
+    if (isElement(expected, "assert"))
+        return(assertExpression(ev, "", expected, ""));
+    if (isElement(expected, "assert-eq"))
+        return(assertExpression(ev, "$result eq (", expected, ")"));
+    if (isElement(expected, "assert-deep-eq"))
+        return(assertExpression(ev, "deep-equal($result, (", expected,
+                                "))"));
+    if (isElement(expected, "assert-type"))
+        return(assertExpression(ev, "$result instance of ", expected, ""));
+    /* assert-permutation and the serialization assertions */
+    return(QT3_NOT_JUDGED);
+}
+
+/*
+ * Evaluate a compiled test and judge the outcome. The result and error
+ * are left in ev for messages.
+ */
+static qt3Outcome
+evaluateTest(qt3Run *run, xp3Expr *compiled, xmlNodePtr expected,
+             qt3Eval *ev) {
+    qt3Outcome ret;
+
+    ev->ctx = xp3NewDynamicContext();
+    if (ev->ctx == NULL)
+        return(QT3_FAIL);
+    if (ev->env != NULL) {
+        ret = applyDynamic(run, ev->env, ev->ctx);
+        if (ret != QT3_PASS)
+            return(ret);
+    }
+    ev->result = xp3Evaluate(compiled, ev->ctx, &ev->err);
+    if ((ev->result == NULL) &&
+        xmlStrEqual(xp3ErrorCode(ev->err), BAD_CAST "UNSUPPORTED"))
+        return(QT3_NOT_JUDGED);
+    /* Assertions see $result, not the context item of the test */
+    xp3SetContextNode(ev->ctx, NULL);
+    return(judge(ev, expected));
+}
+
+/* Print what an evaluation gave, for -v */
+static void
+printEvaluation(const qt3Eval *ev) {
+    char got[QT3_MAX_SHOWN + 64];
+    xmlChar *joined;
+
+    if (ev->result == NULL) {
+        snprintf(got, sizeof(got), "%s at %d:%d: %s",
+                 (const char *) xp3ErrorCode(ev->err),
+                 xp3ErrorLine(ev->err), xp3ErrorColumn(ev->err),
+                 (const char *) xp3ErrorMessage(ev->err));
+        printShort("got", BAD_CAST got, strlen(got));
+        return;
+    }
+    joined = joinStrings(ev->result);
+    snprintf(got, sizeof(got), "%lu item(s): %s",
+             (unsigned long) xp3SequenceLength(ev->result),
+             (joined != NULL) ? (const char *) joined : "?");
+    printShort("got", BAD_CAST got, strlen(got));
+    xmlFree(joined);
+}
+
+/* Compile, and in evaluation mode evaluate, one test case and check
+ * the outcome. */
 static void
 runTestCase(qt3Run *run, const char *setName, const char *setPath,
             xmlNodePtr setRoot, xmlNodePtr testCase) {
@@ -509,12 +1145,15 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
     xp3StaticContext *ctx;
     xp3Expr *compiled;
     const xmlChar *code = NULL;
-    int passed;
+    qt3Eval ev;
+    qt3Outcome outcome;
     int known;
 
     snprintf(id, sizeof(id), "%s/%s", setName,
              name ? (const char *) name : "?");
     xmlFree(name);
+    memset(&ev, 0, sizeof(ev));
+    ev.setPath = setPath;
 
     if ((test == NULL) || (result == NULL)) {
         printf("ERROR %s: no test or result element\n", id);
@@ -540,7 +1179,8 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
         return;
     }
 
-    ctx = testContext(run, setRoot, testCase);
+    ev.env = testEnvironment(run, setRoot, testCase);
+    ctx = envContext(run->level, ev.env);
     if (ctx == NULL) {
         printf("ERROR %s: cannot set up the environment\n", id);
         run->failed++;
@@ -550,12 +1190,18 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
     compiled = xp3Compile(ctx, expr, &err);
     if (compiled == NULL)
         code = xp3ErrorCode(err);
-    passed = accepts(result, code,
-                     (compiled != NULL) && callsError(compiled->ast->root));
+    if (run->evaluate && (compiled != NULL))
+        outcome = evaluateTest(run, compiled, result, &ev);
+    else
+        outcome = accepts(result, code, (compiled != NULL) &&
+                          callsError(compiled->ast->root)) ?
+                  QT3_PASS : QT3_FAIL;
     known = (run->known != NULL) &&
             (xmlHashLookup(run->known, BAD_CAST id) != NULL);
 
-    if (passed) {
+    if (outcome == QT3_NOT_JUDGED) {
+        run->notJudged++;
+    } else if (outcome == QT3_PASS) {
         run->passed++;
         if (known) {
             printf("FIXED %s (remove it from the known failures)\n", id);
@@ -573,17 +1219,24 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
 
             printShort("expression", expr, len);
             printExpected(result);
-            if (compiled != NULL)
-                snprintf(got, sizeof(got), "compiled");
-            else
-                snprintf(got, sizeof(got), "%s at %d:%d: %s",
-                         (const char *) code, xp3ErrorLine(err),
-                         xp3ErrorColumn(err),
-                         (const char *) xp3ErrorMessage(err));
-            printShort("got", BAD_CAST got, strlen(got));
+            if (run->evaluate && (compiled != NULL)) {
+                printEvaluation(&ev);
+            } else {
+                if (compiled != NULL)
+                    snprintf(got, sizeof(got), "compiled");
+                else
+                    snprintf(got, sizeof(got), "%s at %d:%d: %s",
+                             (const char *) code, xp3ErrorLine(err),
+                             xp3ErrorColumn(err),
+                             (const char *) xp3ErrorMessage(err));
+                printShort("got", BAD_CAST got, strlen(got));
+            }
         }
     }
 
+    xp3FreeSequence(ev.result);
+    xp3ErrorFree(ev.err);
+    xp3FreeDynamicContext(ev.ctx);
     xp3FreeExpr(compiled);
     xp3FreeStaticContext(ctx);
     xp3ErrorFree(err);
@@ -602,6 +1255,7 @@ runTestSet(qt3Run *run, const char *catalogPath, xmlNodePtr testSet) {
     int passed = run->passed;
     int failed = run->failed + run->knownFailed;
     int notApplicable = run->notApplicable;
+    int notJudged = run->notJudged;
 
     if ((name == NULL) || (file == NULL)) {
         fprintf(stderr, "qt3run: test-set without name or file\n");
@@ -637,8 +1291,10 @@ runTestSet(qt3Run *run, const char *catalogPath, xmlNodePtr testSet) {
     if (run->verbose) {
         failed = run->failed + run->knownFailed - failed;
         if ((run->passed - passed) + failed > 0)
-            printf("%s: %d passed, %d failed, %d not applicable\n",
-                   (const char *) name, run->passed - passed, failed,
+            printf("%s: %d passed, %d failed, %d not judged, "
+                   "%d not applicable\n", (const char *) name,
+                   run->passed - passed, failed,
+                   run->notJudged - notJudged,
                    run->notApplicable - notApplicable);
     }
     ret = 0;
@@ -691,6 +1347,7 @@ static void
 usage(void) {
     fprintf(stderr,
             "Usage: qt3run [options] CATALOG\n"
+            "  -e         evaluate, not only compile\n"
             "  -s SPEC    XP20, XP30 or XP31 (default XP31)\n"
             "  -t PREFIX  only test sets whose name starts with PREFIX\n"
             "  -k FILE    known failures, one set/case per line\n"
@@ -710,7 +1367,9 @@ main(int argc, char **argv) {
     memset(&run, 0, sizeof(run));
     run.spec = "XP31";
     for (i = 1; i < argc; i++) {
-        if ((strcmp(argv[i], "-s") == 0) && (i + 1 < argc)) {
+        if (strcmp(argv[i], "-e") == 0) {
+            run.evaluate = 1;
+        } else if ((strcmp(argv[i], "-s") == 0) && (i + 1 < argc)) {
             run.spec = argv[++i];
         } else if ((strcmp(argv[i], "-t") == 0) && (i + 1 < argc)) {
             run.prefix = argv[++i];
@@ -752,10 +1411,13 @@ main(int argc, char **argv) {
             status = 2;
     }
 
-    printf("%s compile-only: %d passed, %d failed", run.spec, run.passed,
+    printf("%s %s: %d passed, %d failed", run.spec,
+           run.evaluate ? "evaluation" : "compile-only", run.passed,
            run.failed + run.knownFailed);
     if (run.knownFailed > 0)
         printf(" (%d known)", run.knownFailed);
+    if (run.evaluate)
+        printf(", %d not judged", run.notJudged);
     printf(", %d not applicable (%.2f%%)\n", run.notApplicable,
            (run.passed + run.failed + run.knownFailed > 0) ?
            100.0 * run.passed /
@@ -763,10 +1425,13 @@ main(int argc, char **argv) {
     if (run.fixed > 0)
         printf("%d known failures now pass\n", run.fixed);
 
-    if ((status == 0) && ((run.failed > 0) || (run.fixed > 0)))
+    /* Evaluation without known failures is a report */
+    if ((status == 0) && (!run.evaluate || (run.known != NULL)) &&
+        ((run.failed > 0) || (run.fixed > 0)))
         status = 1;
 
     xmlFreeDoc(catalog);
     xmlHashFree(run.known, NULL);
+    xmlHashFree(run.docs, freeDoc);
     return(status);
 }

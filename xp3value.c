@@ -23,14 +23,8 @@
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
+#include "private/xp3double.h"
 #include "private/xp3value.h"
-
-/*
- * Limit on the number of items a builder collects, the same as
- * libxml2's limit on node-sets (XPATH_MAX_NODESET_LENGTH). Ranges are
- * not limited, because they are never expanded.
- */
-#define XP3_MAX_SEQUENCE_ITEMS 10000000
 
 /* The empty sequence, shared and never freed */
 static xp3Value xp3EmptyValue = { 0, XP3_SEQ_EMPTY, { { 0, { NULL } } } };
@@ -558,13 +552,15 @@ xp3IterNext(xp3Iter *iter, xp3Item *item) {
  */
 
 /**
- * Start building a sequence.
+ * Start building a sequence of at most XP3_MAX_SEQUENCE_ITEMS items.
+ * Setting builder->max afterwards changes the limit.
  *
  * @param builder  the builder
  */
 void
 xp3SeqBuilderInit(xp3SeqBuilder *builder) {
     memset(builder, 0, sizeof(*builder));
+    builder->max = XP3_MAX_SEQUENCE_ITEMS;
 }
 
 /**
@@ -573,21 +569,21 @@ xp3SeqBuilderInit(xp3SeqBuilder *builder) {
  *
  * @param builder  the builder
  * @param item     the item
- * @returns XP3_ERR_OK, XP3_ERR_LIMIT past 10 million items, or
+ * @returns XP3_ERR_OK, XP3_ERR_LIMIT past builder->max items, or
  *          XP3_ERR_NO_MEMORY; the builder stays usable after a failure
  */
 xp3ErrCode
 xp3SeqBuilderAdd(xp3SeqBuilder *builder, xp3Item item) {
+    if (builder->count >= builder->max) {
+        xp3ItemUnref(item);
+        return(XP3_ERR_LIMIT);
+    }
     if (builder->count >= builder->cap) {
         size_t cap = (builder->cap == 0) ? 8 : builder->cap * 2;
         xp3Item *items;
 
-        if (builder->count >= XP3_MAX_SEQUENCE_ITEMS) {
-            xp3ItemUnref(item);
-            return(XP3_ERR_LIMIT);
-        }
-        if (cap > XP3_MAX_SEQUENCE_ITEMS)
-            cap = XP3_MAX_SEQUENCE_ITEMS;
+        if ((cap > builder->max) || (cap < builder->cap))
+            cap = builder->max;
         items = xmlRealloc(builder->items, cap * sizeof(xp3Item));
         if (items == NULL) {
             xp3ItemUnref(item);
@@ -615,7 +611,7 @@ xp3SeqBuilderAddValue(xp3SeqBuilder *builder, const xp3Value *value) {
     xp3Item item;
     int ret;
 
-    if (xp3ValueCount(value) > XP3_MAX_SEQUENCE_ITEMS - builder->count)
+    if (xp3ValueCount(value) > builder->max - builder->count)
         return(XP3_ERR_LIMIT);
     xp3IterInit(&iter, value);
     while ((ret = xp3IterNext(&iter, &item)) > 0) {
@@ -673,4 +669,121 @@ xp3SeqBuilderClear(xp3SeqBuilder *builder) {
         xp3ItemUnref(builder->items[i]);
     xmlFree(builder->items);
     xp3SeqBuilderInit(builder);
+}
+
+/*
+ * Strings
+ */
+
+static const char xp3HexDigits[] = "0123456789ABCDEF";
+static const char xp3Base64Digits[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* xs:hexBinary with uppercase digits, xs:base64Binary with padding */
+static xmlChar *
+binaryToString(const xp3Atomic *atomic) {
+    const unsigned char *data = atomic->u.bin.data;
+    size_t len = atomic->u.bin.len;
+    xmlChar *out;
+    size_t pos = 0;
+    size_t i;
+
+    if (atomic->type == XP3_TYPE_HEX_BINARY) {
+        if (len > (SIZE_MAX - 1) / 2)
+            return(NULL);
+        out = xmlMalloc(len * 2 + 1);
+        if (out == NULL)
+            return(NULL);
+        for (i = 0; i < len; i++) {
+            out[pos++] = xp3HexDigits[data[i] >> 4];
+            out[pos++] = xp3HexDigits[data[i] & 15];
+        }
+    } else {
+        if (len / 3 > (SIZE_MAX - 5) / 4)
+            return(NULL);
+        out = xmlMalloc((len + 2) / 3 * 4 + 1);
+        if (out == NULL)
+            return(NULL);
+        for (i = 0; i + 2 < len; i += 3) {
+            unsigned long bits = ((unsigned long) data[i] << 16) |
+                                 ((unsigned long) data[i + 1] << 8) |
+                                 data[i + 2];
+
+            out[pos++] = xp3Base64Digits[(bits >> 18) & 63];
+            out[pos++] = xp3Base64Digits[(bits >> 12) & 63];
+            out[pos++] = xp3Base64Digits[(bits >> 6) & 63];
+            out[pos++] = xp3Base64Digits[bits & 63];
+        }
+        if (i < len) {
+            unsigned long bits = (unsigned long) data[i] << 16;
+
+            if (i + 1 < len)
+                bits |= (unsigned long) data[i + 1] << 8;
+            out[pos++] = xp3Base64Digits[(bits >> 18) & 63];
+            out[pos++] = xp3Base64Digits[(bits >> 12) & 63];
+            out[pos++] = (i + 1 < len) ? xp3Base64Digits[(bits >> 6) & 63] :
+                                         '=';
+            out[pos++] = '=';
+        }
+    }
+    out[pos] = 0;
+    return(out);
+}
+
+/* "prefix:local", or "local" without a prefix */
+static xmlChar *
+qnameToString(const xp3Atomic *atomic) {
+    const xmlChar *prefix = atomic->u.qname.prefix;
+    const xmlChar *local = atomic->u.qname.local;
+    size_t prefixLen;
+    size_t localLen;
+    xmlChar *out;
+
+    if (prefix == NULL)
+        return(xmlStrdup(local));
+    prefixLen = strlen((const char *) prefix);
+    localLen = strlen((const char *) local);
+    out = xmlMalloc(prefixLen + localLen + 2);
+    if (out == NULL)
+        return(NULL);
+    memcpy(out, prefix, prefixLen);
+    out[prefixLen] = ':';
+    memcpy(out + prefixLen + 1, local, localLen + 1);
+    return(out);
+}
+
+/**
+ * Convert an atomic value to its canonical string, as casting to
+ * xs:string does (F&O 3.1, 19.1.2): "true" or "false", the shortest
+ * form of numbers, uppercase hex digits, padded base64, and
+ * "prefix:local" for QNames.
+ *
+ * @param atomic  the value
+ * @returns the string, to be freed with xmlFree(), or NULL if memory
+ *          allocation failed or the type has no strings yet (dates,
+ *          times and durations come with Part 10)
+ */
+xmlChar *
+xp3AtomicToString(const xp3Atomic *atomic) {
+    if (atomic == NULL)
+        return(NULL);
+    switch (xp3TypeRepresentation(atomic->type)) {
+        case XP3_REP_STRING:
+            return(xmlStrdup(atomic->u.str));
+        case XP3_REP_BOOLEAN:
+            return(xmlStrdup(BAD_CAST (atomic->u.boolean ? "true" :
+                                                           "false")));
+        case XP3_REP_DECIMAL:
+            return(xp3DecimalToString(atomic->u.dec));
+        case XP3_REP_FLOAT:
+            return(xp3FloatToString(atomic->u.f));
+        case XP3_REP_DOUBLE:
+            return(xp3DoubleToString(atomic->u.d));
+        case XP3_REP_BINARY:
+            return(binaryToString(atomic));
+        case XP3_REP_QNAME:
+            return(qnameToString(atomic));
+        default:
+            return(NULL);
+    }
 }

@@ -99,6 +99,11 @@ job_qt3() {
     for spec in XP20 XP30 XP31; do
         ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt \
             qt3tests/catalog.xml || return 1
+    done &&
+    for spec in XP20 XP30 XP31; do
+        ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml \
+            > qt3-eval.txt || return 1
+        tail -n 1 qt3-eval.txt
     done
 }
 
@@ -116,6 +121,10 @@ job_coverage() {
     for spec in XP20 XP30 XP31; do
         ./build/qt3/qt3run -s $spec -k qt3/known-failures-$spec.txt \
             qt3tests/catalog.xml || return 1
+    done &&
+    for spec in XP20 XP30 XP31; do
+        ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml \
+            > qt3-eval.txt || return 1
     done &&
     mkdir coverage &&
     gcovr --root . --filter '[^/]*\.c$' --exclude-unreachable-branches \
