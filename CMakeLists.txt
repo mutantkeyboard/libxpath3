@@ -41,6 +41,7 @@ set(XP3_SOURCES
     xp3error.c
     xp3func.c
     xp3lexer.c
+    xp3nodes.c
     xp3parser.c
     xp3static.c
     xp3types.c
@@ -85,7 +86,7 @@ if(BUILD_TESTING)
 
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
-    foreach(name error context lexer ast parser decimal value func static)
+    foreach(name error context lexer ast parser decimal value func static nodes)
         add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
         target_include_directories(test${name} PRIVATE
