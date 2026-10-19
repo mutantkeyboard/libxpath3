@@ -599,7 +599,7 @@ addStringValue(xmlChar *out, const xmlNode *node) {
 }
 
 /**
- * Get the string value of a node (XDM 3.1, 5.13): the text of all
+ * Get the string value of a node (XDM 3.1, 5.12): the text of all
  * descendant text nodes of a document or element, the value of an
  * attribute, the text of a text run, and the content of a comment or
  * processing instruction.
@@ -633,7 +633,7 @@ xp3NodeStringValue(xmlNodePtr node, xmlChar **value, size_t *length) {
 }
 
 /**
- * Get the typed value of a node without schema types (XDM 3.1, 5.15):
+ * Get the typed value of a node without schema types (XDM 3.1, 5.14):
  * the string value as xs:string for comments and processing
  * instructions, and as xs:untypedAtomic for all other nodes.
  *
