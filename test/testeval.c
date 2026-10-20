@@ -282,6 +282,13 @@ static const xp3EvalCase xp3Cases[] = {
     { "let $a := x return $a[2]", "e:x#x2" },
     { "let $a := 1, $b := ($a, 2) return $b", "integer:1 integer:2" },
     { "let $a := 1 return let $a := 2 return $a", "integer:2" },
+    { "for $a in 1 return ((for $a in 2 return $a), $a)",
+      "integer:2 integer:1" },
+    { "let $a := 1, $b := (let $a := 2 return $a) return ($a, $b)",
+      "integer:1 integer:2" },
+    { "for $a in 1, $a in ($a + 1) return $a", "integer:2" },
+    { "some $a in 1 satisfies ((every $a in 0 satisfies $a), $a)[2]",
+      "boolean:true" },
     { "some $i in (0, 1) satisfies $i", "boolean:true" },
     { "some $i in (0, '') satisfies $i", "boolean:false" },
     { "every $i in (1, 'a') satisfies $i", "boolean:true" },
@@ -918,6 +925,10 @@ testManyBindings(void) {
                       "boolean:true");
     checkManyBindings("every $a in 1", ", $b in 1", " satisfies 0",
                       "boolean:false");
+    /* Each binding refers back to the first, which static analysis
+     * once found by walking back through all the others */
+    checkManyBindings("for $first in 1", ", $b in $first", " return $b",
+                      "integer:1");
 }
 
 /*
