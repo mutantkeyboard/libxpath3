@@ -43,6 +43,7 @@ set(XP3_SOURCES
     xp3func.c
     xp3lexer.c
     xp3nodes.c
+    xp3ops.c
     xp3parser.c
     xp3static.c
     xp3types.c

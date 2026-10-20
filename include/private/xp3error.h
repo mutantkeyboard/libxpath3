@@ -54,6 +54,9 @@ typedef enum
     XP3_ERR_FOAR0002,  /* number too large, such as an arity */
     XP3_ERR_FORG0001,  /* invalid value for cast */
     XP3_ERR_FORG0006,  /* no effective boolean value */
+    XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
+    XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
+    XP3_ERR_FOCA0003,  /* value too large for xs:integer */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */
 } xp3ErrCode;
 

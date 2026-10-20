@@ -24,6 +24,7 @@
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
 #include "private/xp3nodes.h"
+#include "private/xp3ops.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
@@ -225,7 +226,7 @@ static const xp3EvalCase xp3Cases[] = {
     { "z/preceding-sibling::node()[2]", "p:pi" },
     { "x[1]/following::x", "e:x#x2 e:x#x3" },
     { "descendant::x", "e:x#x1 e:x#x2 e:x#x3" },
-    { "descendant-or-self::*[@id = 'x3']", "error:UNSUPPORTED" },
+    { "descendant-or-self::*[@id = 'x3']", "e:x#x3" },
 
     /* Paths */
     { "/", "d" },
@@ -308,17 +309,385 @@ static const xp3EvalCase xp3Cases[] = {
     { "x or (1, 2)", "boolean:true" },
     { "q or (1, 2)", "error:FORG0006" },
 
+    /* Arithmetic */
+    { "1 + 2", "integer:3" },
+    { "5 - 7", "integer:-2" },
+    { "2 * 3.5", "decimal:7" },
+    { "7 div 2", "decimal:3.5" },
+    { "6 div 2", "decimal:3" },
+    { "7 idiv 2", "integer:3" },
+    { "-7 idiv 2", "integer:-3" },
+    { "7 mod -2", "integer:1" },
+    { "-7 mod 2", "integer:-1" },
+    { "1.5 + 1", "decimal:2.5" },
+    { "0.1 + 0.2", "decimal:0.3" },
+    { "0.1e0 + 0.2e0", "double:0.30000000000000004" },
+    { "1e0 + 1", "double:2" },
+    { "1e0 - 2", "double:-1" },
+    { "2e0 * 3", "double:6" },
+    { "xs:float(1.5) + 1", "float:2.5" },
+    { "xs:float(1) + 1e0", "double:2" },
+    { "99999999999999999999 * 99999999999999999999",
+      "integer:9999999999999999999800000000000000000001" },
+    { "1 div 0", "error:FOAR0001" },
+    { "1 idiv 0", "error:FOAR0001" },
+    { "1.0 mod 0", "error:FOAR0001" },
+    { "1e0 div 0", "double:INF" },
+    { "-1e0 div 0", "double:-INF" },
+    { "0e0 div 0", "double:NaN" },
+    { "1e0 idiv 0", "error:FOAR0001" },
+    { "xs:double('INF') idiv 1", "error:FOAR0002" },
+    { "xs:double('NaN') idiv 1", "error:FOAR0002" },
+    { "7.5e0 idiv 2", "integer:3" },
+    { "-7.5e0 idiv 2", "integer:-3" },
+    { "1e300 idiv 1e-10", "error:FOAR0002" },
+    { "5.5e0 mod 2", "double:1.5" },
+    { "-5.5e0 mod 2", "double:-1.5" },
+    { "xs:float(5.5) idiv 2", "integer:2" },
+    { "() + 1", "" },
+    { "1 + ()", "" },
+    { "(1, 2) + 1", "error:XPTY0004" },
+    { "1 + (1, 2)", "error:XPTY0004" },
+    { "'a' + 1", "error:XPTY0004" },
+    { "xs:boolean('1') + 1", "error:XPTY0004" },
+    { "@a + 1", "double:2" },
+    { "x[1] + 1", "error:FORG0001" },
+    { "1 + x[1]", "error:FORG0001" },
+    { "for $a in x return $a + 1", "error:FORG0001" },
+    { "-1", "integer:-1" },
+    { "-(1.5)", "decimal:-1.5" },
+    { "-xs:byte(1)", "integer:-1" },
+    { "-xs:float(1)", "float:-1" },
+    { "-1e0", "double:-1" },
+    { "+xs:byte(1)", "byte:1" },
+    { "--1", "integer:1" },
+    { "-()", "" },
+    { "-@a", "double:-1" },
+    { "-x[1]", "error:FORG0001" },
+    { "+'a'", "error:XPTY0004" },
+    { "-(1, 2)", "error:XPTY0004" },
+
+    /* Value comparisons */
+    { "1 eq 1", "boolean:true" },
+    { "1 eq 1.0", "boolean:true" },
+    { "1 eq 1e0", "boolean:true" },
+    { "1 lt 2", "boolean:true" },
+    { "2 le 1", "boolean:false" },
+    { "2 gt 1.5", "boolean:true" },
+    { "2 ge 2e0", "boolean:true" },
+    { "1 ne 1", "boolean:false" },
+    { "'a' lt 'b'", "boolean:true" },
+    { "'b' eq 'b'", "boolean:true" },
+    { "'a' eq 1", "error:XPTY0004" },
+    { "@a eq '1'", "boolean:true" },
+    { "@a eq 1", "error:XPTY0004" },
+    { "() eq 1", "" },
+    { "1 eq ()", "" },
+    { "(1, 2) eq 1", "error:XPTY0004" },
+    { "xs:double('NaN') eq xs:double('NaN')", "boolean:false" },
+    { "xs:double('NaN') ne xs:double('NaN')", "boolean:true" },
+    { "xs:double('NaN') lt 1", "boolean:false" },
+    { "xs:double('NaN') ge 1", "boolean:false" },
+    { "xs:float(0.1) eq 0.1", "boolean:true" },
+    { "xs:float(0.1) eq 0.1e0", "boolean:false" },
+    { "xs:boolean('true') gt xs:boolean('false')", "boolean:true" },
+    { "xs:boolean('1') eq xs:boolean('true')", "boolean:true" },
+    { "xs:hexBinary('0a') eq xs:hexBinary('0A')", "boolean:true" },
+    { "xs:hexBinary('01') lt xs:hexBinary('02')", "boolean:true" },
+    { "xs:hexBinary('01') lt xs:hexBinary('0100')", "boolean:true" },
+    { "xs:hexBinary('01') eq xs:base64Binary('AQ==')", "error:XPTY0004" },
+    { "xs:anyURI('a') eq 'a'", "boolean:true" },
+    { "xs:boolean('1') lt 1", "error:XPTY0004" },
+
+    /* General comparisons */
+    { "x/@id = 'x2'", "boolean:true" },
+    { "x/@id = ('q', 'x1')", "boolean:true" },
+    { "x/@id = 'q'", "boolean:false" },
+    { "@a = 1", "boolean:true" },
+    { "@a = 2", "boolean:false" },
+    { "@a = 'x'", "boolean:false" },
+    { "@a != 1", "boolean:false" },
+    { "@a < 1.5", "boolean:true" },
+    { "@a = xs:boolean('1')", "boolean:true" },
+    { "(1, 2) = (2, 3)", "boolean:true" },
+    { "(1, 2) != (1, 2)", "boolean:true" },
+    { "(1, 2) = (3, 4)", "boolean:false" },
+    { "() = 1", "boolean:false" },
+    { "1 = ()", "boolean:false" },
+    { "x[1] = 1", "error:FORG0001" },
+    { "1 = 'a'", "error:XPTY0004" },
+    { "x = x", "boolean:true" },
+    { "x[1] < x[2]", "boolean:true" },
+    { "x[1] > x[2]", "boolean:false" },
+    { "x[1] >= x[1]", "boolean:true" },
+    { "x[1] <= 'one'", "boolean:true" },
+
+    /* Node comparisons */
+    { "x[1] is x[1]", "boolean:true" },
+    { "x[1] is x[2]", "boolean:false" },
+    { "x[1] << x[2]", "boolean:true" },
+    { "x[1] >> x[2]", "boolean:false" },
+    { "x[2] >> x[1]", "boolean:true" },
+    { "@a << x[1]", "boolean:true" },
+    { ". << @a", "boolean:true" },
+    { "() is x[1]", "" },
+    { "x[1] is ()", "" },
+    { "x is x[1]", "error:XPTY0004" },
+    { "1 is x[1]", "error:XPTY0004" },
+    { "x[1] << 1", "error:XPTY0004" },
+
+    /* Ranges */
+    { "1 to 3", "integer:1 integer:2 integer:3" },
+    { "-1 to 1", "integer:-1 integer:0 integer:1" },
+    { "3 to 1", "" },
+    { "2 to 2", "integer:2" },
+    { "() to 3", "" },
+    { "1 to ()", "" },
+    { "@a to 2", "integer:1 integer:2" },
+    { "1.5 to 2", "error:XPTY0004" },
+    { "1 to 2e0", "error:XPTY0004" },
+    { "x[1] to 2", "error:FORG0001" },
+    { "(1, 2) to 3", "error:XPTY0004" },
+    { "(1 to 3)[2]", "integer:2" },
+    { "xs:byte(1) to xs:byte(2)", "integer:1 integer:2" },
+    { "18446744073709551616 to 18446744073709551617",
+      "integer:18446744073709551616 integer:18446744073709551617" },
+    { "-18446744073709551617 to -18446744073709551616",
+      "integer:-18446744073709551617 integer:-18446744073709551616" },
+    { "9223372036854775806 to 9223372036854775808",
+      "integer:9223372036854775806 integer:9223372036854775807 "
+      "integer:9223372036854775808" },
+    { "18446744073709551616 to 18446744073709551616000", "error:LIMIT" },
+    { "18446744073709551617 to 18446744073709551616", "" },
+
+    /* union, intersect, except */
+    { "x | z", "e:x#x1 e:x#x2 e:z" },
+    { "z | x", "e:x#x1 e:x#x2 e:z" },
+    { "x union x", "e:x#x1 e:x#x2" },
+    { "@a | x", "a:a e:x#x1 e:x#x2" },
+    { "(x, z) intersect x", "e:x#x1 e:x#x2" },
+    { "(x, z) except x", "e:z" },
+    { "x except x[1]", "e:x#x2" },
+    { "//x intersect z/x", "e:x#x3" },
+    { "//x except z/x", "e:x#x1 e:x#x2" },
+    { "x intersect ()", "" },
+    { "() except x", "" },
+    { "x except ()", "e:x#x1 e:x#x2" },
+    { "z intersect x", "" },
+    { "1 | x", "error:XPTY0004" },
+    { "x except 1", "error:XPTY0004" },
+
+    /* instance of, treat as */
+    { "1 instance of xs:integer", "boolean:true" },
+    { "1 instance of xs:decimal", "boolean:true" },
+    { "1.0 instance of xs:integer", "boolean:false" },
+    { "1 instance of xs:numeric", "boolean:true" },
+    { "1e0 instance of xs:numeric", "boolean:true" },
+    { "'a' instance of xs:numeric", "boolean:false" },
+    { "'a' instance of xs:anyAtomicType", "boolean:true" },
+    { "1 instance of xs:error", "boolean:false" },
+    { "x instance of element()+", "boolean:true" },
+    { "x instance of element()*", "boolean:true" },
+    { "x instance of element()", "boolean:false" },
+    { "x instance of element()?", "boolean:false" },
+    { "x[1] instance of element(x)", "boolean:true" },
+    { "x[1] instance of element(z)", "boolean:false" },
+    { "@a instance of attribute()", "boolean:true" },
+    { "@a instance of xs:untypedAtomic", "boolean:false" },
+    { "() instance of empty-sequence()", "boolean:true" },
+    { "1 instance of empty-sequence()", "boolean:false" },
+    { "(1, 'a') instance of xs:anyAtomicType*", "boolean:true" },
+    { "(1, x) instance of xs:anyAtomicType*", "boolean:false" },
+    { "(1, x) instance of item()+", "boolean:true" },
+    { "() instance of item()?", "boolean:true" },
+    { "() instance of item()", "boolean:false" },
+    { "() instance of item()+", "boolean:false" },
+    { "1 instance of function(*)", "boolean:false" },
+    { "1 instance of map(*)", "boolean:false" },
+    { "1 treat as xs:integer", "integer:1" },
+    { "1 treat as xs:string", "error:XPDY0050" },
+    { "x treat as element()+", "e:x#x1 e:x#x2" },
+    { "() treat as empty-sequence()", "" },
+
+    /* cast as, castable as */
+    { "'12' cast as xs:integer", "integer:12" },
+    { "' 12 ' cast as xs:integer", "integer:12" },
+    { "'+12' cast as xs:integer", "integer:12" },
+    { "'1.5' cast as xs:integer", "error:FORG0001" },
+    { "'abc' cast as xs:integer", "error:FORG0001" },
+    { "1.9 cast as xs:integer", "integer:1" },
+    { "-1.9 cast as xs:integer", "integer:-1" },
+    { "1e3 cast as xs:integer", "integer:1000" },
+    { "-2.5e0 cast as xs:integer", "integer:-2" },
+    { "xs:double('NaN') cast as xs:integer", "error:FOCA0002" },
+    { "xs:double('-INF') cast as xs:decimal", "error:FOCA0002" },
+    { "(1e300 cast as xs:integer) eq 1e300", "boolean:true" },
+    { "(1e19 cast as xs:integer) eq 10000000000000000000",
+      "boolean:true" },
+    { "1e0 cast as xs:decimal", "decimal:1" },
+    { "0.1e0 cast as xs:decimal", "decimal:0.1" },
+    { "1.5e-7 cast as xs:decimal", "decimal:0.00000015" },
+    { "-1.5e-7 cast as xs:decimal", "decimal:-0.00000015" },
+    { "1e20 cast as xs:decimal", "decimal:100000000000000000000" },
+    { "123.456e1 cast as xs:decimal", "decimal:1234.56" },
+    { "1234567.5e0 cast as xs:decimal", "decimal:1234567.5" },
+    { "-1234567.5e0 cast as xs:decimal", "decimal:-1234567.5" },
+    { "xs:float('1234567.5') cast as xs:decimal", "decimal:1234567.5" },
+    { "xs:float('0.1') cast as xs:decimal", "decimal:0.1" },
+    { "-0e0 cast as xs:decimal", "decimal:0" },
+    { "1 cast as xs:decimal", "decimal:1" },
+    { "1.5 cast as xs:double", "double:1.5" },
+    { "xs:double('-1.75e-3') cast as xs:float", "float:-0.00175" },
+    { "1e300 cast as xs:float", "float:INF" },
+    { "xs:float(1.5) cast as xs:double", "double:1.5" },
+    { "'true' cast as xs:boolean", "boolean:true" },
+    { "' 1 ' cast as xs:boolean", "boolean:true" },
+    { "'0' cast as xs:boolean", "boolean:false" },
+    { "'yes' cast as xs:boolean", "error:FORG0001" },
+    { "0 cast as xs:boolean", "boolean:false" },
+    { "0.5 cast as xs:boolean", "boolean:true" },
+    { "xs:double('NaN') cast as xs:boolean", "boolean:false" },
+    { "xs:float('0') cast as xs:boolean", "boolean:false" },
+    { "xs:boolean('true') cast as xs:integer", "integer:1" },
+    { "xs:boolean('false') cast as xs:decimal", "decimal:0" },
+    { "xs:boolean('true') cast as xs:double", "double:1" },
+    { "xs:boolean('true') cast as xs:float", "float:1" },
+    { "300 cast as xs:byte", "error:FORG0001" },
+    { "127 cast as xs:byte", "byte:127" },
+    { "-128 cast as xs:byte", "byte:-128" },
+    { "65535 cast as xs:unsignedShort", "unsignedShort:65535" },
+    { "65536 cast as xs:unsignedShort", "error:FORG0001" },
+    { "255 cast as xs:unsignedByte", "unsignedByte:255" },
+    { "256 cast as xs:unsignedByte", "error:FORG0001" },
+    { "-32769 cast as xs:short", "error:FORG0001" },
+    { "1.5 cast as xs:short", "short:1" },
+    { "-1 cast as xs:unsignedInt", "error:FORG0001" },
+    { "4294967295 cast as xs:unsignedInt", "unsignedInt:4294967295" },
+    { "18446744073709551615 cast as xs:unsignedLong",
+      "unsignedLong:18446744073709551615" },
+    { "18446744073709551616 cast as xs:unsignedLong", "error:FORG0001" },
+    { "9223372036854775808 cast as xs:long", "error:FORG0001" },
+    { "2147483648 cast as xs:int", "error:FORG0001" },
+    { "0 cast as xs:positiveInteger", "error:FORG0001" },
+    { "0 cast as xs:nonNegativeInteger", "nonNegativeInteger:0" },
+    { "0 cast as xs:negativeInteger", "error:FORG0001" },
+    { "-0 cast as xs:nonPositiveInteger", "nonPositiveInteger:0" },
+    { "xs:byte(1) cast as xs:integer", "integer:1" },
+    { "1.5 cast as xs:string", "string:1.5" },
+    { "1e6 cast as xs:string", "string:1.0E6" },
+    { "1 cast as xs:untypedAtomic", "untypedAtomic:1" },
+    { "xs:boolean('1') cast as xs:string", "string:true" },
+    { "' a  b ' cast as xs:token", "token:a b" },
+    { "' a  b ' cast as xs:normalizedString", "normalizedString: a  b " },
+    { "' a  b ' cast as xs:string", "string: a  b " },
+    { "'' cast as xs:token", "token:" },
+    { "'en-US' cast as xs:language", "language:en-US" },
+    { "'x-1a' cast as xs:language", "language:x-1a" },
+    { "'toolonglang' cast as xs:language", "error:FORG0001" },
+    { "'en-' cast as xs:language", "error:FORG0001" },
+    { "'1en' cast as xs:language", "error:FORG0001" },
+    { "'a:b' cast as xs:NCName", "error:FORG0001" },
+    { "'a:b' cast as xs:Name", "Name:a:b" },
+    { "'::' cast as xs:Name", "Name:::" },
+    { "'1a' cast as xs:NMTOKEN", "NMTOKEN:1a" },
+    { "':.' cast as xs:NMTOKEN", "NMTOKEN::." },
+    { "'1a' cast as xs:Name", "error:FORG0001" },
+    { "'' cast as xs:NCName", "error:FORG0001" },
+    { "'a b' cast as xs:NMTOKEN", "error:FORG0001" },
+    { "'id1' cast as xs:ID", "ID:id1" },
+    { "'r1' cast as xs:IDREF", "IDREF:r1" },
+    { "'e1' cast as xs:ENTITY", "ENTITY:e1" },
+    { "12 cast as xs:NCName", "error:FORG0001" },
+    { "12 cast as xs:token", "token:12" },
+    { "'0aFF' cast as xs:hexBinary", "hexBinary:0AFF" },
+    { "'abc' cast as xs:hexBinary", "error:FORG0001" },
+    { "'zz' cast as xs:hexBinary", "error:FORG0001" },
+    { "'' cast as xs:hexBinary", "hexBinary:" },
+    { "'TWFu' cast as xs:base64Binary", "base64Binary:TWFu" },
+    { "'TQ==' cast as xs:base64Binary", "base64Binary:TQ==" },
+    { "'TWE=' cast as xs:base64Binary", "base64Binary:TWE=" },
+    { "' T Q = = ' cast as xs:base64Binary", "base64Binary:TQ==" },
+    { "'TR==' cast as xs:base64Binary", "error:FORG0001" },
+    { "'TWF=' cast as xs:base64Binary", "error:FORG0001" },
+    { "'TQ=' cast as xs:base64Binary", "error:FORG0001" },
+    { "'T===' cast as xs:base64Binary", "error:FORG0001" },
+    { "'TQ==TQ==' cast as xs:base64Binary", "error:FORG0001" },
+    { "'TW*u' cast as xs:base64Binary", "error:FORG0001" },
+    { "'' cast as xs:base64Binary", "base64Binary:" },
+    { "'+/09' cast as xs:base64Binary", "base64Binary:+/09" },
+    { "xs:hexBinary('4d616e') cast as xs:base64Binary", "base64Binary:TWFu" },
+    { "xs:base64Binary('TWFu') cast as xs:hexBinary", "hexBinary:4D616E" },
+    { "1 cast as xs:hexBinary", "error:XPTY0004" },
+    { "xs:hexBinary('01') cast as xs:double", "error:XPTY0004" },
+    { "xs:hexBinary('01') cast as xs:decimal", "error:XPTY0004" },
+    { "xs:hexBinary('01') cast as xs:boolean", "error:XPTY0004" },
+    { "'' cast as xs:NMTOKEN", "error:FORG0001" },
+    { "'1e2' cast as xs:double", "double:100" },
+    { "'INF' cast as xs:double", "double:INF" },
+    { "'+INF' cast as xs:double", "double:INF" },
+    { "'-INF' cast as xs:float", "float:-INF" },
+    { "'NaN' cast as xs:double", "double:NaN" },
+    { "'inf' cast as xs:double", "error:FORG0001" },
+    { "'nan' cast as xs:double", "error:FORG0001" },
+    { "'0x10' cast as xs:double", "error:FORG0001" },
+    { "'1e' cast as xs:double", "error:FORG0001" },
+    { "'1e+' cast as xs:double", "error:FORG0001" },
+    { "'.' cast as xs:double", "error:FORG0001" },
+    { "'' cast as xs:double", "error:FORG0001" },
+    { "'.5' cast as xs:double", "double:0.5" },
+    { "'5.' cast as xs:double", "double:5" },
+    { "'-1.5E+2' cast as xs:double", "double:-150" },
+    { "'1e400' cast as xs:double", "double:INF" },
+    { "'1.5' cast as xs:float", "float:1.5" },
+    { "'.5' cast as xs:decimal", "decimal:0.5" },
+    { "'5.' cast as xs:decimal", "decimal:5" },
+    { "'1e2' cast as xs:decimal", "error:FORG0001" },
+    { "'http://x' cast as xs:anyURI", "anyURI:http://x" },
+    { "xs:anyURI('u') cast as xs:string", "string:u" },
+    { "xs:anyURI('u') cast as xs:untypedAtomic", "untypedAtomic:u" },
+    { "1 cast as xs:anyURI", "error:XPTY0004" },
+    { "xs:anyURI('1') cast as xs:integer", "error:XPTY0004" },
+    { "'a' cast as xs:QName", "error:UNSUPPORTED" },
+    { "'2020-01-01' cast as xs:date", "error:UNSUPPORTED" },
+    { "1 cast as xs:date", "error:XPTY0004" },
+    { "() cast as xs:integer?", "" },
+    { "() cast as xs:integer", "error:XPTY0004" },
+    { "(1, 2) cast as xs:integer", "error:XPTY0004" },
+    { "@a cast as xs:integer", "integer:1" },
+    { "x[1] cast as xs:string", "string:one" },
+    { "'1' castable as xs:integer", "boolean:true" },
+    { "'a' castable as xs:integer", "boolean:false" },
+    { "() castable as xs:integer", "boolean:false" },
+    { "() castable as xs:integer?", "boolean:true" },
+    { "(1, 2) castable as xs:integer", "boolean:false" },
+    { "1 castable as xs:date", "boolean:false" },
+    { "xs:double('NaN') castable as xs:integer", "boolean:false" },
+    { "'2020-01-01' castable as xs:date", "error:UNSUPPORTED" },
+    { "'1' cast as xs:numeric", "double:1" },
+    { "1 cast as xs:numeric", "integer:1" },
+    { "'a' cast as xs:numeric", "error:FORG0001" },
+    { "'1' castable as xs:numeric", "boolean:true" },
+    { "xs:boolean('1') cast as xs:numeric", "double:1" },
+    { "'a b  c' cast as xs:NMTOKENS", "NMTOKEN:a NMTOKEN:b NMTOKEN:c" },
+    { "' a ' cast as xs:IDREFS", "IDREF:a" },
+    { "'' cast as xs:NMTOKENS", "error:FORG0001" },
+    { "1 cast as xs:NMTOKENS", "error:XPTY0004" },
+    { "'a 1:' cast as xs:IDREFS", "error:FORG0001" },
+    { "'a b' cast as xs:ENTITIES", "ENTITY:a ENTITY:b" },
+    { "1 cast as xs:error", "error:FORG0001" },
+    { "() cast as xs:error?", "" },
+    { "1 castable as xs:error", "boolean:false" },
+    { "xs:integer('5')", "integer:5" },
+    { "xs:byte(300)", "error:FORG0001" },
+    { "xs:integer(())", "" },
+
     /* Not implemented yet */
-    { "1 + 2", "error:UNSUPPORTED" },
-    { "-1", "error:UNSUPPORTED" },
     { "count(x)", "error:UNSUPPORTED" },
-    { "xs:integer('1')", "error:UNSUPPORTED" },
+    { "'a' || 'b'", "error:UNSUPPORTED" },
     { "x ! 1", "error:UNSUPPORTED" },
     { "map { 1: 2 }", "error:UNSUPPORTED" },
     { "(1)?*", "error:UNSUPPORTED" },
     { "(1)(2)", "error:UNSUPPORTED" },
-    { "1 instance of xs:integer", "error:UNSUPPORTED" },
-    { "for $a in x return $a + 1", "error:UNSUPPORTED" },
 };
 
 static xmlDocPtr
@@ -389,6 +758,105 @@ testEffectiveBoolean(void) {
                  XP3_ERR_FORG0006, 0, "hexBinary has none");
     checkBoolean(xp3AtomicNewQName(NULL, NULL, BAD_CAST "q"),
                  XP3_ERR_FORG0006, 0, "QName has none");
+}
+
+/* Build an expression from a head, a part repeated and a tail */
+static char *
+repeatExpr(const char *head, const char *part, size_t count,
+           const char *tail) {
+    size_t size = strlen(head) + strlen(part) * count + strlen(tail) + 1;
+    char *expr = xmlMalloc(size);
+    size_t used;
+    size_t i;
+
+    if (expr == NULL)
+        return(NULL);
+    used = (size_t) snprintf(expr, size, "%s", head);
+    for (i = 0; i < count; i++)
+        used += (size_t) snprintf(expr + used, size - used, "%s", part);
+    snprintf(expr + used, size - used, "%s", tail);
+    return(expr);
+}
+
+static void
+checkRepeated(const char *head, const char *part, size_t count,
+              const char *tail, const char *expected, const char *what) {
+    char *expr = repeatExpr(head, part, count, tail);
+    char actual[64];
+
+    if (expr == NULL) {
+        check(0, what);
+        return;
+    }
+    run(NULL, NULL, expr, actual, sizeof(actual));
+    if (strcmp(actual, expected) != 0) {
+        fprintf(stderr, "FAIL: %s: %s\n", what, actual);
+        failures++;
+    }
+    xmlFree(expr);
+}
+
+/* Values past the limit of decimal digits */
+static void
+testHugeNumbers(void) {
+    char *digits = repeatExpr("", "9", 60000, "");
+    char *expr;
+    char actual[64];
+    size_t size;
+
+    if (digits == NULL) {
+        check(0, "digits allocated");
+        return;
+    }
+    size = 2 * strlen(digits) + 4;
+    expr = xmlMalloc(size);
+    if (expr != NULL) {
+        snprintf(expr, size, "%s * %s", digits, digits);
+        run(NULL, NULL, expr, actual, sizeof(actual));
+        check(strcmp(actual, "error:FOAR0002") == 0,
+              "a product with too many digits overflows");
+        xmlFree(expr);
+    }
+    xmlFree(digits);
+    checkRepeated("'", "7", XP3_DECIMAL_MAX_DIGITS + 10,
+                  "' cast as xs:integer", "error:FOCA0003",
+                  "a string with too many digits for an integer");
+    checkRepeated("'", "7", XP3_DECIMAL_MAX_DIGITS + 10,
+                  "' cast as xs:decimal", "error:FOCA0001",
+                  "a string with too many digits for a decimal");
+}
+
+/*
+ * Operations on values no expression can make yet
+ */
+static void
+testQNameComparison(void) {
+    xp3Atomic *first = xp3AtomicNewQName(BAD_CAST "urn:a", BAD_CAST "p",
+                                         BAD_CAST "l");
+    xp3Atomic *same = xp3AtomicNewQName(BAD_CAST "urn:a", BAD_CAST "q",
+                                        BAD_CAST "l");
+    xp3Atomic *other = xp3AtomicNewQName(NULL, NULL, BAD_CAST "l");
+    xp3Atomic *negated = NULL;
+    int result = -1;
+
+    if ((first == NULL) || (same == NULL) || (other == NULL)) {
+        check(0, "QNames created");
+    } else {
+        check((xp3CompareAtomics(XP3_OP_VAL_EQ, first, same, XP3_XPATH_31,
+                                 &result) == XP3_ERR_OK) && (result == 1),
+              "QNames with the same URI and local name are equal");
+        check((xp3CompareAtomics(XP3_OP_GEN_NE, first, other, XP3_XPATH_31,
+                                 &result) == XP3_ERR_OK) && (result == 1),
+              "QNames in different namespaces differ");
+        check(xp3CompareAtomics(XP3_OP_VAL_LT, first, same, XP3_XPATH_31,
+                                &result) == XP3_ERR_XPTY0004,
+              "QNames have no order");
+        check((xp3NegateNumber(first, &negated) == XP3_ERR_XPTY0004) &&
+              (negated == NULL), "a QName can't be negated");
+    }
+    xp3AtomicUnref(first);
+    xp3AtomicUnref(same);
+    xp3AtomicUnref(other);
 }
 
 /* A literal with more digits than decimals have */
@@ -628,8 +1096,8 @@ testBoolean(void) {
     check(evalBoolean(ctx, "0", &code) == 0, "zero");
     check((evalBoolean(ctx, "(1, 2)", &code) == -1) &&
           (strcmp(code, "FORG0006") == 0), "no effective boolean value");
-    check((evalBoolean(ctx, "1 + 1", &code) == -1) &&
-          (strcmp(code, "UNSUPPORTED") == 0), "an evaluation error");
+    check((evalBoolean(ctx, "1 div 0", &code) == -1) &&
+          (strcmp(code, "FOAR0001") == 0), "an evaluation error");
     check(xp3EvaluateBoolean(NULL, ctx, NULL) == -1, "no expression");
     check(xp3Evaluate(NULL, ctx, NULL) == NULL, "no expression");
 
@@ -654,12 +1122,12 @@ testErrorPositions(void) {
     check(xp3Evaluate(expr, NULL, NULL) == NULL, "no error wanted");
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "1 +\n2", NULL);
+    expr = xp3Compile(NULL, BAD_CAST "1 ||\n2", NULL);
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
           xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED") &&
           (xp3ErrorNamespace(err) == NULL) &&
           (xp3ErrorMessage(err) != NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), "+") != NULL),
+          (strstr((const char *) xp3ErrorMessage(err), "||") != NULL),
           "UNSUPPORTED names the operator, without namespace");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
@@ -753,8 +1221,26 @@ static const char *const xp3AllocExpected =
  * Set up contexts, compile and evaluate. Returns the result, or NULL
  * with *code set to the error code.
  */
+static const char *const xp3AllocOperators =
+    "(1 + 2.5, 7 idiv 2, 1e0 div 4, 99999999999 * 99999999999, -1.5, "
+    "'12' cast as xs:integer, 0.1e0 cast as xs:decimal, "
+    "1.5e20 cast as xs:integer, 'TQ==' cast as xs:base64Binary, "
+    "' a b ' cast as xs:NMTOKENS, '1' cast as xs:numeric, "
+    "'x' castable as xs:integer, x[1] << x[2], x[1] is x[1], "
+    "(x | z) except z, x intersect x[2], @a = 1, @a eq '1', 1 to 2, "
+    "18446744073709551616 to 18446744073709551617, "
+    "x instance of element()+, 1 treat as xs:integer)";
+
+static const char *const xp3AllocOperatorsExpected =
+    "decimal:3.5 integer:3 double:0.25 integer:9999999999800000000001 "
+    "decimal:-1.5 integer:12 decimal:0.1 integer:150000000000000000000 "
+    "base64Binary:TQ== NMTOKEN:a NMTOKEN:b double:1 boolean:false "
+    "boolean:true boolean:true e:x#x1 e:x#x2 e:x#x2 boolean:true "
+    "boolean:true integer:1 integer:2 integer:18446744073709551616 "
+    "integer:18446744073709551617 boolean:true integer:1";
+
 static xp3Sequence *
-allocatingWork(xmlDocPtr doc, char *code, size_t size) {
+allocatingWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     xp3StaticContext *sctx = xp3NewStaticContext();
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     xp3Sequence *bound = NULL;
@@ -774,7 +1260,7 @@ allocatingWork(xmlDocPtr doc, char *code, size_t size) {
     if ((bound == NULL) || (xp3BindVariable(ctx, NULL, BAD_CAST "v",
                                             bound) < 0))
         goto done;
-    expr = xp3Compile(sctx, BAD_CAST xp3AllocExpr, &err);
+    expr = xp3Compile(sctx, BAD_CAST text, &err);
     if (expr != NULL)
         result = xp3Evaluate(expr, ctx, &err);
     snprintf(code, size, "%s", (err != NULL) ?
@@ -790,7 +1276,7 @@ done:
 }
 
 static void
-testAllocationFailures(void) {
+testAllocationFailures(const char *text, const char *expected) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     char actual[2048];
     char code[64];
@@ -799,11 +1285,11 @@ testAllocationFailures(void) {
 
     if (doc == NULL)
         return;
-    result = allocatingWork(doc, code, sizeof(code));
+    result = allocatingWork(doc, text, code, sizeof(code));
     describe(result, actual, sizeof(actual));
-    check((result != NULL) && (strcmp(actual, xp3AllocExpected) == 0),
+    check((result != NULL) && (strcmp(actual, expected) == 0),
           "reference evaluation");
-    if (strcmp(actual, xp3AllocExpected) != 0)
+    if (strcmp(actual, expected) != 0)
         fprintf(stderr, "  actual: %s (%s)\n", actual, code);
     xp3FreeSequence(result);
 
@@ -818,14 +1304,13 @@ testAllocationFailures(void) {
         int injected;
 
         xp3TestAllocFailAt(i);
-        result = allocatingWork(doc, code, sizeof(code));
+        result = allocatingWork(doc, text, code, sizeof(code));
         injected = xp3TestAllocFailed();
         xp3TestAllocFailAt(-1);
 
         describe(result, actual, sizeof(actual));
         if (!injected) {
-            check((result != NULL) &&
-                  (strcmp(actual, xp3AllocExpected) == 0),
+            check((result != NULL) && (strcmp(actual, expected) == 0),
                   "evaluation complete after allocation failures");
             xp3FreeSequence(result);
             break;
@@ -833,7 +1318,7 @@ testAllocationFailures(void) {
         /* Either a clean failure or, if the failure was absorbed, the
          * right result */
         if (result != NULL)
-            check(strcmp(actual, xp3AllocExpected) == 0,
+            check(strcmp(actual, expected) == 0,
                   "a result despite a failed allocation is right");
         else
             check((strcmp(code, "NO_MEMORY") == 0) ||
@@ -853,6 +1338,8 @@ main(void) {
     testCases();
     testEffectiveBoolean();
     testHugeLiteral();
+    testHugeNumbers();
+    testQNameComparison();
     testManyBindings();
     testFocus();
     testVariables();
@@ -860,7 +1347,8 @@ main(void) {
     testBoolean();
     testErrorPositions();
     testSequences();
-    testAllocationFailures();
+    testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
+    testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
 
     if (failures == 0)
         printf("testeval: OK\n");
