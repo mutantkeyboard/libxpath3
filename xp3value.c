@@ -241,10 +241,13 @@ xp3AtomicNewQName(const xmlChar *uri, const xmlChar *prefix,
  */
 xp3Atomic *
 xp3AtomicRef(xp3Atomic *atomic) {
-    if (atomic != NULL)
+    if ((atomic != NULL) && (atomic->refs >= 0))
         atomic->refs++;
     return(atomic);
 }
+
+static void
+atomicFree(xp3Atomic *atomic);
 
 /**
  * Release a reference to an atomic value, freeing it with the last
@@ -254,8 +257,13 @@ xp3AtomicRef(xp3Atomic *atomic) {
  */
 void
 xp3AtomicUnref(xp3Atomic *atomic) {
-    if ((atomic == NULL) || (--atomic->refs > 0))
+    if ((atomic == NULL) || (atomic->refs < 0) || (--atomic->refs > 0))
         return;
+    atomicFree(atomic);
+}
+
+static void
+atomicFree(xp3Atomic *atomic) {
     switch (xp3TypeRepresentation(atomic->type)) {
         case XP3_REP_STRING:
             xmlFree(atomic->u.str);
@@ -424,7 +432,7 @@ xp3ValueRange(int64_t first, int64_t last, xp3Value **res) {
  */
 xp3Value *
 xp3ValueRef(xp3Value *value) {
-    if ((value != NULL) && (value != &xp3EmptyValue))
+    if ((value != NULL) && (value != &xp3EmptyValue) && (value->refs >= 0))
         value->refs++;
     return(value);
 }
@@ -439,7 +447,7 @@ void
 xp3ValueUnref(xp3Value *value) {
     size_t i;
 
-    if ((value == NULL) || (value == &xp3EmptyValue) ||
+    if ((value == NULL) || (value == &xp3EmptyValue) || (value->refs < 0) ||
         (--value->refs > 0))
         return;
     switch (value->shape) {
@@ -786,4 +794,236 @@ xp3AtomicToString(const xp3Atomic *atomic) {
         default:
             return(NULL);
     }
+}
+
+/*
+ * Constants
+ *
+ * A constant is a value that compiled expressions keep and that several
+ * threads may evaluate at once. Its count and those of its atomic
+ * values are XP3_REFS_CONSTANT, which the reference functions leave
+ * alone, so using a constant writes no memory. Only
+ * xp3ValueFreeConstant() frees it.
+ */
+
+/* A copy of an atomic value with a count of its own */
+static xp3Atomic *
+atomicCopy(const xp3Atomic *atomic) {
+    xp3Decimal *dec;
+
+    switch (xp3TypeRepresentation(atomic->type)) {
+        case XP3_REP_STRING:
+            return(xp3AtomicNewString(atomic->type, atomic->u.str,
+                                      strlen((const char *) atomic->u.str)));
+        case XP3_REP_BOOLEAN:
+            return(xp3AtomicNewBoolean(atomic->u.boolean));
+        case XP3_REP_DECIMAL:
+            if (xp3DecimalCopy(atomic->u.dec, &dec) != XP3_ERR_OK)
+                return(NULL);
+            return(xp3AtomicNewDecimal(atomic->type, dec));
+        case XP3_REP_FLOAT:
+            return(xp3AtomicNewFloat(atomic->u.f));
+        case XP3_REP_DOUBLE:
+            return(xp3AtomicNewDouble(atomic->u.d));
+        case XP3_REP_BINARY:
+            return(xp3AtomicNewBinary(atomic->type, atomic->u.bin.data,
+                                      atomic->u.bin.len));
+        case XP3_REP_QNAME:
+            return(xp3AtomicNewQName(atomic->u.qname.uri,
+                                     atomic->u.qname.prefix,
+                                     atomic->u.qname.local));
+        default:
+            return(NULL);
+    }
+}
+
+/* An item of a constant: an atomic value copied and made constant */
+static int
+constantItem(xp3Item item, xp3Item *copy) {
+    xp3Atomic *atomic;
+
+    if (item.kind != XP3_ITEM_ATOMIC)
+        return(-1);
+    atomic = atomicCopy(item.u.atomic);
+    if (atomic == NULL)
+        return(-1);
+    atomic->refs = XP3_REFS_CONSTANT;
+    *copy = xp3ItemFromAtomic(atomic);
+    return(0);
+}
+
+/**
+ * Make a constant from a value: a deep copy whose atomic values belong
+ * to it alone, and whose counts never change, so that threads can
+ * share it. Values with nodes, functions, maps or arrays can't be
+ * constants.
+ *
+ * @param value  the value, atomic values only
+ * @returns the constant, to be freed with xp3ValueFreeConstant(), or
+ *          NULL if the value has other items or memory allocation
+ *          failed
+ */
+xp3Value *
+xp3ValueMakeConstant(const xp3Value *value) {
+    xp3Value *copy;
+    size_t i;
+
+    if (value == NULL)
+        return(NULL);
+    if (value->shape == XP3_SEQ_EMPTY)
+        return(&xp3EmptyValue);
+    copy = valueAlloc(value->shape);
+    if (copy == NULL)
+        return(NULL);
+    copy->refs = XP3_REFS_CONSTANT;
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            if (constantItem(value->u.single, &copy->u.single) < 0) {
+                xmlFree(copy);
+                return(NULL);
+            }
+            break;
+        case XP3_SEQ_ARRAY:
+            copy->u.array.items = xmlMalloc(value->u.array.count *
+                                            sizeof(xp3Item));
+            if (copy->u.array.items == NULL) {
+                xmlFree(copy);
+                return(NULL);
+            }
+            for (i = 0; i < value->u.array.count; i++) {
+                if (constantItem(value->u.array.items[i],
+                                 &copy->u.array.items[i]) < 0) {
+                    copy->u.array.count = i;
+                    xp3ValueFreeConstant(copy);
+                    return(NULL);
+                }
+            }
+            copy->u.array.count = value->u.array.count;
+            break;
+        default:
+            copy->u.range = value->u.range;
+            break;
+    }
+    return(copy);
+}
+
+/* Whether an item is an atomic value of a constant */
+static int
+isConstantItem(xp3Item item) {
+    return((item.kind == XP3_ITEM_ATOMIC) &&
+           (item.u.atomic->refs == XP3_REFS_CONSTANT));
+}
+
+/* An item with its own count: a constant atomic value copied, any
+ * other item with a new reference */
+static int
+detachItem(xp3Item item, xp3Item *copy) {
+    xp3Atomic *atomic;
+
+    if (!isConstantItem(item)) {
+        *copy = xp3ItemRef(item);
+        return(0);
+    }
+    atomic = atomicCopy(item.u.atomic);
+    if (atomic == NULL)
+        return(-1);
+    *copy = xp3ItemFromAtomic(atomic);
+    return(0);
+}
+
+/**
+ * Make a value independent of the constants of a compiled expression,
+ * so that it can outlive the expression: constants, and atomic values
+ * of constants, are replaced by copies. Takes over the reference.
+ *
+ * @param value  the value
+ * @returns the value itself if it has no constant parts, otherwise a
+ *          copy with one reference; NULL if memory allocation failed
+ */
+xp3Value *
+xp3ValueDetach(xp3Value *value) {
+    xp3Value *copy;
+    size_t count;
+    size_t i;
+    int found = (value->refs == XP3_REFS_CONSTANT);
+
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            found |= isConstantItem(value->u.single);
+            break;
+        case XP3_SEQ_ARRAY:
+            for (i = 0; (i < value->u.array.count) && !found; i++)
+                found = isConstantItem(value->u.array.items[i]);
+            break;
+        default:
+            break;
+    }
+    if (!found)
+        return(value);
+
+    copy = valueAlloc(value->shape);
+    if (copy == NULL) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            if (detachItem(value->u.single, &copy->u.single) < 0) {
+                xmlFree(copy);
+                copy = NULL;
+            }
+            break;
+        case XP3_SEQ_ARRAY:
+            count = value->u.array.count;
+            copy->u.array.items = xmlMalloc(count * sizeof(xp3Item));
+            if (copy->u.array.items == NULL) {
+                xmlFree(copy);
+                copy = NULL;
+                break;
+            }
+            for (i = 0; i < count; i++) {
+                if (detachItem(value->u.array.items[i],
+                               &copy->u.array.items[i]) < 0) {
+                    copy->u.array.count = i;
+                    xp3ValueUnref(copy);
+                    copy = NULL;
+                    break;
+                }
+            }
+            if (copy != NULL)
+                copy->u.array.count = count;
+            break;
+        default:
+            copy->u.range = value->u.range;
+            break;
+    }
+    xp3ValueUnref(value);
+    return(copy);
+}
+
+/**
+ * Free a constant made by xp3ValueMakeConstant(). NULL and the shared
+ * empty sequence are ignored.
+ *
+ * @param value  the constant
+ */
+void
+xp3ValueFreeConstant(xp3Value *value) {
+    size_t i;
+
+    if ((value == NULL) || (value == &xp3EmptyValue))
+        return;
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            atomicFree(value->u.single.u.atomic);
+            break;
+        case XP3_SEQ_ARRAY:
+            for (i = 0; i < value->u.array.count; i++)
+                atomicFree(value->u.array.items[i].u.atomic);
+            xmlFree(value->u.array.items);
+            break;
+        default:
+            break;
+    }
+    xmlFree(value);
 }

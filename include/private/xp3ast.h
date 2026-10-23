@@ -110,8 +110,11 @@ typedef enum {
                                  * children: parameter types, return type */
     XP3_AST_MAP_TEST,           /* op: 0 for map(*), 1 typed:
                                  * children: key type, value type */
-    XP3_AST_ARRAY_TEST          /* op: 0 for array(*), 1 typed:
+    XP3_AST_ARRAY_TEST,         /* op: 0 for array(*), 1 typed:
                                  * child: member type */
+
+    /* Made by static analysis */
+    XP3_AST_CONSTANT            /* a folded subexpression: value */
 } xp3AstKind;
 
 /*
@@ -231,6 +234,15 @@ typedef enum {
 } xp3Occurrence;
 
 struct _xp3FuncInfo;
+struct _xp3Value;
+
+/*
+ * Flags static analysis sets in a node
+ */
+
+/* A step of a path, or the expression after a "/", whose result is in
+ * document order without duplicates, so evaluation needs no sort */
+#define XP3_AST_SORTED (1 << 0)
 
 typedef struct _xp3AstNode xp3AstNode;
 typedef struct _xp3AstBlock xp3AstBlock;
@@ -252,6 +264,9 @@ struct _xp3AstNode {
     xp3AstNode *last;       /* last child */
     xp3AstNode *next;       /* next sibling */
     const struct _xp3FuncInfo *func; /* see the node kinds */
+    struct _xp3Value *value;    /* CONSTANT: owned by the compiled
+                                 * expression, see xp3static.h */
+    int flags;                  /* XP3_AST_SORTED */
 };
 
 /*

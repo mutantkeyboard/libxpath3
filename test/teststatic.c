@@ -54,6 +54,8 @@ testContext(xp3LanguageLevel level) {
         xp3FreeStaticContext(ctx);
         return(NULL);
     }
+    /* These tests are about analysis; testOptimize() covers folding */
+    ctx->noOptimize = 1;
     return(ctx);
 }
 
@@ -552,6 +554,192 @@ testAllocationFailures(void) {
     xp3FreeStaticContext(ctx);
 }
 
+/*
+ * Optimizing: constant folding, pruning, path order and rewrites
+ */
+
+static const struct {
+    const char *expr;
+    const char *tree;
+} optimizeCases[] = {
+    /* Folding */
+    { "1", "(constant integer:1)" },
+    { "1 + 2", "(constant integer:3)" },
+    { "(1, 'a', 2.5)", "(constant integer:1 string:a decimal:2.5)" },
+    { "(1, ())", "(constant integer:1)" },
+    { "()", "(empty)" },
+    { "1 to 1000000", "(constant integer:1..1000000)" },
+    { "(1 to 5)[. > 3]", "(constant integer:4 integer:5)" },
+    { "for $i in 1 to 3 return $i * 2",
+      "(constant integer:2 integer:4 integer:6)" },
+    { "for $x in 1 return (for $y in 2 return $x + $y)",
+      "(constant integer:3)" },
+    { "'12' cast as xs:integer", "(constant integer:12)" },
+    { "1 instance of xs:integer", "(constant boolean:true)" },
+    { "if (0) then 1 div 0 else 1", "(constant integer:1)" },
+
+    /* Not closed: only the closed parts fold */
+    { "$v + 1", "(binary + (var v) (constant integer:1))" },
+    { ". + 1", "(binary + (context) (constant integer:1))" },
+    { "for $i in 1 to 3 return $v",
+      "(for (bind i (constant integer:1..3)) (var v))" },
+    { "let $a := 1 return $a + $v",
+      "(let (bind a (constant integer:1)) (binary + (var a) (var v)))" },
+    { "for $x in $v return (for $y in 2 return $y)",
+      "(for (bind x (var v)) (constant integer:2))" },
+    { "for $x in $v return (for $y in 2 return $x + $y)",
+      "(for (bind x (var v)) (for (bind y (constant integer:2)) "
+      "(binary + (var x) (var y))))" },
+    { "count(1 + 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}count "
+      "(constant integer:2))" },
+
+    /* Errors stay for evaluation to raise */
+    { "1 div 0", "(binary div (constant integer:1) (constant integer:0))" },
+    { "(1, 2) + 1", "(binary + (constant integer:1 integer:2) "
+      "(constant integer:1))" },
+    { "'a' cast as xs:integer", "(cast-as (constant string:a) "
+      "(type (atomic Q{http://www.w3.org/2001/XMLSchema}integer)))" },
+
+    /* Pruning */
+    { "if (1) then $v else 2", "(var v)" },
+    { "if (0) then $v else 2", "(constant integer:2)" },
+    { "if ($v) then 1 + 1 else 3",
+      "(if (var v) (constant integer:2) (constant integer:3))" },
+    { "if ((1, 2)) then $v else 2",
+      "(if (constant integer:1 integer:2) (var v) (constant integer:2))" },
+    { "$v and 0", "(constant boolean:false)" },
+    { "0 and $v", "(constant boolean:false)" },
+    { "$v or 'x'", "(constant boolean:true)" },
+    { "$v and 1", "(binary and (var v) (constant integer:1))" },
+    { "$v or ''", "(binary or (var v) (constant string:))" },
+
+    /* Path order and the rewrite */
+    { "/a/b", "(path root (step child sorted (name a)) "
+      "(step child sorted (name b)))" },
+    { "a/b", "(path (step child (name a)) (step child sorted (name b)))" },
+    { "a/@b", "(path (step child (name a)) "
+      "(step attribute sorted (name b)))" },
+    { "a//b", "(path (step child (name a)) "
+      "(step descendant sorted (name b)))" },
+    { "//x", "(path root (step descendant sorted (name x)))" },
+    { "//x[@id]", "(path root (step descendant sorted (name x) "
+      "(predicate (path (step attribute (name id))))))" },
+    { "//x[@id = 'a']/y",
+      "(path root (step descendant sorted (name x) (predicate "
+      "(binary = (path (step attribute (name id))) (constant string:a)))) "
+      "(step child (name y)))" },
+    { "//x[1]", "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (constant integer:1))))" },
+    { "//x[$v]", "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (var v))))" },
+    { "//@x", "(path root (step descendant-or-self sorted (kind node)) "
+      "(step attribute (name x)))" },
+    { "a/..", "(path (step child (name a)) (step parent (kind node)))" },
+    { "a/self::b",
+      "(path (step child (name a)) (step self sorted (name b)))" },
+    { "//x[. instance of element()]",
+      "(path root (step descendant sorted (name x) (predicate (instance-of "
+      "(context) (type (kind element))))))" },
+    { "$v/a/b", "(path (var v) (step child (name a)) (step child (name b)))" },
+    { ".//x", "(path (context) (step descendant (name x)))" },
+    { "(a, b)/c", "(path (sequence (path (step child (name a))) "
+      "(path (step child (name b)))) (step child (name c)))" },
+    { "/a/following-sibling::b",
+      "(path root (step child sorted (name a)) "
+      "(step following-sibling (name b)))" },
+};
+
+/* A context that optimizes, with $v declared */
+static xp3StaticContext *
+optimizingContext(void) {
+    xp3StaticContext *ctx = xp3NewStaticContext();
+
+    if ((ctx == NULL) || (xp3DeclareVariable(ctx, NULL, BAD_CAST "v") < 0)) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    return(ctx);
+}
+
+static void
+testOptimize(void) {
+    xp3StaticContext *ctx = optimizingContext();
+    xp3Error *err = NULL;
+    xp3Expr *compiled;
+    size_t i;
+
+    if (ctx == NULL) {
+        check(0, "optimizing context created");
+        return;
+    }
+    for (i = 0; i < sizeof(optimizeCases) / sizeof(optimizeCases[0]); i++) {
+        xmlChar *tree = compileToString(ctx, optimizeCases[i].expr, &err);
+
+        if ((tree == NULL) ||
+            !xmlStrEqual(tree, BAD_CAST optimizeCases[i].tree)) {
+            fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
+                    optimizeCases[i].expr, optimizeCases[i].tree,
+                    (tree != NULL) ? (const char *) tree :
+                    (const char *) xp3ErrorCode(err));
+            failures++;
+        }
+        xmlFree(tree);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+
+    /* Folds that would take too long or build too much are left */
+    compiled = xp3Compile(ctx, BAD_CAST "(1 to 20000)[. > 0]", NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_FILTER),
+          "a fold with too many items is left");
+    xp3FreeExpr(compiled);
+    compiled = xp3Compile(ctx, BAD_CAST "(1 to 200)[(1 to 200)[. > 0] = .]",
+                          NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_FILTER),
+          "a fold with too many steps is left");
+    xp3FreeExpr(compiled);
+
+    /* Without optimizing, nothing changes */
+    ctx->noOptimize = 1;
+    compiled = xp3Compile(ctx, BAD_CAST "1 + 2", NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (compiled->constantCount == 0), "optimizing can be turned off");
+    xp3FreeExpr(compiled);
+    xp3FreeStaticContext(ctx);
+}
+
+/*
+ * Many closed subexpressions that fail to fold, each nearly at the
+ * budget: the total budget keeps compiling fast.
+ */
+static void
+testFoldBudget(void) {
+    size_t parts = 300;
+    const char *part = "(1 to 9000)[. > 0][9000] div 0, ";
+    size_t size = strlen(part) * parts + 8;
+    char *expr = xmlMalloc(size);
+    xp3Expr *compiled;
+    size_t used = 0;
+    size_t i;
+
+    if (expr == NULL) {
+        check(0, "budget expression allocated");
+        return;
+    }
+    used += (size_t) snprintf(expr + used, size - used, "(");
+    for (i = 0; i < parts; i++)
+        used += (size_t) snprintf(expr + used, size - used, "%s", part);
+    snprintf(expr + used, size - used, "1)");
+    compiled = xp3Compile(NULL, BAD_CAST expr, NULL);
+    check(compiled != NULL, "many failing folds still compile");
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -562,6 +750,8 @@ main(void) {
     testSlots();
     testDeclaredVariables();
     testApi();
+    testOptimize();
+    testFoldBudget();
     testAllocationFailures();
 
     if (failures == 0)

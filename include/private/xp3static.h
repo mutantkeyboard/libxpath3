@@ -19,6 +19,7 @@
 #include <libxpath3/xpath3.h>
 #include "private/xp3ast.h"
 #include "private/xp3types.h"
+#include "private/xp3value.h"
 
 /*
  * The built-in schema types an ATOMIC_TYPE node can name, stored in its
@@ -56,6 +57,9 @@ struct _xp3Expr {
     int variableCount;
     xp3ExprVariable *variables; /* declared variables used, in the order
                                  * of their first use */
+    int constantCount;
+    xp3Value **constants;       /* the values of CONSTANT nodes, see
+                                 * xp3ValueMakeConstant() */
 };
 
 xp3Expr *

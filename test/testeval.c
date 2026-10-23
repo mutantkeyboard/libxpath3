@@ -20,11 +20,13 @@
 #include <libxml/xmlmemory.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3context.h"
 #include "private/xp3decimal.h"
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
 #include "private/xp3nodes.h"
 #include "private/xp3ops.h"
+#include "private/xp3static.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
@@ -706,21 +708,73 @@ parseDoc(const char *xml) {
     return(doc);
 }
 
+/* Every case optimized, as by default, and without optimizing: the
+ * results must be the same */
 static void
 testCases(void) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
     size_t i;
 
-    if ((doc == NULL) || (ctx == NULL) ||
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
         (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
         check(0, "dynamic context set up");
     } else {
-        for (i = 0; i < sizeof(xp3Cases) / sizeof(xp3Cases[0]); i++)
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3Cases) / sizeof(xp3Cases[0]); i++) {
             checkEval(NULL, ctx, xp3Cases[i].expr, xp3Cases[i].expected);
+            checkEval(plain, ctx, xp3Cases[i].expr, xp3Cases[i].expected);
+        }
     }
+    xp3FreeStaticContext(plain);
     xp3FreeDynamicContext(ctx);
     xmlFreeDoc(doc);
+}
+
+/*
+ * Constants are shared by every evaluation of a compiled expression,
+ * which may run in several threads: their counts must never change,
+ * and results must outlive the expression.
+ */
+static void
+testConstants(void) {
+    xp3Expr *expr = xp3Compile(NULL, BAD_CAST "(1, 'a', 2.5)", NULL);
+    xp3Sequence *kept = NULL;
+    xp3Item item;
+    char actual[128];
+    int i;
+
+    if ((expr == NULL) || (expr->constantCount != 1) ||
+        (expr->ast->root->kind != XP3_AST_CONSTANT)) {
+        check(0, "the expression is one constant");
+        xp3FreeExpr(expr);
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        xp3Sequence *result = xp3Evaluate(expr, NULL, NULL);
+
+        if (result == NULL) {
+            check(0, "a constant evaluates");
+            break;
+        }
+        if (kept == NULL)
+            kept = result;
+        else
+            xp3FreeSequence(result);
+    }
+    check(expr->constants[0]->refs == XP3_REFS_CONSTANT,
+          "the count of a constant never changes");
+    check((xp3ValueItemAt(expr->constants[0], 1, &item) > 0) &&
+          (item.u.atomic->refs == XP3_REFS_CONSTANT),
+          "nor those of its atomic values");
+    check((kept != NULL) && (kept != expr->constants[0]),
+          "a result is not the constant itself");
+    xp3FreeExpr(expr);
+    describe(kept, actual, sizeof(actual));
+    check(strcmp(actual, "integer:1 string:a decimal:2.5") == 0,
+          "a result outlives its expression");
+    xp3FreeSequence(kept);
 }
 
 /*
@@ -1064,7 +1118,10 @@ testLimits(void) {
     checkEval(NULL, ctx, "(1, 2, 3)", "error:LIMIT");
     checkEval(NULL, ctx, "*", "error:LIMIT");
     checkEval(NULL, ctx, "//x", "error:LIMIT");
-    checkEval(NULL, ctx, "(1, 2, 3)[2]", "error:LIMIT");
+    checkEval(NULL, ctx, "(1, 2, 3)", "error:LIMIT");
+    /* Folded to one item, so no sequence of three is built */
+    checkEval(NULL, ctx, "(1, 2, 3)[2]", "integer:2");
+    checkEval(NULL, ctx, "(x, x)[1]", "error:LIMIT");
     checkEval(NULL, ctx, "for $i in (1, 2) return ($i, $i)", "error:LIMIT");
 
 done:
@@ -1347,6 +1404,7 @@ main(void) {
     xmlInitParser();
 
     testCases();
+    testConstants();
     testEffectiveBoolean();
     testHugeLiteral();
     testHugeNumbers();

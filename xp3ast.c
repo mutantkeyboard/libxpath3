@@ -20,6 +20,8 @@
 #include <libxml/xmlstring.h>
 
 #include "private/xp3ast.h"
+#include "private/xp3types.h"
+#include "private/xp3value.h"
 
 /* Size of the first block, and the limit for doubling */
 #define XP3_AST_BLOCK_MIN 4096
@@ -91,7 +93,8 @@ static const char *const xp3AstKindNames[] = {
     [XP3_AST_ATOMIC_TYPE]         = "atomic",
     [XP3_AST_FUNCTION_TEST]       = "function-test",
     [XP3_AST_MAP_TEST]            = "map-test",
-    [XP3_AST_ARRAY_TEST]          = "array-test"
+    [XP3_AST_ARRAY_TEST]          = "array-test",
+    [XP3_AST_CONSTANT]            = "constant"
 };
 
 static const char *const xp3AstOpNames[] = {
@@ -432,6 +435,42 @@ bufQuoted(xp3AstBuf *buf, const xmlChar *str) {
     bufStr(buf, "\"");
 }
 
+/* The items of a constant as type:value, a range as integer:a..b */
+static void
+bufValue(xp3AstBuf *buf, const xp3Value *value) {
+    char num[64];
+    size_t i;
+
+    if (value == NULL)
+        return;
+    if (value->shape == XP3_SEQ_RANGE) {
+        snprintf(num, sizeof(num), " integer:%lld..%lld",
+                 (long long) value->u.range.first,
+                 (long long) value->u.range.last);
+        bufStr(buf, num);
+        return;
+    }
+    for (i = 0; i < xp3ValueCount(value); i++) {
+        xp3Item item;
+        xmlChar *str;
+
+        if ((xp3ValueItemAt(value, i, &item) <= 0) ||
+            (item.kind != XP3_ITEM_ATOMIC)) {
+            buf->failed = 1;
+            return;
+        }
+        str = xp3AtomicToString(item.u.atomic);
+        bufStr(buf, " ");
+        bufXmlStr(buf, xp3TypeLocalName(item.u.atomic->type));
+        bufStr(buf, ":");
+        if (str == NULL)
+            buf->failed = 1;
+        bufXmlStr(buf, str);
+        xmlFree(str);
+        xp3ItemUnref(item);
+    }
+}
+
 static void
 bufNode(xp3AstBuf *buf, const xp3AstNode *node) {
     const xp3AstNode *child;
@@ -545,9 +584,14 @@ bufNode(xp3AstBuf *buf, const xp3AstNode *node) {
             if (node->op == 0)
                 bufStr(buf, " *");
             break;
+        case XP3_AST_CONSTANT:
+            bufValue(buf, node->value);
+            break;
         default:
             break;
     }
+    if (node->flags & XP3_AST_SORTED)
+        bufStr(buf, " sorted");
 
     for (child = node->first; child != NULL; child = child->next) {
         bufStr(buf, " ");

@@ -93,8 +93,9 @@ libxml2:master:
 # listed in qt3/known-failures-*.txt; any other failure, or a known failure
 # that now passes, fails the job. It then evaluates the tests as a report:
 # while evaluation is incomplete, its failures don't fail the job, but a
-# crash does. It runs under ASan and UBSan, so every QT3 expression is
-# also a memory-safety test.
+# crash does, and so does a test whose outcome changes when compiled
+# without optimizing (-c). It runs under ASan and UBSan, so every QT3
+# expression is also a memory-safety test.
 qt3:
   stage: build
   variables:
@@ -113,7 +114,7 @@ qt3:
       done
     - >
       for spec in XP20 XP30 XP31; do
-      ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
+      ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
       tail -n 1 qt3-eval.txt;
       done
 
@@ -141,7 +142,7 @@ coverage:
       done
     - >
       for spec in XP20 XP30 XP31; do
-      ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
+      ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
       tail -n 1 qt3-eval.txt;
       done
     - mkdir coverage

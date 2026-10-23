@@ -43,6 +43,7 @@
 #include <libxml/xmlstring.h>
 
 #include "private/xp3context.h"
+#include "private/xp3eval.h"
 #include "private/xp3error.h"
 #include "private/xp3func.h"
 #include "private/xp3parser.h"
@@ -86,6 +87,9 @@ typedef struct {
                                      * binding in scope */
     xp3Bindings declared;           /* declared variables in use */
     int slotCount;
+    xp3Value **constants;           /* folded values, see optimize() */
+    int constantCount;
+    int constantMax;
     struct {
         const xmlChar *from;        /* a URI in the static context */
         const xmlChar *copy;        /* its copy in the tree */
@@ -826,8 +830,535 @@ analyzeNode(xp3Analysis *st, xp3AstNode *node) {
 }
 
 /*
+ * Constant folding
+ *
+ * A subexpression is closed if it needs nothing from outside itself:
+ * no focus (an inner focus, as in a predicate, doesn't count), no
+ * variable bound outside it, and no function call. Each largest closed
+ * subexpression is evaluated once, here, and replaced by a CONSTANT
+ * node. A fold that raises an error, or needs more than its budget, is
+ * dropped and the subexpression kept, so dynamic errors are still
+ * raised when, and only if, evaluation reaches them (XPath 3.1,
+ * 2.3.4). Folding never makes compiling fail.
+ */
+
+/* The most steps and items one fold may take, and all folds of one
+ * expression together */
+#define XP3_FOLD_OPERATIONS 10000
+#define XP3_FOLD_ITEMS 10000
+#define XP3_FOLD_TOTAL 1000000
+
+/* A flag for the walk below: the node is closed */
+#define XP3_FOLD_CLOSED (1 << 8)
+
+/* What a subexpression needs from outside, see foldWalk() */
+typedef struct {
+    int usesFocus;
+    int hasCall;                /* also anything not foldable yet */
+    int external;               /* uses a declared variable */
+    int minRef;                 /* lowest slot of a variable used */
+    int minBind;                /* lowest slot of a variable bound */
+} xp3FoldInfo;
+
+/* State of the optimizing passes */
+typedef struct {
+    xp3Analysis *st;
+    char *external;             /* slots of declared variables */
+    xp3Value **slots;           /* lent to each fold, all NULL */
+    uint64_t budget;            /* steps left for all folds */
+} xp3Optimizer;
+
+/*
+ * Variables bound inside a subexpression get their slots while it is
+ * analysed, after those of every variable visible from outside it. So
+ * a subexpression refers to no outer variable if no slot it refers to
+ * is lower than the lowest it binds.
+ */
+static int
+foldClosed(const xp3FoldInfo *info) {
+    return(!info->usesFocus && !info->hasCall && !info->external &&
+           (info->minRef >= info->minBind));
+}
+
+/* Kinds that are expressions of their own and can become constants */
+static int
+isFoldable(xp3AstKind kind) {
+    switch (kind) {
+        case XP3_AST_INTEGER:
+        case XP3_AST_DECIMAL:
+        case XP3_AST_DOUBLE:
+        case XP3_AST_STRING:
+        case XP3_AST_SEQUENCE:
+        case XP3_AST_FOR:
+        case XP3_AST_LET:
+        case XP3_AST_SOME:
+        case XP3_AST_EVERY:
+        case XP3_AST_IF:
+        case XP3_AST_BINARY:
+        case XP3_AST_UNARY:
+        case XP3_AST_INSTANCE_OF:
+        case XP3_AST_TREAT_AS:
+        case XP3_AST_CASTABLE_AS:
+        case XP3_AST_CAST_AS:
+        case XP3_AST_PATH:
+        case XP3_AST_FILTER:
+            return(1);
+        default:
+            return(0);
+    }
+}
+
+/* Turn a node into a CONSTANT node holding a constant value */
+static void
+makeConstantNode(xp3AstNode *node, xp3Value *value) {
+    node->kind = XP3_AST_CONSTANT;
+    node->op = 0;
+    node->text = NULL;
+    node->prefix = NULL;
+    node->uri = NULL;
+    node->first = NULL;
+    node->last = NULL;
+    node->func = NULL;
+    node->flags = 0;
+    node->value = value;
+}
+
+/* Keep a constant in the list the compiled expression frees. Takes
+ * over the constant, which is freed on failure. */
+static int
+keepConstant(xp3Analysis *st, xp3Value *constant) {
+    if (st->constantCount >= st->constantMax) {
+        int max = (st->constantMax > 0) ? st->constantMax * 2 : 16;
+        xp3Value **constants;
+
+        if ((st->constantMax > INT_MAX / 2) ||
+            ((size_t) max > SIZE_MAX / sizeof(xp3Value *))) {
+            xp3ValueFreeConstant(constant);
+            return(-1);
+        }
+        constants = xmlRealloc(st->constants,
+                               (size_t) max * sizeof(xp3Value *));
+        if (constants == NULL) {
+            xp3ValueFreeConstant(constant);
+            return(-1);
+        }
+        st->constants = constants;
+        st->constantMax = max;
+    }
+    st->constants[st->constantCount++] = constant;
+    return(0);
+}
+
+/* Replace a node by a value, made constant. Returns 0, or -1 if memory
+ * ran out, which only means the node stays as it is. */
+static int
+replaceByValue(xp3Analysis *st, xp3AstNode *node, const xp3Value *value) {
+    xp3Value *constant = xp3ValueMakeConstant(value);
+
+    if ((constant == NULL) || (keepConstant(st, constant) < 0))
+        return(-1);
+    makeConstantNode(node, constant);
+    return(0);
+}
+
+/*
+ * Fold a closed subexpression. If it can't be folded, fold the closed
+ * subexpressions inside it, which are all closed too.
+ */
+static void
+tryFold(xp3Optimizer *opt, xp3AstNode *node) {
+    xp3AstNode *child;
+
+    if (node->kind == XP3_AST_CONSTANT)
+        return;
+    if (isFoldable(node->kind) && (opt->budget > 0)) {
+        uint64_t limit = (opt->budget < XP3_FOLD_OPERATIONS) ?
+                         opt->budget : XP3_FOLD_OPERATIONS;
+        uint64_t used = 0;
+        xp3Value *value;
+        xp3ErrCode err;
+
+        err = xp3EvalConstant(node, opt->slots, opt->st->slotCount,
+                              opt->st->level, limit, XP3_FOLD_ITEMS, &value,
+                              &used);
+        opt->budget -= (used < opt->budget) ? used : opt->budget;
+        if (err == XP3_ERR_OK) {
+            int ret = replaceByValue(opt->st, node, value);
+
+            xp3ValueUnref(value);
+            if (ret == 0)
+                return;
+        }
+    }
+    for (child = node->first; child != NULL; child = child->next)
+        tryFold(opt, child);
+}
+
+/* Whether the focus of a child is the focus of its parent: not for
+ * the steps of a path after the first, nor for predicates */
+static int
+sharesFocus(const xp3AstNode *parent, const xp3AstNode *child) {
+    switch (parent->kind) {
+        case XP3_AST_PATH:
+        case XP3_AST_FILTER:
+            return(child == parent->first);
+        case XP3_AST_STEP:
+            return(0);
+        default:
+            return(1);
+    }
+}
+
+/* Whether a kind uses the focus itself, or isn't foldable yet */
+static void
+nodeInfo(const xp3Optimizer *opt, const xp3AstNode *node,
+         xp3FoldInfo *info) {
+    info->usesFocus = 0;
+    info->hasCall = 0;
+    info->external = 0;
+    info->minRef = INT_MAX;
+    info->minBind = INT_MAX;
+
+    switch (node->kind) {
+        case XP3_AST_CONTEXT_ITEM:
+        case XP3_AST_STEP:
+            info->usesFocus = 1;
+            break;
+        case XP3_AST_PATH:
+            info->usesFocus = (node->op == XP3_PATH_ROOT);
+            break;
+        case XP3_AST_VARREF:
+            if (opt->external[node->op])
+                info->external = 1;
+            else
+                info->minRef = node->op;
+            break;
+        case XP3_AST_BINDING:
+        case XP3_AST_PARAM:
+            info->minBind = node->op;
+            break;
+        case XP3_AST_BINARY:
+            /* || and ! come with Part 12 */
+            info->hasCall = (node->op == XP3_OP_CONCAT) ||
+                            (node->op == XP3_OP_SIMPLE_MAP);
+            break;
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARG_PLACEHOLDER:
+        case XP3_AST_DYNAMIC_CALL:
+        case XP3_AST_NAMED_FUNCTION_REF:
+        case XP3_AST_INLINE_FUNCTION:
+        case XP3_AST_ARROW:
+        case XP3_AST_LOOKUP:
+        case XP3_AST_UNARY_LOOKUP:
+        case XP3_AST_MAP:
+        case XP3_AST_ARRAY_SQUARE:
+        case XP3_AST_ARRAY_CURLY:
+            info->hasCall = 1;
+            break;
+        default:
+            break;
+    }
+}
+
+static int
+constantBoolean(const xp3AstNode *node, int *value) {
+    return((node->kind == XP3_AST_CONSTANT) &&
+           (xp3EffectiveBoolean(node->value, value) == XP3_ERR_OK));
+}
+
+/*
+ * After the children are folded: an if whose condition is constant
+ * becomes the branch it picks, and an and or or with an operand that
+ * decides it becomes that boolean (XPath 3.1, 3.8 lets the other
+ * operand go unevaluated).
+ */
+static void
+pruneNode(xp3Optimizer *opt, xp3AstNode *node) {
+    int value;
+
+    if ((node->kind == XP3_AST_IF) && constantBoolean(node->first, &value)) {
+        xp3AstNode *branch = value ? node->first->next : node->last;
+        xp3AstNode *next = node->next;
+
+        *node = *branch;
+        node->next = next;
+        return;
+    }
+    if ((node->kind == XP3_AST_BINARY) &&
+        ((node->op == XP3_OP_AND) || (node->op == XP3_OP_OR))) {
+        int decides = (node->op == XP3_OP_OR);
+        int left;
+        int right;
+        xp3Atomic *atomic;
+        xp3Value *result;
+
+        if (!(constantBoolean(node->first, &left) && (left == decides)) &&
+            !(constantBoolean(node->last, &right) && (right == decides)))
+            return;
+        atomic = xp3AtomicNewBoolean(decides);
+        if (atomic == NULL)
+            return;
+        result = xp3ValueSingle(xp3ItemFromAtomic(atomic));
+        if (result == NULL)
+            return;
+        replaceByValue(opt->st, node, result);
+        xp3ValueUnref(result);
+    }
+}
+
+/*
+ * Find the closed subexpressions: compute what each node needs, and
+ * fold the closed children of a node that isn't closed itself. Its
+ * own fold is left to its parent, so only the largest closed
+ * subexpressions are folded.
+ */
+static void
+foldWalk(xp3Optimizer *opt, xp3AstNode *node, xp3FoldInfo *info) {
+    xp3AstNode *child;
+
+    nodeInfo(opt, node, info);
+    for (child = node->first; child != NULL; child = child->next) {
+        xp3FoldInfo childInfo;
+
+        foldWalk(opt, child, &childInfo);
+        if (foldClosed(&childInfo))
+            child->flags |= XP3_FOLD_CLOSED;
+        if (sharesFocus(node, child))
+            info->usesFocus |= childInfo.usesFocus;
+        info->hasCall |= childInfo.hasCall;
+        info->external |= childInfo.external;
+        if (childInfo.minRef < info->minRef)
+            info->minRef = childInfo.minRef;
+        if (childInfo.minBind < info->minBind)
+            info->minBind = childInfo.minBind;
+    }
+    if (!foldClosed(info)) {
+        for (child = node->first; child != NULL; child = child->next) {
+            if (child->flags & XP3_FOLD_CLOSED) {
+                child->flags &= ~XP3_FOLD_CLOSED;
+                tryFold(opt, child);
+            }
+        }
+        pruneNode(opt, node);
+    } else {
+        for (child = node->first; child != NULL; child = child->next)
+            child->flags &= ~XP3_FOLD_CLOSED;
+    }
+}
+
+/*
+ * Ordering of paths
+ *
+ * Properties of the nodes a path has produced so far, which tell when
+ * the next step is in document order without a sort (doc/DESIGN.md
+ * 7.1). Predicates only filter, so they keep all three.
+ */
+#define XP3_PATH_ORDERED (1 << 0)  /* document order, no duplicates */
+#define XP3_PATH_PEER (1 << 1)     /* no node contains another */
+#define XP3_PATH_SINGLE (1 << 2)   /* at most one node */
+
+/* The properties after an axis step from nodes with these properties */
+static int
+stepProperties(int input, xp3Axis axis) {
+    if (input & XP3_PATH_SINGLE) {
+        switch (axis) {
+            case XP3_AXIS_SELF:
+            case XP3_AXIS_PARENT:
+                return(XP3_PATH_ORDERED | XP3_PATH_PEER | XP3_PATH_SINGLE);
+            case XP3_AXIS_CHILD:
+            case XP3_AXIS_ATTRIBUTE:
+            case XP3_AXIS_FOLLOWING_SIBLING:
+            case XP3_AXIS_PRECEDING_SIBLING:
+                return(XP3_PATH_ORDERED | XP3_PATH_PEER);
+            default:
+                /* one axis from one node is in document order */
+                return(XP3_PATH_ORDERED);
+        }
+    }
+    if ((input & XP3_PATH_ORDERED) && (input & XP3_PATH_PEER)) {
+        switch (axis) {
+            case XP3_AXIS_CHILD:
+            case XP3_AXIS_ATTRIBUTE:
+                return(XP3_PATH_ORDERED | XP3_PATH_PEER);
+            case XP3_AXIS_SELF:
+                return(input);
+            case XP3_AXIS_DESCENDANT:
+            case XP3_AXIS_DESCENDANT_OR_SELF:
+                return(XP3_PATH_ORDERED);
+            default:
+                return(0);
+        }
+    }
+    return(0);
+}
+
+/*
+ * Whether a predicate can't depend on the position of the item it
+ * filters: an expression whose value is a boolean or nodes, never a
+ * number. Anything else counts as positional.
+ */
+static int
+isPositionFree(const xp3AstNode *expr) {
+    switch (expr->kind) {
+        case XP3_AST_BINARY:
+            return(((expr->op >= XP3_OP_GEN_EQ) &&
+                    (expr->op <= XP3_OP_FOLLOWS)) ||
+                   (expr->op == XP3_OP_AND) || (expr->op == XP3_OP_OR));
+        case XP3_AST_SOME:
+        case XP3_AST_EVERY:
+        case XP3_AST_INSTANCE_OF:
+        case XP3_AST_CASTABLE_AS:
+            return(1);
+        case XP3_AST_PATH:
+            return((expr->last != NULL) &&
+                   (expr->last->kind == XP3_AST_STEP));
+        case XP3_AST_CONSTANT: {
+            xp3Item item;
+            int ret = 0;
+
+            if ((xp3ValueCount(expr->value) == 1) &&
+                (xp3ValueItemAt(expr->value, 0, &item) > 0)) {
+                ret = (item.kind == XP3_ITEM_ATOMIC) &&
+                      (item.u.atomic->type == XP3_TYPE_BOOLEAN);
+                xp3ItemUnref(item);
+            }
+            return(ret);
+        }
+        default:
+            return(0);
+    }
+}
+
+/* Whether a step is descendant-or-self::node() without predicates */
+static int
+isDescendantOrSelfNode(const xp3AstNode *step) {
+    return((step->kind == XP3_AST_STEP) &&
+           (step->op == XP3_AXIS_DESCENDANT_OR_SELF) &&
+           (step->first != NULL) && (step->first->next == NULL) &&
+           (step->first->kind == XP3_AST_KIND_TEST) &&
+           (step->first->op == XP3_KIND_ANY) &&
+           (step->first->first == NULL));
+}
+
+/*
+ * descendant-or-self::node()/child::T[P] is descendant::T[P] when no
+ * predicate P depends on position, as in //x[@id]: the same nodes, in
+ * one pass instead of two. Returns whether the step was rewritten.
+ */
+static int
+rewriteDescendant(xp3AstNode *path, xp3AstNode *previous,
+                  xp3AstNode *step) {
+    xp3AstNode *next = step->next;
+    const xp3AstNode *pred;
+
+    if ((next == NULL) || !isDescendantOrSelfNode(step) ||
+        (next->kind != XP3_AST_STEP) || (next->op != XP3_AXIS_CHILD))
+        return(0);
+    for (pred = next->first->next; pred != NULL; pred = pred->next) {
+        if (!isPositionFree(pred->first))
+            return(0);
+    }
+    next->op = XP3_AXIS_DESCENDANT;
+    if (previous != NULL)
+        previous->next = next;
+    else
+        path->first = next;
+    return(1);
+}
+
+/* Rewrite and mark the steps of a path */
+static void
+orderPath(xp3AstNode *path) {
+    xp3AstNode *previous = NULL;
+    xp3AstNode *child = path->first;
+    int properties;
+
+    /* The rewrite first, so that the properties see its result */
+    while (child != NULL) {
+        if (rewriteDescendant(path, previous, child)) {
+            child = (previous != NULL) ? previous->next : path->first;
+            continue;
+        }
+        previous = child;
+        child = child->next;
+    }
+
+    child = path->first;
+    if (path->op == XP3_PATH_ROOT) {
+        properties = XP3_PATH_ORDERED | XP3_PATH_PEER | XP3_PATH_SINGLE;
+    } else {
+        /* The first expression is evaluated on its own: a step from
+         * the context item is in order, anything else is unknown */
+        if (child == NULL)
+            return;
+        properties = (child->kind == XP3_AST_STEP) ?
+            stepProperties(XP3_PATH_SINGLE, (xp3Axis) child->op) : 0;
+        child = child->next;
+    }
+    for (; child != NULL; child = child->next) {
+        if (child->kind != XP3_AST_STEP) {
+            properties = 0;
+            continue;
+        }
+        properties = stepProperties(properties, (xp3Axis) child->op);
+        if (properties & XP3_PATH_ORDERED)
+            child->flags |= XP3_AST_SORTED;
+    }
+}
+
+static void
+orderWalk(xp3AstNode *node) {
+    xp3AstNode *child;
+
+    if (node->kind == XP3_AST_PATH)
+        orderPath(node);
+    for (child = node->first; child != NULL; child = child->next)
+        orderWalk(child);
+}
+
+/*
+ * Optimize a compiled tree: fold constants, then rewrite and mark
+ * paths. Needs nothing to succeed: whatever it can't do, it leaves.
+ */
+static void
+optimize(xp3Analysis *st) {
+    xp3Optimizer opt;
+    xp3FoldInfo info;
+    int i;
+
+    memset(&opt, 0, sizeof(opt));
+    opt.st = st;
+    opt.budget = XP3_FOLD_TOTAL;
+    opt.external = xmlMalloc((st->slotCount > 0) ? (size_t) st->slotCount :
+                                                   1);
+    opt.slots = xmlMalloc(((st->slotCount > 0) ? (size_t) st->slotCount :
+                                                 1) * sizeof(xp3Value *));
+    if ((opt.external != NULL) && (opt.slots != NULL)) {
+        memset(opt.external, 0, (size_t) st->slotCount);
+        memset(opt.slots, 0, (size_t) st->slotCount * sizeof(xp3Value *));
+        for (i = 0; i < st->declared.count; i++)
+            opt.external[st->declared.items[i].slot] = 1;
+        foldWalk(&opt, st->ast->root, &info);
+        if (foldClosed(&info))
+            tryFold(&opt, st->ast->root);
+    }
+    xmlFree(opt.slots);
+    xmlFree(opt.external);
+    orderWalk(st->ast->root);
+}
+
+/*
  * Compiling
  */
+
+static void
+freeConstants(xp3Value **constants, int count) {
+    int i;
+
+    for (i = 0; i < count; i++)
+        xp3ValueFreeConstant(constants[i]);
+    xmlFree(constants);
+}
 
 /* Copy the declared variables in use into the tree. */
 static int
@@ -879,6 +1410,8 @@ xp3CompileLength(const xp3StaticContext *ctx, const xmlChar *expr,
     st.ast = ast;
     if (analyzeNode(&st, ast->root) < 0)
         goto done;
+    if ((ctx == NULL) || !ctx->noOptimize)
+        optimize(&st);
 
     ret = xmlMalloc(sizeof(*ret));
     if (ret == NULL) {
@@ -895,9 +1428,14 @@ xp3CompileLength(const xp3StaticContext *ctx, const xmlChar *expr,
     }
     ret->ast = ast;
     ast = NULL;
+    ret->constants = st.constants;
+    ret->constantCount = st.constantCount;
+    st.constants = NULL;
+    st.constantCount = 0;
 
 done:
     xp3AstFree(ast);
+    freeConstants(st.constants, st.constantCount);
     xmlFree(st.scope.items);
     xmlHashFree(st.inScope, NULL);
     xmlFree(st.declared.items);
@@ -942,6 +1480,7 @@ void
 xp3FreeExpr(xp3Expr *expr) {
     if (expr == NULL)
         return;
+    freeConstants(expr->constants, expr->constantCount);
     xp3AstFree(expr->ast);
     xmlFree(expr);
 }
