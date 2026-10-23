@@ -39,7 +39,7 @@ The gate is compile-only mode: each expression is compiled with the namespaces a
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
 
-Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, `and` and `or` are evaluated, while operators and function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 978 tests passed, 1 failed (the known failure above) and 21,052 not judged. CI runs this as a report, which doesn't fail the pipeline yet.
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `cast`, `castable`, `instance of` and `treat` are evaluated, while function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 5,345 tests passed, 3 failed and 16,683 not judged. The failures are the known one above and two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1). CI runs this as a report, which doesn't fail the pipeline yet.
 
 To run it yourself, check out the test suite at the same commit and pass its directory to Meson. `meson test --suite qt3` then runs all three levels:
 

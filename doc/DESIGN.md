@@ -119,7 +119,7 @@ A value is a sequence of items. An item is one of:
 - **Room for stage 2 items from day one.** The item tag and memory management include function items, maps and arrays from the start, even though stage 1 never creates them. Adding them later is then an extension, not a rewrite of the core.
 - **Values are immutable and reference counted.** Sequences, maps, arrays and closures share structure instead of copying. Nodes are never reference counted, because libxml2 owns them.
 - **Sequence representation.** Empty sequences and singletons need no allocation beyond the item. Longer sequences are reference-counted arrays. Integer ranges (`1 to 1000000`) are stored as a range and expanded only when needed.
-- **Range bounds are 64-bit.** A range stores its first and last value as 64-bit integers. A range whose bounds do not fit raises `LIMIT`: such a sequence could never be materialized anyway, and an implementation limit is allowed by the spec.
+- **Range bounds are 64-bit.** A range stores its first and last value as 64-bit integers and is never expanded. A range with a bound outside 64 bits, such as `1000000000000000000000 to 1000000000000000000003`, is built item by item instead, as long as it is no longer than the maximum sequence length (7.3); a longer one raises `LIMIT`, an implementation limit the spec allows. Since 7c; before, any bound outside 64 bits raised `LIMIT`. QT3 has two tests with ranges of millions of such integers, `op-to/RangeExpr-409c` and `-409d`, which stay at `LIMIT`.
 - **No small-integer fast path, for now.** Every `xs:integer` is an arbitrary-precision decimal (4.3), even `1`. That keeps one representation and one set of arithmetic rules. A fast path for integers that fit in 64 bits can be added later behind the same functions, if profiling shows the need.
 
 ### 4.2 Atomic types
@@ -139,6 +139,12 @@ Stage 1 types:
 | Other | `xs:QName`, `xs:hexBinary`, `xs:base64Binary` | |
 
 Derived types such as `xs:nonNegativeInteger` or `xs:token` share the representation of their primitive type and carry their own type ID, which the cast and `instance of` checks use.
+
+Casting follows F&O 3.1, 19, with two choices where the spec and the reference implementations part (7c):
+
+- **`xs:double` to `xs:decimal` gives the shortest decimal that reads back as the double**, as Saxon does: `xs:decimal(0.1e0)` is `0.1`. Read literally, "the decimal numerically closest to the double" (19.1.2.3) is the double's exact binary value, `0.1000000000000000055511151231257827021181583404541015625`, because libxpath3's decimals are long enough to hold it. The shortest form is read as what a double's precision can represent, and it is what users expect. Casting to `xs:integer` keeps the exact value, truncated.
+- **`xs:double` to `xs:float` rounds to nearest**, as IEEE 754, Java and Saxon do. 19.1.2.1 describes truncating the mantissa, but QT3 expects rounding (`prod-CastExpr/CastAs206` expects `-0.00175` for `xs:double("-1.75e-3") cast as xs:float`), and truncation would make `xs:float("x")` differ from `xs:float(xs:double("x"))` for the same number (`prod-Predicate/predicates-11`). The test suite wins here.
+- **Not yet castable:** strings to `xs:QName` and `xs:NOTATION` need the namespaces of the expression, which the compiled form doesn't keep yet; the date, time and duration types come with Part 10. Both raise `UNSUPPORTED`.
 
 ### 4.3 Decimal arithmetic
 

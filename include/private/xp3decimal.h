@@ -77,6 +77,9 @@ int
 xp3DecimalCompare(const xp3Decimal *a, const xp3Decimal *b);
 
 xp3ErrCode
+xp3DecimalCopy(const xp3Decimal *a, xp3Decimal **res);
+
+xp3ErrCode
 xp3DecimalNegate(const xp3Decimal *a, xp3Decimal **res);
 
 xp3ErrCode

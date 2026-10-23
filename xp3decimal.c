@@ -803,6 +803,18 @@ xp3DecimalCompare(const xp3Decimal *a, const xp3Decimal *b) {
 }
 
 /**
+ * Copy a decimal.
+ *
+ * @param a    the decimal
+ * @param res  where to store the copy
+ * @returns XP3_ERR_OK or XP3_ERR_NO_MEMORY
+ */
+xp3ErrCode
+xp3DecimalCopy(const xp3Decimal *a, xp3Decimal **res) {
+    return(decimalMake(a->negative, a->scale, a->limbs, a->count, res));
+}
+
+/**
  * Negate a decimal.
  *
  * @param a    the decimal

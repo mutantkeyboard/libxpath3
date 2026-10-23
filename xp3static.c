@@ -34,9 +34,11 @@
 
 #include <limits.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <libxml/hash.h>
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
@@ -64,6 +66,8 @@ typedef struct {
     const xmlChar *uri;
     const xmlChar *localName;
     int slot;
+    int shadowed;               /* in scope: the binding of the same name
+                                 * this one hides, or -1 */
 } xp3Binding;
 
 typedef struct {
@@ -78,6 +82,8 @@ typedef struct {
     xp3Ast *ast;
     xp3Error *err;                  /* the first error */
     xp3Bindings scope;              /* in scope, innermost last */
+    xmlHashTablePtr inScope;        /* name -> 1 + index of its innermost
+                                     * binding in scope */
     xp3Bindings declared;           /* declared variables in use */
     int slotCount;
     struct {
@@ -463,8 +469,43 @@ bindingsPush(xp3Analysis *st, xp3Bindings *list, const xmlChar *uri,
     list->items[list->count].uri = uri;
     list->items[list->count].localName = localName;
     list->items[list->count].slot = slot;
+    list->items[list->count].shadowed = -1;
     list->count++;
     return(0);
+}
+
+/*
+ * Variables in scope are found through st->inScope, which maps each
+ * name to its innermost binding; each binding remembers the one it
+ * hides. A list of thousands of bindings that refer back to earlier
+ * ones then takes linear time to analyse, not quadratic.
+ */
+
+/* The index in st->scope of the innermost binding of a name, or -1 */
+static int
+scopeLookup(const xp3Analysis *st, const xmlChar *uri,
+            const xmlChar *localName) {
+    if (st->inScope == NULL)
+        return(-1);
+    return((int) ((intptr_t) xmlHashLookup2(st->inScope, localName, uri) -
+                  1));
+}
+
+/* Leave the scope of the bindings from mark on, innermost first,
+ * bringing back the bindings they hid */
+static void
+scopePop(xp3Analysis *st, int mark) {
+    while (st->scope.count > mark) {
+        const xp3Binding *var = &st->scope.items[--st->scope.count];
+
+        if (var->shadowed >= 0)
+            xmlHashUpdateEntry2(st->inScope, var->localName, var->uri,
+                                (void *) (intptr_t) (var->shadowed + 1),
+                                NULL);
+        else
+            xmlHashRemoveEntry2(st->inScope, var->localName, var->uri,
+                                NULL);
+    }
 }
 
 /*
@@ -473,8 +514,26 @@ bindingsPush(xp3Analysis *st, xp3Bindings *list, const xmlChar *uri,
  */
 static int
 bindVariable(xp3Analysis *st, xp3AstNode *node) {
+    int index = st->scope.count;
+
     node->op = st->slotCount++;
-    return(bindingsPush(st, &st->scope, node->uri, node->text, node->op));
+    if (bindingsPush(st, &st->scope, node->uri, node->text, node->op) < 0)
+        return(-1);
+    if (st->inScope == NULL) {
+        st->inScope = xmlHashCreate(0);
+        if (st->inScope == NULL) {
+            st->scope.count = index;
+            return(staticNoMemory(st));
+        }
+    }
+    st->scope.items[index].shadowed = scopeLookup(st, node->uri,
+                                                  node->text);
+    if (xmlHashUpdateEntry2(st->inScope, node->text, node->uri,
+                            (void *) (intptr_t) (index + 1), NULL) < 0) {
+        st->scope.count = index;
+        return(staticNoMemory(st));
+    }
+    return(0);
 }
 
 /* A VARREF: find its slot [err:XPST0008]. */
@@ -486,13 +545,10 @@ analyzeVarRef(xp3Analysis *st, xp3AstNode *node) {
     displayName(node, name, sizeof(name));
     if (resolveName(st, node, XP3_DEFAULT_NONE) < 0)
         return(-1);
-    for (i = st->scope.count - 1; i >= 0; i--) {
-        const xp3Binding *var = &st->scope.items[i];
-
-        if (sameName(var->uri, var->localName, node->uri, node->text)) {
-            node->op = var->slot;
-            return(0);
-        }
+    i = scopeLookup(st, node->uri, node->text);
+    if (i >= 0) {
+        node->op = st->scope.items[i].slot;
+        return(0);
     }
     for (i = 0; i < st->declared.count; i++) {
         const xp3Binding *var = &st->declared.items[i];
@@ -529,7 +585,7 @@ analyzeClauses(xp3Analysis *st, xp3AstNode *node) {
             ret = analyzeNode(st, child);
         }
     }
-    st->scope.count = mark;
+    scopePop(st, mark);
     return(ret);
 }
 
@@ -566,7 +622,7 @@ analyzeInlineFunction(xp3Analysis *st, xp3AstNode *node) {
         else
             ret = analyzeNode(st, child);       /* the body */
     }
-    st->scope.count = mark;
+    scopePop(st, mark);
     return(ret);
 }
 
@@ -843,6 +899,7 @@ xp3CompileLength(const xp3StaticContext *ctx, const xmlChar *expr,
 done:
     xp3AstFree(ast);
     xmlFree(st.scope.items);
+    xmlHashFree(st.inScope, NULL);
     xmlFree(st.declared.items);
     if (error != NULL)
         *error = st.err;
