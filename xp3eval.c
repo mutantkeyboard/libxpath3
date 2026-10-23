@@ -38,6 +38,7 @@
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
 #include "private/xp3nodes.h"
+#include "private/xp3ops.h"
 #include "private/xp3static.h"
 #include "private/xp3types.h"
 
@@ -223,6 +224,7 @@ typedef struct {
     xp3Focus focus;
     xp3DocOrder *order;         /* created when first needed */
     size_t maxItems;
+    xp3LanguageLevel level;
     xp3Error *err;              /* the first error */
 } xp3Eval;
 
@@ -1260,6 +1262,15 @@ static const char *const xp3OperatorNames[] = {
     "mod", "union", "intersect", "except", "!"
 };
 
+static const char *
+operatorName(int op) {
+    if ((op < 0) ||
+        ((size_t) op >=
+         sizeof(xp3OperatorNames) / sizeof(xp3OperatorNames[0])))
+        return("?");
+    return(xp3OperatorNames[op]);
+}
+
 static xp3Value *
 evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
     char name[XP3_NAME_BUF];
@@ -1274,11 +1285,7 @@ evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
         case XP3_AST_BINARY:
         case XP3_AST_UNARY:
             evalError(ev, XP3_ERR_UNSUPPORTED, node, "the operator %s is "
-                      "not implemented yet",
-                      ((node->op >= 0) &&
-                       ((size_t) node->op < sizeof(xp3OperatorNames) /
-                                            sizeof(xp3OperatorNames[0]))) ?
-                      xp3OperatorNames[node->op] : "?");
+                      "not implemented yet", operatorName(node->op));
             break;
         default:
             evalError(ev, XP3_ERR_UNSUPPORTED, node, "%s expressions are "
@@ -1286,6 +1293,1048 @@ evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
             break;
     }
     return(NULL);
+}
+
+/*
+ * Atomization
+ */
+
+/* Whether a sequence holds nodes only */
+static int
+isAllNodes(const xp3Value *value) {
+    size_t i;
+
+    switch (value->shape) {
+        case XP3_SEQ_EMPTY:
+            return(1);
+        case XP3_SEQ_SINGLE:
+            return(value->u.single.kind == XP3_ITEM_NODE);
+        case XP3_SEQ_ARRAY:
+            for (i = 0; i < value->u.array.count; i++) {
+                if (value->u.array.items[i].kind != XP3_ITEM_NODE)
+                    return(0);
+            }
+            return(1);
+        default:
+            return(0);
+    }
+}
+
+/* Whether a sequence holds atomic values only */
+static int
+isAllAtomic(const xp3Value *value) {
+    size_t i;
+
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            return(value->u.single.kind == XP3_ITEM_ATOMIC);
+        case XP3_SEQ_ARRAY:
+            for (i = 0; i < value->u.array.count; i++) {
+                if (value->u.array.items[i].kind != XP3_ITEM_ATOMIC)
+                    return(0);
+            }
+            return(1);
+        default:
+            return(1);
+    }
+}
+
+/*
+ * Atomize a sequence (XPath 3.1, 2.4.2): nodes become their typed
+ * values. Takes over the reference to value.
+ */
+static xp3Value *
+atomize(xp3Eval *ev, xp3Value *value, const xp3AstNode *node) {
+    xp3SeqBuilder builder;
+    xp3Iter iter;
+    xp3Item item;
+    int found;
+
+    if (isAllAtomic(value))
+        return(value);
+    builderInit(ev, &builder);
+    xp3IterInit(&iter, value);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3ErrCode err;
+
+        if (item.kind == XP3_ITEM_NODE) {
+            xp3Atomic *atomic;
+
+            err = xp3NodeTypedValue(item.u.node, &atomic);
+            if (err == XP3_ERR_OK)
+                err = xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(atomic));
+        } else if (item.kind == XP3_ITEM_ATOMIC) {
+            err = xp3SeqBuilderAdd(&builder, item);
+        } else {
+            xp3ItemUnref(item);
+            evalError(ev, XP3_ERR_UNSUPPORTED, node, "atomizing function "
+                      "items, maps and arrays is not implemented yet");
+            goto error;
+        }
+        if (err != XP3_ERR_OK) {
+            if (err == XP3_ERR_LIMIT)
+                evalError(ev, err, node, "the string value of a node is "
+                          "longer than 2 GB");
+            else
+                evalBuildError(ev, err, node);
+            goto error;
+        }
+    }
+    if (found < 0) {
+        evalNoMemory(ev);
+        goto error;
+    }
+    xp3ValueUnref(value);
+    return(builderFinish(ev, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    xp3ValueUnref(value);
+    return(NULL);
+}
+
+/*
+ * Evaluate an operand that must be one atomic value or empty, as the
+ * operands of arithmetic, value comparisons and casts. Sets *atomic to
+ * the value with a reference, or to NULL for the empty sequence.
+ * Returns 0, or -1 on error.
+ */
+static int
+evalAtomic(xp3Eval *ev, const xp3AstNode *node, const char *what,
+           xp3Atomic **atomic) {
+    xp3Value *value = evalExpr(ev, node);
+    xp3Item item;
+    int ret = 0;
+
+    *atomic = NULL;
+    if (value != NULL)
+        value = atomize(ev, value, node);
+    if (value == NULL)
+        return(-1);
+    if (xp3ValueCount(value) > 1) {
+        evalError(ev, XP3_ERR_XPTY0004, node, "the operand of %s is a "
+                  "sequence of more than one item", what);
+        ret = -1;
+    } else if (xp3ValueCount(value) == 1) {
+        if (xp3ValueItemAt(value, 0, &item) > 0) {
+            *atomic = item.u.atomic;
+        } else {
+            evalNoMemory(ev);
+            ret = -1;
+        }
+    }
+    xp3ValueUnref(value);
+    return(ret);
+}
+
+/* The name of an atomic type, for messages */
+static const char *
+typeName(xp3TypeId type) {
+    const xmlChar *name = xp3TypeLocalName(type);
+
+    return((name != NULL) ? (const char *) name : "?");
+}
+
+/* Cast an untyped value for an operator, recording a failure. Takes
+ * over the reference to value. */
+static xp3Atomic *
+castUntyped(xp3Eval *ev, xp3Atomic *value, xp3TypeId type,
+            const xp3AstNode *node) {
+    xp3Atomic *result;
+    xp3ErrCode err;
+
+    err = xp3CastAtomic(value, type, &result);
+    if (err == XP3_ERR_FORG0001)
+        evalError(ev, err, node, "the untyped value \"%.40s\" is not a "
+                  "valid xs:%s", (const char *) value->u.str,
+                  typeName(type));
+    else if (err == XP3_ERR_UNSUPPORTED)
+        evalError(ev, err, node, "casting to xs:%s is not implemented "
+                  "yet", typeName(type));
+    else if (err != XP3_ERR_OK)
+        evalNoMemory(ev);
+    xp3AtomicUnref(value);
+    return((err == XP3_ERR_OK) ? result : NULL);
+}
+
+/*
+ * Arithmetic
+ */
+
+/* +, -, *, div, idiv, mod (XPath 3.1, 3.5) */
+static xp3Value *
+evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
+    const char *name = operatorName(node->op);
+    xp3Atomic *left;
+    xp3Atomic *right = NULL;
+    xp3Atomic *result;
+    xp3ErrCode err;
+
+    if (evalAtomic(ev, node->first, name, &left) < 0)
+        return(NULL);
+    if ((left != NULL) && (evalAtomic(ev, node->last, name, &right) < 0)) {
+        xp3AtomicUnref(left);
+        return(NULL);
+    }
+    if ((left == NULL) || (right == NULL)) {
+        xp3AtomicUnref(left);
+        xp3AtomicUnref(right);
+        return(xp3ValueEmpty());
+    }
+    if (left->type == XP3_TYPE_UNTYPED_ATOMIC)
+        left = castUntyped(ev, left, XP3_TYPE_DOUBLE, node->first);
+    if ((left != NULL) && (right->type == XP3_TYPE_UNTYPED_ATOMIC))
+        right = castUntyped(ev, right, XP3_TYPE_DOUBLE, node->last);
+    if ((left == NULL) || (right == NULL)) {
+        xp3AtomicUnref(left);
+        xp3AtomicUnref(right);
+        return(NULL);
+    }
+
+    err = xp3Arithmetic((xp3AstOp) node->op, left, right, &result);
+    switch (err) {
+        case XP3_ERR_OK:
+            break;
+        case XP3_ERR_XPTY0004:
+            evalError(ev, err, node, "%s is not defined for xs:%s and xs:%s",
+                      name, typeName(left->type), typeName(right->type));
+            break;
+        case XP3_ERR_FOAR0001:
+            evalError(ev, err, node, "division by zero");
+            break;
+        case XP3_ERR_FOAR0002:
+            evalError(ev, err, node, "the result of %s is too large, or "
+                      "idiv got NaN or infinity", name);
+            break;
+        default:
+            evalNoMemory(ev);
+            break;
+    }
+    xp3AtomicUnref(left);
+    xp3AtomicUnref(right);
+    if (err != XP3_ERR_OK)
+        return(NULL);
+    return(evalSingle(ev, xp3ItemFromAtomic(result)));
+}
+
+/* Unary + and - (XPath 3.1, 3.5) */
+static xp3Value *
+evalUnary(xp3Eval *ev, const xp3AstNode *node) {
+    const char *name = (node->op == XP3_OP_SUB) ? "unary -" : "unary +";
+    xp3Atomic *value;
+    xp3Atomic *result;
+    xp3ErrCode err;
+
+    if (evalAtomic(ev, node->first, name, &value) < 0)
+        return(NULL);
+    if (value == NULL)
+        return(xp3ValueEmpty());
+    if (value->type == XP3_TYPE_UNTYPED_ATOMIC) {
+        value = castUntyped(ev, value, XP3_TYPE_DOUBLE, node->first);
+        if (value == NULL)
+            return(NULL);
+    }
+    if (!xp3TypeIsNumeric(value->type)) {
+        evalError(ev, XP3_ERR_XPTY0004, node, "%s is not defined for xs:%s",
+                  name, typeName(value->type));
+        xp3AtomicUnref(value);
+        return(NULL);
+    }
+    if (node->op != XP3_OP_SUB)
+        return(evalSingle(ev, xp3ItemFromAtomic(value)));
+    err = xp3NegateNumber(value, &result);
+    xp3AtomicUnref(value);
+    if (err != XP3_ERR_OK) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    return(evalSingle(ev, xp3ItemFromAtomic(result)));
+}
+
+/*
+ * Comparisons
+ */
+
+/* Record the failure of a comparison of two values */
+static void
+compareError(xp3Eval *ev, xp3ErrCode err, const xp3AstNode *node,
+             const xp3Atomic *left, const xp3Atomic *right) {
+    if (err == XP3_ERR_XPTY0004)
+        evalError(ev, err, node, "xs:%s and xs:%s can't be compared with "
+                  "%s", typeName(left->type), typeName(right->type),
+                  operatorName(node->op));
+    else
+        evalNoMemory(ev);
+}
+
+/* eq, ne, lt, le, gt, ge (XPath 3.1, 3.7.1): untyped values compare as
+ * strings */
+static xp3Value *
+evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
+    const char *name = operatorName(node->op);
+    xp3Atomic *left;
+    xp3Atomic *right = NULL;
+    xp3ErrCode err;
+    int result;
+
+    if (evalAtomic(ev, node->first, name, &left) < 0)
+        return(NULL);
+    if ((left != NULL) && (evalAtomic(ev, node->last, name, &right) < 0)) {
+        xp3AtomicUnref(left);
+        return(NULL);
+    }
+    if ((left == NULL) || (right == NULL)) {
+        xp3AtomicUnref(left);
+        xp3AtomicUnref(right);
+        return(xp3ValueEmpty());
+    }
+    err = xp3CompareAtomics((xp3AstOp) node->op, left, right, ev->level,
+                            &result);
+    if (err != XP3_ERR_OK)
+        compareError(ev, err, node, left, right);
+    xp3AtomicUnref(left);
+    xp3AtomicUnref(right);
+    return((err == XP3_ERR_OK) ? evalBoolean(ev, result) : NULL);
+}
+
+/*
+ * The type an untyped value is cast to when compared with another
+ * value in a general comparison (XPath 3.1, 3.7.2): xs:double for
+ * numbers, xs:string for strings and untyped values, otherwise the
+ * primitive type of the other value.
+ */
+static xp3TypeId
+generalTarget(xp3TypeId other) {
+    if (xp3TypeIsNumeric(other))
+        return(XP3_TYPE_DOUBLE);
+    if (xp3TypeDerivesFrom(other, XP3_TYPE_STRING) ||
+        (other == XP3_TYPE_ANY_URI) || (other == XP3_TYPE_UNTYPED_ATOMIC))
+        return(XP3_TYPE_STRING);
+    return(xp3TypePrimitive(other));
+}
+
+/*
+ * Compare one pair of a general comparison, casting an untyped value
+ * to the type of the other. Returns 0 or 1, or -1 on error.
+ */
+static int
+comparePair(xp3Eval *ev, const xp3AstNode *node, xp3Atomic *left,
+            xp3Atomic *right) {
+    xp3ErrCode err;
+    int result = -1;
+
+    xp3AtomicRef(left);
+    xp3AtomicRef(right);
+    if (left->type == XP3_TYPE_UNTYPED_ATOMIC)
+        left = castUntyped(ev, left, generalTarget(right->type),
+                           node->first);
+    if ((left != NULL) && (right->type == XP3_TYPE_UNTYPED_ATOMIC))
+        right = castUntyped(ev, right, generalTarget(left->type),
+                            node->last);
+    if ((left != NULL) && (right != NULL)) {
+        err = xp3CompareAtomics((xp3AstOp) node->op, left, right,
+                                ev->level, &result);
+        if (err != XP3_ERR_OK) {
+            compareError(ev, err, node, left, right);
+            result = -1;
+        }
+    }
+    xp3AtomicUnref(left);
+    xp3AtomicUnref(right);
+    return(result);
+}
+
+/* =, !=, <, <=, >, >= (XPath 3.1, 3.7.2): true if any pair of atomized
+ * values compares true */
+static xp3Value *
+evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *left = evalExpr(ev, node->first);
+    xp3Value *right = NULL;
+    xp3Iter leftIter;
+    xp3Item leftItem;
+    int found;
+    int result = 0;
+
+    if (left != NULL)
+        left = atomize(ev, left, node->first);
+    if (left != NULL) {
+        right = evalExpr(ev, node->last);
+        if (right != NULL)
+            right = atomize(ev, right, node->last);
+    }
+    if ((left == NULL) || (right == NULL)) {
+        xp3ValueUnref(left);
+        return(NULL);
+    }
+
+    xp3IterInit(&leftIter, left);
+    while ((result == 0) &&
+           ((found = xp3IterNext(&leftIter, &leftItem)) != 0)) {
+        xp3Iter rightIter;
+        xp3Item rightItem;
+        int more;
+
+        if (found < 0) {
+            evalNoMemory(ev);
+            result = -1;
+            break;
+        }
+        xp3IterInit(&rightIter, right);
+        while ((result == 0) &&
+               ((more = xp3IterNext(&rightIter, &rightItem)) != 0)) {
+            if (more < 0) {
+                evalNoMemory(ev);
+                result = -1;
+                break;
+            }
+            result = comparePair(ev, node, leftItem.u.atomic,
+                                 rightItem.u.atomic);
+            xp3ItemUnref(rightItem);
+        }
+        xp3ItemUnref(leftItem);
+    }
+    xp3ValueUnref(left);
+    xp3ValueUnref(right);
+    return((result < 0) ? NULL : evalBoolean(ev, result));
+}
+
+/*
+ * The node of an operand of is, << or >>, which must be a single node
+ * or empty (XPath 3.1, 3.7.3). Sets *node to NULL for empty. Returns 0
+ * or -1.
+ */
+static int
+evalNodeOperand(xp3Eval *ev, const xp3AstNode *expr, const char *name,
+                xmlNodePtr *node) {
+    xp3Value *value = evalExpr(ev, expr);
+    xp3Item item;
+    int ret = 0;
+
+    *node = NULL;
+    if (value == NULL)
+        return(-1);
+    if (xp3ValueCount(value) > 1) {
+        evalError(ev, XP3_ERR_XPTY0004, expr, "the operand of %s is a "
+                  "sequence of more than one item", name);
+        ret = -1;
+    } else if (xp3ValueCount(value) == 1) {
+        if (xp3ValueItemAt(value, 0, &item) <= 0) {
+            evalNoMemory(ev);
+            ret = -1;
+        } else {
+            if (item.kind == XP3_ITEM_NODE) {
+                *node = item.u.node;
+            } else {
+                evalError(ev, XP3_ERR_XPTY0004, expr, "the operand of %s "
+                          "is not a node", name);
+                ret = -1;
+            }
+            xp3ItemUnref(item);
+        }
+    }
+    xp3ValueUnref(value);
+    return(ret);
+}
+
+static xp3DocOrder *
+evalOrder(xp3Eval *ev) {
+    if (ev->order == NULL) {
+        ev->order = xp3DocOrderNew();
+        if (ev->order == NULL)
+            evalNoMemory(ev);
+    }
+    return(ev->order);
+}
+
+/* is, <<, >> */
+static xp3Value *
+evalNodeComparison(xp3Eval *ev, const xp3AstNode *node) {
+    const char *name = operatorName(node->op);
+    xmlNodePtr left;
+    xmlNodePtr right = NULL;
+    xp3ErrCode err;
+    int cmp;
+
+    if ((evalNodeOperand(ev, node->first, name, &left) < 0) ||
+        ((left != NULL) &&
+         (evalNodeOperand(ev, node->last, name, &right) < 0)))
+        return(NULL);
+    if ((left == NULL) || (right == NULL))
+        return(xp3ValueEmpty());
+    if (node->op == XP3_OP_IS)
+        return(evalBoolean(ev, left == right));
+    if (evalOrder(ev) == NULL)
+        return(NULL);
+    err = xp3DocOrderCompare(ev->order, left, right, &cmp);
+    if (err != XP3_ERR_OK) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    return(evalBoolean(ev, (node->op == XP3_OP_PRECEDES) ? (cmp < 0) :
+                                                            (cmp > 0)));
+}
+
+/*
+ * Ranges and node sets
+ */
+
+/* An integer operand of to: empty, or one integer, an untyped value
+ * cast to xs:integer (XPath 3.1, 3.4.1). Returns 0 or -1. */
+static int
+evalRangeBound(xp3Eval *ev, const xp3AstNode *expr, xp3Atomic **bound) {
+    if (evalAtomic(ev, expr, "to", bound) < 0)
+        return(-1);
+    if (*bound == NULL)
+        return(0);
+    if ((*bound)->type == XP3_TYPE_UNTYPED_ATOMIC) {
+        *bound = castUntyped(ev, *bound, XP3_TYPE_INTEGER, expr);
+        return((*bound != NULL) ? 0 : -1);
+    }
+    if (!xp3TypeIsInteger((*bound)->type)) {
+        evalError(ev, XP3_ERR_XPTY0004, expr, "the operand of to is an "
+                  "xs:%s, not an integer", typeName((*bound)->type));
+        xp3AtomicUnref(*bound);
+        *bound = NULL;
+        return(-1);
+    }
+    return(0);
+}
+
+/*
+ * A range with a bound outside 64 bits, which ranges can't store: its
+ * integers one by one, if there are no more than a sequence may have
+ * (doc/DESIGN.md 4.1).
+ */
+static xp3Value *
+expandRange(xp3Eval *ev, const xp3AstNode *node, const xp3Decimal *first,
+            const xp3Decimal *last) {
+    xp3SeqBuilder builder;
+    xp3Decimal *one = xp3DecimalFromInt64(1);
+    xp3Decimal *span = NULL;
+    xp3Decimal *current = NULL;
+    xp3ErrCode err;
+    int64_t count;
+
+    builderInit(ev, &builder);
+    if (one == NULL) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    err = xp3DecimalSub(last, first, &span);
+    if (err != XP3_ERR_OK)
+        goto error;
+    if ((xp3DecimalToInt64(span, &count) < 0) ||
+        ((uint64_t) count >= ev->maxItems)) {
+        evalBuildError(ev, XP3_ERR_LIMIT, node);
+        goto done;
+    }
+    err = xp3DecimalCopy(first, &current);
+    while ((err == XP3_ERR_OK) && (count-- >= 0)) {
+        xp3Decimal *copy;
+        xp3Decimal *next;
+        xp3Atomic *atomic;
+
+        err = xp3DecimalCopy(current, &copy);
+        if (err != XP3_ERR_OK)
+            break;
+        atomic = xp3AtomicNewDecimal(XP3_TYPE_INTEGER, copy);
+        if (atomic == NULL) {
+            err = XP3_ERR_NO_MEMORY;
+            break;
+        }
+        err = xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(atomic));
+        if (err != XP3_ERR_OK)
+            break;
+        err = xp3DecimalAdd(current, one, &next);
+        if (err != XP3_ERR_OK)
+            break;
+        xp3DecimalFree(current);
+        current = next;
+    }
+
+error:
+    if (err != XP3_ERR_OK)
+        evalBuildError(ev, err, node);
+done:
+    xp3DecimalFree(one);
+    xp3DecimalFree(span);
+    xp3DecimalFree(current);
+    if (ev->err != NULL) {
+        xp3SeqBuilderClear(&builder);
+        return(NULL);
+    }
+    return(builderFinish(ev, &builder));
+}
+
+static xp3Value *
+evalRange(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Atomic *first;
+    xp3Atomic *last = NULL;
+    xp3Value *result = NULL;
+    int64_t from;
+    int64_t to;
+
+    if (evalRangeBound(ev, node->first, &first) < 0)
+        return(NULL);
+    if ((first != NULL) && (evalRangeBound(ev, node->last, &last) < 0)) {
+        xp3AtomicUnref(first);
+        return(NULL);
+    }
+    if ((first == NULL) || (last == NULL) ||
+        (xp3DecimalCompare(first->u.dec, last->u.dec) > 0)) {
+        result = xp3ValueEmpty();
+    } else if ((xp3DecimalToInt64(first->u.dec, &from) < 0) ||
+               (xp3DecimalToInt64(last->u.dec, &to) < 0)) {
+        result = expandRange(ev, node, first->u.dec, last->u.dec);
+    } else {
+        xp3ErrCode err = xp3ValueRange(from, to, &result);
+
+        if (err != XP3_ERR_OK) {
+            result = NULL;
+            if (err == XP3_ERR_LIMIT)
+                evalError(ev, err, node, "the range is too long");
+            else
+                evalNoMemory(ev);
+        }
+    }
+    xp3AtomicUnref(first);
+    xp3AtomicUnref(last);
+    return(result);
+}
+
+/* The nodes of an operand of union, intersect or except, in document
+ * order without duplicates. Returns 0 or -1. */
+static int
+evalNodeSet(xp3Eval *ev, const xp3AstNode *expr, const char *name,
+            xp3SeqBuilder *builder) {
+    xp3Value *value = evalExpr(ev, expr);
+    xp3ErrCode err;
+
+    if (value == NULL)
+        return(-1);
+    if (!isAllNodes(value)) {
+        evalError(ev, XP3_ERR_XPTY0004, expr, "an operand of %s contains "
+                  "an item that is not a node", name);
+        xp3ValueUnref(value);
+        return(-1);
+    }
+    err = xp3SeqBuilderAddValue(builder, value);
+    xp3ValueUnref(value);
+    if (err == XP3_ERR_OK)
+        err = evalSortNodes(ev, builder);
+    if (err != XP3_ERR_OK) {
+        if (err == XP3_ERR_NO_MEMORY)
+            evalNoMemory(ev);
+        else
+            evalBuildError(ev, err, expr);
+        return(-1);
+    }
+    return(0);
+}
+
+/* union, intersect, except (XPath 3.1, 3.4.2) */
+static xp3Value *
+evalSetOperation(xp3Eval *ev, const xp3AstNode *node) {
+    const char *name = operatorName(node->op);
+    xp3SeqBuilder left;
+    xp3SeqBuilder right;
+    size_t leftPos = 0;
+    size_t rightPos = 0;
+    size_t kept = 0;
+
+    builderInit(ev, &left);
+    builderInit(ev, &right);
+    if ((evalNodeSet(ev, node->first, name, &left) < 0) ||
+        (evalNodeSet(ev, node->last, name, &right) < 0))
+        goto error;
+
+    if (node->op == XP3_OP_UNION) {
+        size_t i;
+
+        for (i = 0; i < right.count; i++) {
+            xp3ErrCode err = xp3SeqBuilderAdd(&left, right.items[i]);
+
+            if (err != XP3_ERR_OK) {
+                evalBuildError(ev, err, node);
+                goto error;
+            }
+        }
+        right.count = 0;
+        xp3SeqBuilderClear(&right);
+        if (evalSortNodes(ev, &left) != XP3_ERR_OK) {
+            evalNoMemory(ev);
+            goto error;
+        }
+        return(builderFinish(ev, &left));
+    }
+
+    /* Walk both in document order, keeping the left nodes that are in
+     * the right operand (intersect) or not (except) */
+    while (leftPos < left.count) {
+        int cmp = 1;
+
+        if (rightPos < right.count) {
+            xp3ErrCode err = xp3DocOrderCompare(ev->order,
+                                                left.items[leftPos].u.node,
+                                                right.items[rightPos].u.node,
+                                                &cmp);
+
+            if (err != XP3_ERR_OK) {
+                evalNoMemory(ev);
+                goto error;
+            }
+        } else {
+            cmp = -1;
+        }
+        if (cmp > 0) {
+            rightPos++;
+            continue;
+        }
+        if ((cmp == 0) == (node->op == XP3_OP_INTERSECT))
+            left.items[kept++] = left.items[leftPos];
+        leftPos++;
+        if (cmp == 0)
+            rightPos++;
+    }
+    left.count = kept;
+    xp3SeqBuilderClear(&right);
+    return(builderFinish(ev, &left));
+
+error:
+    xp3SeqBuilderClear(&left);
+    xp3SeqBuilderClear(&right);
+    return(NULL);
+}
+
+/*
+ * Types
+ */
+
+/* Whether an atomic value is an instance of a type an ATOMIC_TYPE node
+ * names: an atomic type, or the union xs:numeric */
+static int
+atomicMatches(const xp3Atomic *atomic, int type) {
+    if (type == XP3_SCHEMA_NUMERIC)
+        return(xp3TypeIsNumeric(atomic->type));
+    if ((type < 0) || (type >= XP3_TYPE_COUNT))
+        return(0);
+    return(xp3TypeDerivesFrom(atomic->type, (xp3TypeId) type));
+}
+
+/* Whether an item matches an item type (XPath 3.1, 2.5.5.2) */
+static int
+itemMatches(xp3Item item, const xp3AstNode *type) {
+    switch (type->kind) {
+        case XP3_AST_ANY_ITEM_TYPE:
+            return(1);
+        case XP3_AST_ATOMIC_TYPE:
+            return((item.kind == XP3_ITEM_ATOMIC) &&
+                   atomicMatches(item.u.atomic, type->op));
+        case XP3_AST_KIND_TEST:
+            return((item.kind == XP3_ITEM_NODE) &&
+                   matchesKind(type, item.u.node));
+        default:
+            /* function, map and array tests: no such items yet */
+            return(0);
+    }
+}
+
+/*
+ * Whether a sequence matches a sequence type (XPath 3.1, 2.5.5): its
+ * length fits the occurrence indicator and every item the item type.
+ * Returns 0 or 1, or -1 on error.
+ */
+static int
+sequenceMatches(xp3Eval *ev, const xp3Value *value,
+                const xp3AstNode *seqType) {
+    uint64_t count = xp3ValueCount(value);
+    xp3Iter iter;
+    xp3Item item;
+    int found;
+    int ret = 1;
+
+    if (seqType->kind == XP3_AST_EMPTY_SEQUENCE_TYPE)
+        return(count == 0);
+    switch (seqType->op) {
+        case XP3_OCC_ONE:
+            if (count != 1)
+                return(0);
+            break;
+        case XP3_OCC_OPTIONAL:
+            if (count > 1)
+                return(0);
+            break;
+        case XP3_OCC_ONE_OR_MORE:
+            if (count == 0)
+                return(0);
+            break;
+        default:
+            break;
+    }
+    xp3IterInit(&iter, value);
+    while ((ret == 1) && ((found = xp3IterNext(&iter, &item)) != 0)) {
+        if (found < 0) {
+            evalNoMemory(ev);
+            return(-1);
+        }
+        ret = itemMatches(item, seqType->first);
+        xp3ItemUnref(item);
+    }
+    return(ret);
+}
+
+/* instance of (XPath 3.1, 3.14.1) */
+static xp3Value *
+evalInstanceOf(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalExpr(ev, node->first);
+    int result;
+
+    if (value == NULL)
+        return(NULL);
+    result = sequenceMatches(ev, value, node->last);
+    xp3ValueUnref(value);
+    return((result < 0) ? NULL : evalBoolean(ev, result));
+}
+
+/* treat as (XPath 3.1, 3.14.5): the value, if it matches the type */
+static xp3Value *
+evalTreatAs(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalExpr(ev, node->first);
+    int result;
+
+    if (value == NULL)
+        return(NULL);
+    result = sequenceMatches(ev, value, node->last);
+    if (result == 1)
+        return(value);
+    if (result == 0)
+        evalError(ev, XP3_ERR_XPDY0050, node, "the value does not match "
+                  "the type of treat as");
+    xp3ValueUnref(value);
+    return(NULL);
+}
+
+/*
+ * Cast one atomic value to the target of a cast: an atomic type, the
+ * union xs:numeric, xs:error, or a list type (F&O 3.1, 19.3.5 and
+ * 19.3.6). Adds the result to builder. Returns an error code; the
+ * caller decides what it means.
+ */
+static xp3ErrCode
+castToTarget(const xp3Atomic *value, int target, xp3SeqBuilder *builder) {
+    xp3Atomic *result = NULL;
+    xp3ErrCode err;
+
+    switch (target) {
+        case XP3_SCHEMA_NUMERIC: {
+            static const xp3TypeId members[] = {
+                XP3_TYPE_DOUBLE, XP3_TYPE_FLOAT, XP3_TYPE_DECIMAL
+            };
+            size_t i;
+
+            if (xp3TypeIsNumeric(value->type))
+                return(xp3SeqBuilderAdd(builder, xp3ItemRef(
+                    xp3ItemFromAtomic((xp3Atomic *) value))));
+            err = XP3_ERR_FORG0001;
+            for (i = 0; i < sizeof(members) / sizeof(members[0]); i++) {
+                err = xp3CastAtomic(value, members[i], &result);
+                if ((err != XP3_ERR_FORG0001) && (err != XP3_ERR_XPTY0004))
+                    break;
+            }
+            break;
+        }
+        case XP3_SCHEMA_ERROR:
+            return(XP3_ERR_FORG0001);
+        case XP3_SCHEMA_NMTOKENS:
+        case XP3_SCHEMA_IDREFS:
+        case XP3_SCHEMA_ENTITIES: {
+            xp3TypeId itemType = (target == XP3_SCHEMA_NMTOKENS) ?
+                                 XP3_TYPE_NMTOKEN :
+                                 (target == XP3_SCHEMA_IDREFS) ?
+                                 XP3_TYPE_IDREF : XP3_TYPE_ENTITY;
+            const xmlChar *cur;
+            size_t tokens = 0;
+
+            if (!xp3TypeDerivesFrom(value->type, XP3_TYPE_STRING) &&
+                (value->type != XP3_TYPE_UNTYPED_ATOMIC))
+                return(XP3_ERR_XPTY0004);
+            for (cur = value->u.str; *cur != 0;) {
+                const xmlChar *end;
+                xp3Atomic *token;
+                xp3Atomic *typed;
+
+                while ((*cur == ' ') || (*cur == '\t') || (*cur == '\n') ||
+                       (*cur == '\r'))
+                    cur++;
+                if (*cur == 0)
+                    break;
+                for (end = cur; (*end != 0) && (*end != ' ') &&
+                                (*end != '\t') && (*end != '\n') &&
+                                (*end != '\r'); end++)
+                    ;
+                token = xp3AtomicNewString(XP3_TYPE_STRING, cur,
+                                           (size_t) (end - cur));
+                if (token == NULL)
+                    return(XP3_ERR_NO_MEMORY);
+                err = xp3CastAtomic(token, itemType, &typed);
+                xp3AtomicUnref(token);
+                if (err != XP3_ERR_OK)
+                    return(err);
+                err = xp3SeqBuilderAdd(builder, xp3ItemFromAtomic(typed));
+                if (err != XP3_ERR_OK)
+                    return(err);
+                tokens++;
+                cur = end;
+            }
+            /* List types have at least one item */
+            return((tokens > 0) ? XP3_ERR_OK : XP3_ERR_FORG0001);
+        }
+        default:
+            err = xp3CastAtomic(value, (xp3TypeId) target, &result);
+            break;
+    }
+    if (err != XP3_ERR_OK)
+        return(err);
+    return(xp3SeqBuilderAdd(builder, xp3ItemFromAtomic(result)));
+}
+
+/*
+ * cast as and castable as (XPath 3.1, 3.14.2 and 3.14.3). For cast,
+ * the result or an error; for castable, true or false.
+ */
+static xp3Value *
+evalCast(xp3Eval *ev, const xp3AstNode *node) {
+    int castable = (node->kind == XP3_AST_CASTABLE_AS);
+    const xp3AstNode *seqType = node->last;
+    const xp3AstNode *target = seqType->first;
+    int optional = (seqType->op == XP3_OCC_OPTIONAL);
+    char name[XP3_NAME_BUF];
+    xp3SeqBuilder builder;
+    xp3Value *value;
+    xp3Item item;
+    xp3ErrCode err;
+
+    value = evalExpr(ev, node->first);
+    if (value != NULL)
+        value = atomize(ev, value, node->first);
+    if (value == NULL)
+        return(NULL);
+    if (xp3ValueCount(value) != 1) {
+        int empty = (xp3ValueCount(value) == 0);
+
+        xp3ValueUnref(value);
+        if (castable)
+            return(evalBoolean(ev, empty && optional));
+        if (empty && optional)
+            return(xp3ValueEmpty());
+        evalError(ev, XP3_ERR_XPTY0004, node->first, "%s can't be cast "
+                  "to %s", empty ? "the empty sequence" :
+                  "a sequence of more than one item",
+                  displayName(target, name, sizeof(name)));
+        return(NULL);
+    }
+    if (xp3ValueItemAt(value, 0, &item) <= 0) {
+        xp3ValueUnref(value);
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    xp3ValueUnref(value);
+
+    builderInit(ev, &builder);
+    err = castToTarget(item.u.atomic, target->op, &builder);
+    if (castable && ((err == XP3_ERR_OK) || (err == XP3_ERR_FORG0001) ||
+                     (err == XP3_ERR_XPTY0004) || (err == XP3_ERR_FOCA0001) ||
+                     (err == XP3_ERR_FOCA0002) || (err == XP3_ERR_FOCA0003))) {
+        xp3SeqBuilderClear(&builder);
+        xp3ItemUnref(item);
+        return(evalBoolean(ev, err == XP3_ERR_OK));
+    }
+    switch (err) {
+        case XP3_ERR_OK:
+            break;
+        case XP3_ERR_FORG0001:
+            if (xp3TypeRepresentation(item.u.atomic->type) == XP3_REP_STRING)
+                evalError(ev, err, node, "\"%.40s\" is not a valid %s",
+                          (const char *) item.u.atomic->u.str,
+                          displayName(target, name, sizeof(name)));
+            else
+                evalError(ev, err, node, "the xs:%s value is out of the "
+                          "range of %s", typeName(item.u.atomic->type),
+                          displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_XPTY0004:
+            evalError(ev, err, node, "xs:%s can't be cast to %s",
+                      typeName(item.u.atomic->type),
+                      displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_FOCA0001:
+        case XP3_ERR_FOCA0003:
+            evalError(ev, err, node, "the value is too large for %s",
+                      displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_FOCA0002:
+            evalError(ev, err, node, "NaN and infinity can't be cast to %s",
+                      displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_UNSUPPORTED:
+            evalError(ev, err, node, "casting xs:%s to %s is not "
+                      "implemented yet", typeName(item.u.atomic->type),
+                      displayName(target, name, sizeof(name)));
+            break;
+        default:
+            evalBuildError(ev, err, node);
+            break;
+    }
+    xp3ItemUnref(item);
+    if (err != XP3_ERR_OK) {
+        xp3SeqBuilderClear(&builder);
+        return(NULL);
+    }
+    return(builderFinish(ev, &builder));
+}
+
+/* Binary operators other than and and or */
+static xp3Value *
+evalBinary(xp3Eval *ev, const xp3AstNode *node) {
+    switch (node->op) {
+        case XP3_OP_OR:
+        case XP3_OP_AND:
+            return(evalLogical(ev, node));
+        case XP3_OP_GEN_EQ:
+        case XP3_OP_GEN_NE:
+        case XP3_OP_GEN_LT:
+        case XP3_OP_GEN_LE:
+        case XP3_OP_GEN_GT:
+        case XP3_OP_GEN_GE:
+            return(evalGeneralComparison(ev, node));
+        case XP3_OP_VAL_EQ:
+        case XP3_OP_VAL_NE:
+        case XP3_OP_VAL_LT:
+        case XP3_OP_VAL_LE:
+        case XP3_OP_VAL_GT:
+        case XP3_OP_VAL_GE:
+            return(evalValueComparison(ev, node));
+        case XP3_OP_IS:
+        case XP3_OP_PRECEDES:
+        case XP3_OP_FOLLOWS:
+            return(evalNodeComparison(ev, node));
+        case XP3_OP_RANGE:
+            return(evalRange(ev, node));
+        case XP3_OP_ADD:
+        case XP3_OP_SUB:
+        case XP3_OP_MUL:
+        case XP3_OP_DIV:
+        case XP3_OP_IDIV:
+        case XP3_OP_MOD:
+            return(evalArithmetic(ev, node));
+        case XP3_OP_UNION:
+        case XP3_OP_INTERSECT:
+        case XP3_OP_EXCEPT:
+            return(evalSetOperation(ev, node));
+        default:
+            /* || and ! come with Part 12 */
+            return(evalUnsupported(ev, node));
+    }
 }
 
 /*
@@ -1318,9 +2367,16 @@ evalExpr(xp3Eval *ev, const xp3AstNode *node) {
         case XP3_AST_IF:
             return(evalIf(ev, node));
         case XP3_AST_BINARY:
-            if ((node->op == XP3_OP_OR) || (node->op == XP3_OP_AND))
-                return(evalLogical(ev, node));
-            return(evalUnsupported(ev, node));
+            return(evalBinary(ev, node));
+        case XP3_AST_UNARY:
+            return(evalUnary(ev, node));
+        case XP3_AST_CAST_AS:
+        case XP3_AST_CASTABLE_AS:
+            return(evalCast(ev, node));
+        case XP3_AST_INSTANCE_OF:
+            return(evalInstanceOf(ev, node));
+        case XP3_AST_TREAT_AS:
+            return(evalTreatAs(ev, node));
         case XP3_AST_PATH:
             return(evalPath(ev, node));
         case XP3_AST_STEP:
@@ -1344,6 +2400,7 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
 
     ev->maxItems = (ctx != NULL) ? ctx->maxSequenceLength :
                                    XP3_MAX_SEQUENCE_ITEMS;
+    ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
         ev->focus.item = xp3ItemFromNode(ctx->contextNode);
         ev->focus.present = 1;
