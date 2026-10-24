@@ -709,7 +709,8 @@ xp3DecimalToDouble(const xp3Decimal *dec) {
 
     if (str == NULL)
         return(xp3DoubleNaN());
-    ret = xp3DoubleParse((const char *) str);
+    if (xp3DoubleParse((const char *) str, &ret) < 0)
+        ret = xp3DoubleNaN();
     xmlFree(str);
     return(ret);
 }

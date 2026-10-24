@@ -17,11 +17,11 @@
 double
 xp3DoubleNaN(void);
 
-double
-xp3DoubleParse(const char *str);
+int
+xp3DoubleParse(const char *str, double *value);
 
-float
-xp3FloatParse(const char *str);
+int
+xp3FloatParse(const char *str, float *value);
 
 xmlChar *
 xp3DoubleToString(double value);
