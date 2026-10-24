@@ -90,7 +90,13 @@ caffeinate -i -s sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
 # Linux
 systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
 systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+
+# Windows: in a WSL2 shell, with Docker Desktop running
+sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
 ```
+
+On Windows, keep the machine awake on the Windows side, because `systemd-inhibit` in WSL2 only affects the WSL virtual machine: turn on PowerToys Awake for the night, or set `powercfg /change standby-timeout-ac 0` and restore the previous value afterwards. These runs fuzz the Linux build in a container on every system; fuzzing the native Windows build (MSVC, clang-cl) comes with the Windows CI jobs.
 
 The `clang:tsan` job runs the tests under ThreadSanitizer, among them `testthreads`, where several threads evaluate one compiled expression at once.
 
