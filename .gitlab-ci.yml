@@ -174,8 +174,9 @@ coverage:
 # Fuzzing smoke test: two minutes of libFuzzer on compiling (xp3parse)
 # and two on evaluation (xp3eval, which also checks that optimizing
 # never changes a result), with ASan and UBSan, seeded with the corpora
-# and the dictionary. Long runs happen outside CI; this catches
-# regressions that the replayed corpora miss.
+# and the dictionary. This catches regressions that the replayed corpora
+# miss; longer runs are fuzz:long below, and overnight runs happen
+# outside CI (.gitlab-ci/fuzz-long.sh).
 fuzz:
   stage: build
   variables:
@@ -195,6 +196,17 @@ fuzz:
       - leak-*
       - timeout-*
       - oom-*
+
+# Long fuzzing on demand: started by hand, it runs both fuzzers for 50
+# minutes each in a child pipeline (.gitlab-ci/fuzz-long.yml). The job
+# succeeds once the child pipeline is created, so this pipeline never
+# waits for the fuzzers; their results are in the child pipeline.
+fuzz:long:
+  stage: build
+  needs: []
+  when: manual
+  trigger:
+    include: .gitlab-ci/fuzz-long.yml
 
 docs:
   stage: docs

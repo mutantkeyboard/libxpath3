@@ -78,7 +78,7 @@ mkdir corpus && cp fuzz/seed/* corpus
 ./build-fuzz/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 corpus
 ```
 
-For the evaluation fuzzer, build `xp3eval-fuzz` the same way and seed it from `fuzz/seed-eval/`. The `fuzz` CI job runs both for two minutes each on every pipeline, and keeps any crash inputs as artifacts.
+For the evaluation fuzzer, build `xp3eval-fuzz` the same way and seed it from `fuzz/seed-eval/`. The `fuzz` CI job runs both for two minutes each on every pipeline, and keeps any crash inputs as artifacts. The manual `fuzz:long` job runs them for 50 minutes each on demand, in a child pipeline that the pipeline itself doesn't wait for.
 
 For long runs, such as overnight, run both fuzzers in Docker with the machine kept awake, here for 8 hours each. Each writes its log and any crash inputs to its folder; `fuzz.log` ends in `exit=0` when nothing was found.
 
