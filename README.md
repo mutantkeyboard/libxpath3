@@ -80,6 +80,18 @@ mkdir corpus && cp fuzz/seed/* corpus
 
 For the evaluation fuzzer, build `xp3eval-fuzz` the same way and seed it from `fuzz/seed-eval/`. The `fuzz` CI job runs both for two minutes each on every pipeline, and keeps any crash inputs as artifacts.
 
+For long runs, such as overnight, run both fuzzers in Docker with the machine kept awake, here for 8 hours each. Each writes its log and any crash inputs to its folder; `fuzz.log` ends in `exit=0` when nothing was found.
+
+```sh
+# macOS
+caffeinate -i -s sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+caffeinate -i -s sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+
+# Linux
+systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+```
+
 The `clang:tsan` job runs the tests under ThreadSanitizer, among them `testthreads`, where several threads evaluate one compiled expression at once.
 
 Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and ends its log with the pass rate of each level. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
