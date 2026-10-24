@@ -192,7 +192,9 @@ xp3BindVariable(xp3DynamicContext *ctx, const xmlChar *uri,
  * Limit the number of items in the sequences an evaluation builds. A
  * longer sequence raises the error LIMIT. The default is 10 million,
  * the same as libxml2's limit on node-sets. Integer ranges such as
- * (1 to 100000000) are not stored item by item and don't count.
+ * (1 to 100000000) are not stored item by item and don't count, and
+ * parts of an expression that compiling evaluated already, such as the
+ * (1, 2, 3) in (1, 2, 3)[2], build no sequences when evaluated.
  *
  * @param ctx  the context
  * @param max  the most items, at least 1
@@ -225,6 +227,8 @@ typedef struct {
     xp3DocOrder *order;         /* created when first needed */
     size_t maxItems;
     xp3LanguageLevel level;
+    uint64_t operations;        /* steps taken so far */
+    uint64_t maxOperations;     /* 0 for no limit */
     xp3Error *err;              /* the first error */
 } xp3Eval;
 
@@ -263,6 +267,23 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
                   (unsigned long) ev->maxItems);
     else
         evalNoMemory(ev);
+}
+
+/*
+ * Count steps of work: each expression evaluated, each node an axis
+ * visits, each pair a general comparison tries and each item of an
+ * expanded range. Past the limit, the evaluation fails with LIMIT.
+ * Returns 0 or -1.
+ */
+static int
+evalCount(xp3Eval *ev, const xp3AstNode *node) {
+    ev->operations++;
+    if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
+        evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
+                  "%lu steps", (unsigned long) ev->maxOperations);
+        return(-1);
+    }
+    return(0);
 }
 
 static void
@@ -770,6 +791,10 @@ evalStep(xp3Eval *ev, const xp3AstNode *step) {
                     matchesKind(test, node);
         xp3ErrCode err;
 
+        if (evalCount(ev, step) < 0) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
         if (!match)
             continue;
         err = xp3SeqBuilderAdd(&builder, xp3ItemFromNode(node));
@@ -917,7 +942,8 @@ evalPathStep(xp3Eval *ev, xp3Value *input, const xp3AstNode *right) {
         goto error;
     }
     /* One context node and an axis step give document order already */
-    if ((nodes > 1) && ((size > 1) || (right->kind != XP3_AST_STEP))) {
+    if ((nodes > 1) && !(right->flags & XP3_AST_SORTED) &&
+        ((size > 1) || (right->kind != XP3_AST_STEP))) {
         xp3ErrCode err = evalSortNodes(ev, &builder);
 
         if (err != XP3_ERR_OK) {
@@ -1666,6 +1692,12 @@ evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
         xp3ValueUnref(left);
         return(NULL);
     }
+    /* No pairs: false, without walking the other side */
+    if ((xp3ValueCount(left) == 0) || (xp3ValueCount(right) == 0)) {
+        xp3ValueUnref(left);
+        xp3ValueUnref(right);
+        return(evalBoolean(ev, 0));
+    }
 
     xp3IterInit(&leftIter, left);
     while ((result == 0) &&
@@ -1679,11 +1711,21 @@ evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
             result = -1;
             break;
         }
+        if (evalCount(ev, node) < 0) {
+            xp3ItemUnref(leftItem);
+            result = -1;
+            break;
+        }
         xp3IterInit(&rightIter, right);
         while ((result == 0) &&
                ((more = xp3IterNext(&rightIter, &rightItem)) != 0)) {
             if (more < 0) {
                 evalNoMemory(ev);
+                result = -1;
+                break;
+            }
+            if (evalCount(ev, node) < 0) {
+                xp3ItemUnref(rightItem);
                 result = -1;
                 break;
             }
@@ -1834,6 +1876,8 @@ expandRange(xp3Eval *ev, const xp3AstNode *node, const xp3Decimal *first,
         xp3Decimal *next;
         xp3Atomic *atomic;
 
+        if (evalCount(ev, node) < 0)
+            goto done;
         err = xp3DecimalCopy(current, &copy);
         if (err != XP3_ERR_OK)
             break;
@@ -2046,7 +2090,7 @@ itemMatches(xp3Item item, const xp3AstNode *type) {
  */
 static int
 sequenceMatches(xp3Eval *ev, const xp3Value *value,
-                const xp3AstNode *seqType) {
+                const xp3AstNode *seqType, const xp3AstNode *node) {
     uint64_t count = xp3ValueCount(value);
     xp3Iter iter;
     xp3Item item;
@@ -2071,10 +2115,25 @@ sequenceMatches(xp3Eval *ev, const xp3Value *value,
         default:
             break;
     }
+    /* A range holds integers only: its first item stands for all */
+    if (value->shape == XP3_SEQ_RANGE) {
+        found = xp3ValueItemAt(value, 0, &item);
+        if (found < 0) {
+            evalNoMemory(ev);
+            return(-1);
+        }
+        ret = itemMatches(item, seqType->first);
+        xp3ItemUnref(item);
+        return(ret);
+    }
     xp3IterInit(&iter, value);
     while ((ret == 1) && ((found = xp3IterNext(&iter, &item)) != 0)) {
         if (found < 0) {
             evalNoMemory(ev);
+            return(-1);
+        }
+        if (evalCount(ev, node) < 0) {
+            xp3ItemUnref(item);
             return(-1);
         }
         ret = itemMatches(item, seqType->first);
@@ -2091,7 +2150,7 @@ evalInstanceOf(xp3Eval *ev, const xp3AstNode *node) {
 
     if (value == NULL)
         return(NULL);
-    result = sequenceMatches(ev, value, node->last);
+    result = sequenceMatches(ev, value, node->last, node);
     xp3ValueUnref(value);
     return((result < 0) ? NULL : evalBoolean(ev, result));
 }
@@ -2104,7 +2163,7 @@ evalTreatAs(xp3Eval *ev, const xp3AstNode *node) {
 
     if (value == NULL)
         return(NULL);
-    result = sequenceMatches(ev, value, node->last);
+    result = sequenceMatches(ev, value, node->last, node);
     if (result == 1)
         return(value);
     if (result == 0)
@@ -2343,7 +2402,18 @@ evalBinary(xp3Eval *ev, const xp3AstNode *node) {
 
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node) {
+    if (evalCount(ev, node) < 0)
+        return(NULL);
     switch (node->kind) {
+        case XP3_AST_CONSTANT:
+            /* A constant's count never changes, so this writes nothing.
+             * The caller's limit holds for constants too. */
+            if ((node->value->shape == XP3_SEQ_ARRAY) &&
+                (node->value->u.array.count > ev->maxItems)) {
+                evalBuildError(ev, XP3_ERR_LIMIT, node);
+                return(NULL);
+            }
+            return(xp3ValueRef(node->value));
         case XP3_AST_INTEGER:
         case XP3_AST_DECIMAL:
         case XP3_AST_DOUBLE:
@@ -2400,6 +2470,7 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
 
     ev->maxItems = (ctx != NULL) ? ctx->maxSequenceLength :
                                    XP3_MAX_SEQUENCE_ITEMS;
+    ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
         ev->focus.item = xp3ItemFromNode(ctx->contextNode);
@@ -2494,6 +2565,13 @@ xp3Evaluate(const xp3Expr *expr, xp3DynamicContext *ctx, xp3Error **error) {
         result = evalExpr(&ev, expr->ast->root);
     evalCleanup(&ev);
 
+    /* The result outlives the expression, its constants included */
+    if (result != NULL) {
+        result = xp3ValueDetach(result);
+        if (result == NULL)
+            evalNoMemory(&ev);
+    }
+
     if ((result == NULL) && (ev.err == NULL))
         evalNoMemory(&ev);
     if (result != NULL) {
@@ -2542,6 +2620,50 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
             *error = xp3ErrorNoMemory();
     }
     return(-1);
+}
+
+/**
+ * Evaluate a subexpression on its own, as constant folding does: no
+ * focus, no dynamic context, and a budget of steps and items. The
+ * subexpression may bind variables of its own, which need slots: the
+ * caller lends an array of them, all NULL, and gets it back so.
+ *
+ * @param node           the subexpression
+ * @param slots          the slots of the whole expression, all NULL
+ * @param slotCount      their number
+ * @param level          the language level
+ * @param maxOperations  the most steps, see evalCount()
+ * @param maxItems       the most items of any sequence built
+ * @param value          set to the value, with one reference
+ * @param operations     set to the steps taken
+ * @returns XP3_ERR_OK, or the code of the error evaluating raised
+ */
+xp3ErrCode
+xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
+                xp3LanguageLevel level, uint64_t maxOperations,
+                size_t maxItems, xp3Value **value,
+                uint64_t *operations) {
+    xp3ErrCode ret = XP3_ERR_OK;
+    xp3Eval ev;
+
+    *value = NULL;
+    memset(&ev, 0, sizeof(ev));
+    ev.level = level;
+    ev.maxItems = maxItems;
+    ev.maxOperations = maxOperations;
+    ev.slots = slots;
+    ev.slotCount = slotCount;
+    *value = evalExpr(&ev, node);
+    *operations = ev.operations;
+    if (*value == NULL)
+        ret = (ev.err != NULL) ? ev.err->code : XP3_ERR_NO_MEMORY;
+
+    /* The slots are lent: bindings restored them, and they stay */
+    ev.slots = NULL;
+    ev.slotCount = 0;
+    evalCleanup(&ev);
+    xp3ErrorFree(ev.err);
+    return(ret);
 }
 
 /*

@@ -39,7 +39,7 @@ The gate is compile-only mode: each expression is compiled with the namespaces a
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
 
-Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `cast`, `castable`, `instance of` and `treat` are evaluated, while function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 5,345 tests passed, 3 failed and 16,683 not judged. The failures are the known one above and two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1). CI runs this as a report, which doesn't fail the pipeline yet.
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `cast`, `castable`, `instance of` and `treat` are evaluated, while function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 5,346 tests passed, 3 failed and 16,682 not judged. The failures are the known one above and two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1). CI runs this as a report, which doesn't fail the pipeline yet. It also evaluates every test a second time without constant folding and path rewrites (`qt3run -e -c`), and any test whose outcome differs fails the pipeline.
 
 To run it yourself, check out the test suite at the same commit and pass its directory to Meson. `meson test --suite qt3` then runs all three levels:
 
@@ -56,12 +56,17 @@ Failures that are accepted for now are listed in `qt3/known-failures-XP20.txt`, 
 
 ### Fuzzing
 
-`fuzz/xp3parse.c` is a libFuzzer target: the input's first byte selects the language level, the next two inject an allocation failure at that position, and the rest is compiled as an expression, so the target covers both the parser and static analysis. The target aborts when a library contract breaks (no expression and no error, an injected failure not reported as `NO_MEMORY`, or a variable slot out of range); the sanitizers catch the rest. The same file builds as a replay driver with any compiler, so `meson test` runs the seed corpus in `fuzz/seed/` as regression tests everywhere, and every crash the fuzzer finds becomes a seed.
+There are two libFuzzer targets. In both, the input's first byte selects the language level, the next two inject an allocation failure at that position, and the rest is the expression.
+
+- `fuzz/xp3parse.c` compiles the expression, so it covers the parser and static analysis, and through constant folding also the evaluator.
+- `fuzz/xp3eval.c` evaluates it against a fixed document with every kind of node, and is differential: each input is compiled with and without optimizing, and the two must give the same result, so a folding or path-order bug can't hide. Its first byte also selects the context node.
+
+Both abort when a library contract breaks (no expression and no error, an injected failure not reported as `NO_MEMORY`, a variable slot out of range, or the two evaluations disagreeing); the sanitizers catch the rest. Each file also builds as a replay driver with any compiler, so `meson test` runs the seed corpora in `fuzz/seed/` and `fuzz/seed-eval/` as regression tests everywhere, and every crash the fuzzers find becomes a seed.
 
 Apple's clang ships without the libFuzzer runtime, so real fuzzing runs on Linux. Locally:
 
 ```sh
-sh .gitlab-ci/run-local.sh fuzz        # 2 minutes; FUZZ_SECONDS=3600 for longer
+sh .gitlab-ci/run-local.sh fuzz        # 2 minutes each; FUZZ_SECONDS=3600 for longer
 ```
 
 or natively with clang and compiler-rt:
@@ -73,7 +78,27 @@ mkdir corpus && cp fuzz/seed/* corpus
 ./build-fuzz/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 corpus
 ```
 
-The `fuzz` CI job does the same for two minutes on every pipeline, and keeps any crash inputs as artifacts.
+For the evaluation fuzzer, build `xp3eval-fuzz` the same way and seed it from `fuzz/seed-eval/`. The `fuzz` CI job runs both for two minutes each on every pipeline, and keeps any crash inputs as artifacts. The manual `fuzz:long` job runs them for 50 minutes each on demand, in a child pipeline that the pipeline itself doesn't wait for.
+
+For long runs, such as overnight, run both fuzzers in Docker with the machine kept awake, here for 8 hours each. Each writes its log and any crash inputs to its folder; `fuzz.log` ends in `exit=0` when nothing was found.
+
+```sh
+# macOS
+caffeinate -i -s sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+caffeinate -i -s sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+
+# Linux
+systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+systemd-inhibit --what=sleep sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+
+# Windows: in a WSL2 shell, with Docker Desktop running
+sh .gitlab-ci/fuzz-long.sh parse 28800 fuzz-out/parse &
+sh .gitlab-ci/fuzz-long.sh eval 28800 fuzz-out/eval &
+```
+
+On Windows, keep the machine awake on the Windows side, because `systemd-inhibit` in WSL2 only affects the WSL virtual machine: turn on PowerToys Awake for the night, or set `powercfg /change standby-timeout-ac 0` and restore the previous value afterwards. These runs fuzz the Linux build in a container on every system; fuzzing the native Windows build (MSVC, clang-cl) comes with the Windows CI jobs.
+
+The `clang:tsan` job runs the tests under ThreadSanitizer, among them `testthreads`, where several threads evaluate one compiled expression at once.
 
 Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and ends its log with the pass rate of each level. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
 

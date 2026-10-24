@@ -4,7 +4,8 @@
 #
 # Usage: sh .gitlab-ci/run-local.sh [job...]
 #
-# Jobs: style gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage
+# Jobs: style gcc gcc:c99 clang:asan clang:tsan cmake libxml2:master qt3
+#       coverage
 #       fuzz docs (default: all)
 # Set IMAGE to use a different image than fedora:latest, and COVERAGE_OUT
 # to a directory to get the coverage job's HTML report and Cobertura XML.
@@ -13,7 +14,7 @@
 
 set -u
 
-ALL_JOBS="style gcc gcc:c99 clang:asan cmake libxml2:master qt3 coverage fuzz docs"
+ALL_JOBS="style gcc gcc:c99 clang:asan clang:tsan cmake libxml2:master qt3 coverage fuzz docs"
 
 # On the host: start the container and run this script inside it.
 if [ "${1:-}" != "--inside" ]; then
@@ -67,6 +68,11 @@ job_clang_asan() {
     meson_job "-Db_sanitize=address,undefined -Db_lundef=false"
 }
 
+job_clang_tsan() {
+    export CC=clang TSAN_OPTIONS="halt_on_error=1"
+    meson_job "-Db_sanitize=thread -Db_lundef=false"
+}
+
 job_cmake() {
     cmake -S . -B build-cmake -G Ninja -DCMAKE_COMPILE_WARNING_AS_ERROR=ON &&
     cmake --build build-cmake &&
@@ -101,7 +107,7 @@ job_qt3() {
             qt3tests/catalog.xml || return 1
     done &&
     for spec in XP20 XP30 XP31; do
-        ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml \
+        ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml \
             > qt3-eval.txt || return 1
         tail -n 1 qt3-eval.txt
     done
@@ -115,7 +121,8 @@ job_coverage() {
     git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git \
         "$QT3_COMMIT" &&
     git -C qt3tests checkout -q FETCH_HEAD &&
-    meson setup build -Db_coverage=true &&
+    meson setup build -Db_coverage=true \
+        -Dc_args=-fprofile-update=atomic &&
     meson compile -C build &&
     meson test -C build --print-errorlogs &&
     for spec in XP20 XP30 XP31; do
@@ -123,7 +130,7 @@ job_coverage() {
             qt3tests/catalog.xml || return 1
     done &&
     for spec in XP20 XP30 XP31; do
-        ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml \
+        ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml \
             > qt3-eval.txt || return 1
     done &&
     mkdir coverage &&
@@ -140,9 +147,13 @@ job_fuzz() {
     meson setup build --werror -Dfuzzer=true \
         -Db_sanitize=address,undefined -Db_lundef=false &&
     meson compile -C build &&
-    mkdir corpus && cp fuzz/seed/* corpus/ &&
+    mkdir corpus corpus-eval && cp fuzz/seed/* corpus/ &&
+    cp fuzz/seed-eval/* corpus-eval/ &&
     ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 \
-        -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 corpus
+        -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 corpus &&
+    ./build/fuzz/xp3eval-fuzz -dict=fuzz/xp3.dict -max_len=10000 \
+        -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 \
+        corpus-eval
 }
 
 job_docs() {
