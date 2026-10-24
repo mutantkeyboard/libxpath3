@@ -56,12 +56,17 @@ Failures that are accepted for now are listed in `qt3/known-failures-XP20.txt`, 
 
 ### Fuzzing
 
-`fuzz/xp3parse.c` is a libFuzzer target: the input's first byte selects the language level, the next two inject an allocation failure at that position, and the rest is compiled as an expression, so the target covers both the parser and static analysis. The target aborts when a library contract breaks (no expression and no error, an injected failure not reported as `NO_MEMORY`, or a variable slot out of range); the sanitizers catch the rest. The same file builds as a replay driver with any compiler, so `meson test` runs the seed corpus in `fuzz/seed/` as regression tests everywhere, and every crash the fuzzer finds becomes a seed.
+There are two libFuzzer targets. In both, the input's first byte selects the language level, the next two inject an allocation failure at that position, and the rest is the expression.
+
+- `fuzz/xp3parse.c` compiles the expression, so it covers the parser and static analysis, and through constant folding also the evaluator.
+- `fuzz/xp3eval.c` evaluates it against a fixed document with every kind of node, and is differential: each input is compiled with and without optimizing, and the two must give the same result, so a folding or path-order bug can't hide. Its first byte also selects the context node.
+
+Both abort when a library contract breaks (no expression and no error, an injected failure not reported as `NO_MEMORY`, a variable slot out of range, or the two evaluations disagreeing); the sanitizers catch the rest. Each file also builds as a replay driver with any compiler, so `meson test` runs the seed corpora in `fuzz/seed/` and `fuzz/seed-eval/` as regression tests everywhere, and every crash the fuzzers find becomes a seed.
 
 Apple's clang ships without the libFuzzer runtime, so real fuzzing runs on Linux. Locally:
 
 ```sh
-sh .gitlab-ci/run-local.sh fuzz        # 2 minutes; FUZZ_SECONDS=3600 for longer
+sh .gitlab-ci/run-local.sh fuzz        # 2 minutes each; FUZZ_SECONDS=3600 for longer
 ```
 
 or natively with clang and compiler-rt:
@@ -73,7 +78,9 @@ mkdir corpus && cp fuzz/seed/* corpus
 ./build-fuzz/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 corpus
 ```
 
-The `fuzz` CI job does the same for two minutes on every pipeline, and keeps any crash inputs as artifacts.
+For the evaluation fuzzer, build `xp3eval-fuzz` the same way and seed it from `fuzz/seed-eval/`. The `fuzz` CI job runs both for two minutes each on every pipeline, and keeps any crash inputs as artifacts.
+
+The `clang:tsan` job runs the tests under ThreadSanitizer, among them `testthreads`, where several threads evaluate one compiled expression at once.
 
 Every CI pipeline runs the `qt3` job: it fetches QT3 at the pinned commit, runs all three levels under AddressSanitizer and UndefinedBehaviorSanitizer, and ends its log with the pass rate of each level. To use a newer QT3, update the commit in `.gitlab-ci.yml`, `.gitlab-ci/run-local.sh` and this section together.
 

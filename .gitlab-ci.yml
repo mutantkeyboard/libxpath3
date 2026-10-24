@@ -64,6 +64,15 @@ clang:asan:
     MESON_ARGS: "-Db_sanitize=address,undefined -Db_lundef=false"
     ASAN_OPTIONS: "detect_leaks=1"
 
+# All tests under ThreadSanitizer, for testthreads: several threads
+# evaluating one compiled expression with shared constants.
+clang:tsan:
+  extends: .meson
+  variables:
+    CC: clang
+    MESON_ARGS: "-Db_sanitize=thread -Db_lundef=false"
+    TSAN_OPTIONS: "halt_on_error=1"
+
 cmake:
   stage: build
   script:
@@ -133,7 +142,9 @@ coverage:
     - git init -q qt3tests
     - git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git "$QT3_COMMIT"
     - git -C qt3tests checkout -q FETCH_HEAD
-    - meson setup build -Db_coverage=true
+    # Atomic counters: testthreads runs threads, which otherwise corrupt
+    # them (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080)
+    - meson setup build -Db_coverage=true -Dc_args=-fprofile-update=atomic
     - meson compile -C build
     - meson test -C build --print-errorlogs
     - >
@@ -160,9 +171,11 @@ coverage:
         coverage_format: cobertura
         path: coverage.xml
 
-# Fuzzing smoke test: two minutes of libFuzzer on the parser, with ASan
-# and UBSan, seeded with the corpus and the dictionary. Long runs happen
-# outside CI; this catches regressions that the replayed corpus misses.
+# Fuzzing smoke test: two minutes of libFuzzer on compiling (xp3parse)
+# and two on evaluation (xp3eval, which also checks that optimizing
+# never changes a result), with ASan and UBSan, seeded with the corpora
+# and the dictionary. Long runs happen outside CI; this catches
+# regressions that the replayed corpora miss.
 fuzz:
   stage: build
   variables:
@@ -171,8 +184,9 @@ fuzz:
   script:
     - meson setup build --werror -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
     - meson compile -C build
-    - mkdir corpus && cp fuzz/seed/* corpus/
+    - mkdir corpus corpus-eval && cp fuzz/seed/* corpus/ && cp fuzz/seed-eval/* corpus-eval/
     - ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus
+    - ./build/fuzz/xp3eval-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus-eval
   artifacts:
     when: on_failure
     expire_in: 1 week

@@ -12,6 +12,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1269,6 +1270,382 @@ done:
 }
 
 /*
+ * Random paths, optimized and not
+ *
+ * Constant folding, the sorted flags and the //x rewrite must never
+ * change a result. Random documents and random path expressions from a
+ * small grammar are evaluated with and without optimizing, and the
+ * descriptions of the results, or the error codes, must be the same.
+ */
+
+#define XP3_RANDOM_DOCS 300
+#define XP3_RANDOM_EXPRS 100
+
+/*
+ * The random numbers come from a linear congruential generator of our
+ * own, not rand(), whose numbers differ between C libraries: the same
+ * seed gives the same documents and expressions on every platform, so
+ * a failure in CI can be reproduced anywhere. The multiplier and
+ * increment are those of Knuth's MMIX (The Art of Computer
+ * Programming, vol. 2, 3.3.4). With a modulus of 2^64, an odd
+ * increment and a multiplier that is 1 modulo 4, the generator runs
+ * through all 2^64 states before repeating (the Hull-Dobell theorem).
+ * The low bits of such a generator repeat with short periods, so
+ * pathRandom() uses the high ones. Each document starts from its own
+ * seed, its index plus one.
+ */
+static uint64_t pathRandomState;
+
+static unsigned
+pathRandom(unsigned limit) {
+    pathRandomState = pathRandomState * UINT64_C(6364136223846793005) +
+                      UINT64_C(1442695040888963407);
+    return((unsigned) (pathRandomState >> 33) % limit);
+}
+
+/* Two names, so that elements of one name often nest */
+static const char *const xp3PathNames[] = { "a", "b" };
+
+/* Append to a buffer; on overflow the buffer stays as it was */
+static void
+appendTo(char *out, size_t size, const char *text) {
+    size_t used = strlen(out);
+
+    if (used + strlen(text) < size)
+        memcpy(out + used, text, strlen(text) + 1);
+}
+
+/* A random element with attributes, text, comments and children */
+static void
+randomElement(char *out, size_t size, int depth) {
+    const char *name = xp3PathNames[pathRandom(2)];
+    unsigned children = (depth < 2) ? 2 + pathRandom(3) :
+                        (depth < 5) ? pathRandom(4) : 0;
+    unsigned i;
+
+    appendTo(out, size, "<");
+    appendTo(out, size, name);
+    if (pathRandom(2) == 0)
+        appendTo(out, size, (pathRandom(2) == 0) ? " id='i1'" : " id='i2'");
+    if (pathRandom(3) == 0)
+        appendTo(out, size, " k='v'");
+    appendTo(out, size, ">");
+    for (i = 0; i < children; i++) {
+        switch (pathRandom(8)) {
+            case 0:
+                appendTo(out, size, "x");
+                break;
+            case 1:
+                appendTo(out, size, "<!--c-->");
+                break;
+            case 2:
+                appendTo(out, size, "<?p d?>");
+                break;
+            default:
+                randomElement(out, size, depth + 1);
+                break;
+        }
+    }
+    appendTo(out, size, "</");
+    appendTo(out, size, name);
+    appendTo(out, size, ">");
+}
+
+/* Axes for elements and other children, weighted toward those whose
+ * order after several nodes is hard: siblings and descendants. The
+ * attribute axis has tests of its own. */
+static const char *const xp3PathAxes[] = {
+    "child::", "descendant::", "descendant-or-self::", "self::",
+    "parent::", "ancestor::", "ancestor-or-self::", "following-sibling::",
+    "preceding-sibling::", "following::", "preceding::", "", "", "",
+    "following-sibling::", "descendant::", "preceding-sibling::"
+};
+
+#define XP3_PATH_AXES (sizeof(xp3PathAxes) / sizeof(xp3PathAxes[0]))
+
+/* Tests, weighted toward those that match many nodes */
+static const char *const xp3PathTests[] = {
+    "a", "b", "*", "*", "node()", "node()", "a", "b", "text()", "comment()"
+};
+
+#define XP3_PATH_TESTS (sizeof(xp3PathTests) / sizeof(xp3PathTests[0]))
+
+static const char *const xp3PathAttributes[] = { "@id", "@k", "@*" };
+
+/* Predicates that depend on position, that don't, and constant ones,
+ * among them constant ranges and constant operands of and and or */
+static const char *const xp3PathPredicates[] = {
+    "[1]", "[2]", "[@id]", "[@id = 'i1']", "[a]", "[. = 'x']",
+    "[@k = 'v' or b]", "[1 = 1]", "[1 + 1]", "[(1, 2)]",
+    "[. instance of element()]", "[*[1]]", "[3 - 2]", "[0]",
+    "[if (1) then 1 else 2]", "[1 = 2 and a]", "[1 = 1 or a]",
+    "[a and 0]", "[a or 1]", "[if (0 to 0) then 1 else 2]",
+    "[if (1 to 1) then a else b]", "[(0 to 0) or b]", "[(1 to 1) and b]",
+    "[a and (1 to 1)]", "[b or (0 to 0)]"
+};
+
+#define XP3_PATH_PREDICATES \
+    (sizeof(xp3PathPredicates) / sizeof(xp3PathPredicates[0]))
+
+/* A step: mostly an element axis, sometimes . or .. or an attribute,
+ * with no predicate half of the time and rarely two */
+static void
+randomStep(char *out, size_t size, int last) {
+    unsigned choice = pathRandom(12);
+    unsigned predicates = (choice < 8) ? 0 : (choice < 11) ? 1 : 2;
+    unsigned i;
+
+    switch (pathRandom(14)) {
+        case 0:
+            appendTo(out, size, ".");
+            return;
+        case 1:
+            appendTo(out, size, "..");
+            return;
+        case 2:
+            /* Attributes have no children: only at the end */
+            if (last) {
+                appendTo(out, size, xp3PathAttributes[pathRandom(3)]);
+                break;
+            }
+            /* Fall through */
+        default:
+            appendTo(out, size, xp3PathAxes[pathRandom(XP3_PATH_AXES)]);
+            appendTo(out, size, xp3PathTests[pathRandom(XP3_PATH_TESTS)]);
+            break;
+    }
+    for (i = 0; i < predicates; i++)
+        appendTo(out, size,
+                 xp3PathPredicates[pathRandom(XP3_PATH_PREDICATES)]);
+}
+
+static void
+randomPath(char *out, size_t size) {
+    unsigned steps = 1 + pathRandom(3);
+    unsigned i;
+
+    switch (pathRandom(4)) {
+        case 0:
+            appendTo(out, size, "/");
+            break;
+        case 1:
+            appendTo(out, size, "//");
+            break;
+        default:
+            break;
+    }
+    for (i = 0; i < steps; i++) {
+        if (i > 0)
+            appendTo(out, size, (pathRandom(3) == 0) ? "//" : "/");
+        randomStep(out, size, i + 1 == steps);
+    }
+}
+
+/* Two steps that each give several nodes, then a sibling or
+ * descendant step: where wrongly skipping the sort shows */
+static const char *const xp3PathSiblingSteps[] = {
+    "following-sibling::", "preceding-sibling::", "descendant::", "child::",
+    "following-sibling::", "descendant-or-self::"
+};
+
+static void
+randomSiblingPath(char *out, size_t size) {
+    unsigned i;
+
+    appendTo(out, size, (pathRandom(2) == 0) ? "*" : "//*");
+    for (i = 0; i < 2; i++) {
+        appendTo(out, size, "/");
+        appendTo(out, size, xp3PathSiblingSteps[pathRandom(6)]);
+        appendTo(out, size, (pathRandom(2) == 0) ? "*" : "node()");
+    }
+}
+
+static void
+randomPathExpr(char *out, size_t size) {
+    out[0] = 0;
+    if (pathRandom(5) == 0) {
+        randomSiblingPath(out, size);
+        return;
+    }
+    switch (pathRandom(6)) {
+        case 0:
+            randomPath(out, size);
+            appendTo(out, size, " | ");
+            randomPath(out, size);
+            break;
+        case 1:
+            appendTo(out, size, "(");
+            randomPath(out, size);
+            appendTo(out, size, ")");
+            appendTo(out, size,
+                 xp3PathPredicates[pathRandom(XP3_PATH_PREDICATES)]);
+            break;
+        case 2:
+            randomPath(out, size);
+            appendTo(out, size, "/(");
+            randomPath(out, size);
+            appendTo(out, size, ")");
+            break;
+        default:
+            randomPath(out, size);
+            break;
+    }
+}
+
+/*
+ * Number the nodes of a document in document order, in their _private
+ * fields, so that results show which nodes they hold and in what
+ * order, not just their names. Only the test's own documents are
+ * numbered; the library never uses _private.
+ */
+static void
+numberNodes(xmlDocPtr doc) {
+    xmlNodePtr root = (xmlNodePtr) doc;
+    xmlNodePtr node = NULL;
+    intptr_t number = 0;
+
+    while ((node = xp3AxisNext(XP3_AXIS_DESCENDANT_OR_SELF, root, node)) !=
+           NULL) {
+        xmlNodePtr attr = NULL;
+
+        node->_private = (void *) ++number;
+        while ((attr = xp3AxisNext(XP3_AXIS_ATTRIBUTE, node, attr)) != NULL)
+            attr->_private = (void *) ++number;
+    }
+}
+
+/* A result as node numbers and atomic values, or the error code */
+static void
+runNumbered(const xp3StaticContext *sctx, xp3DynamicContext *ctx,
+            const char *expr, char *out, size_t size) {
+    xp3Error *err = NULL;
+    xp3Expr *compiled = xp3Compile(sctx, BAD_CAST expr, &err);
+    xp3Sequence *result = NULL;
+    size_t i;
+
+    out[0] = 0;
+    if (compiled != NULL)
+        result = xp3Evaluate(compiled, ctx, &err);
+    if (result == NULL) {
+        snprintf(out, size, "error:%s", (const char *) xp3ErrorCode(err));
+    } else {
+        for (i = 0; i < xp3SequenceLength(result); i++) {
+            xmlNodePtr node = xp3SequenceNode(result, i);
+            char item[64];
+
+            if (node != NULL) {
+                snprintf(item, sizeof(item), " #%ld",
+                         (long) (intptr_t) node->_private);
+            } else {
+                xmlChar *str = xp3SequenceStringValue(result, i);
+
+                snprintf(item, sizeof(item), " %s",
+                         (str != NULL) ? (const char *) str : "?");
+                xmlFree(str);
+            }
+            appendTo(out, size, item);
+        }
+    }
+    xp3FreeSequence(result);
+    xp3FreeExpr(compiled);
+    xp3ErrorFree(err);
+}
+
+/* A random element of a document, as another context node */
+static xmlNodePtr
+randomContext(xmlDocPtr doc) {
+    xmlNodePtr root = (xmlNodePtr) doc;
+    xmlNodePtr node = NULL;
+    xmlNodePtr chosen = xmlDocGetRootElement(doc);
+
+    while ((node = xp3AxisNext(XP3_AXIS_DESCENDANT, root, node)) != NULL) {
+        if ((node->type == XML_ELEMENT_NODE) && (pathRandom(4) == 0))
+            chosen = node;
+    }
+    return(chosen);
+}
+
+static void
+testRandomPaths(void) {
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    int docIndex;
+    int compared = 0;
+    int withNodes = 0;
+
+    if ((plain == NULL) || (ctx == NULL)) {
+        check(0, "random path contexts");
+        goto done;
+    }
+    plain->noOptimize = 1;
+    for (docIndex = 0; (docIndex < XP3_RANDOM_DOCS) && (failures < 20);
+         docIndex++) {
+        char xml[16384];
+        xmlDocPtr doc;
+        int exprIndex;
+
+        pathRandomState = (uint64_t) docIndex + 1;
+        xml[0] = 0;
+        randomElement(xml, sizeof(xml), 0);
+        doc = xmlReadMemory(xml, (int) strlen(xml), "random.xml", NULL, 0);
+        if (doc == NULL) {
+            check(0, "random document parses");
+            continue;
+        }
+        numberNodes(doc);
+        for (exprIndex = 0; exprIndex < XP3_RANDOM_EXPRS; exprIndex++) {
+            char expr[512];
+            char optimized[4096];
+            char unoptimized[4096];
+            xmlNodePtr context;
+
+            switch (exprIndex % 3) {
+                case 0:
+                    context = (xmlNodePtr) doc;
+                    break;
+                case 1:
+                    context = xmlDocGetRootElement(doc);
+                    break;
+                default:
+                    context = randomContext(doc);
+                    break;
+            }
+            randomPathExpr(expr, sizeof(expr));
+            xp3SetContextNode(ctx, context);
+            runNumbered(NULL, ctx, expr, optimized, sizeof(optimized));
+            runNumbered(plain, ctx, expr, unoptimized, sizeof(unoptimized));
+            compared++;
+            if (strchr(unoptimized, '#') != NULL)
+                withNodes++;
+            if (strcmp(optimized, unoptimized) != 0) {
+                fprintf(stderr, "FAIL: optimizing changes %s on %s\n"
+                        "  optimized:   %s\n  unoptimized: %s\n", expr, xml,
+                        optimized, unoptimized);
+                failures++;
+            }
+        }
+        xmlFreeDoc(doc);
+    }
+    check(compared == XP3_RANDOM_DOCS * XP3_RANDOM_EXPRS,
+          "every random path compared");
+    /*
+     * Empty results always agree, so the generator must keep finding
+     * nodes. About a third do: many of the rest are empty by nature,
+     * such as ancestor:: from the document node. Fewer than a quarter
+     * means the generator has drifted and tests little.
+     */
+    if (withNodes * 4 < compared) {
+        fprintf(stderr, "FAIL: only %d of %d random paths find nodes\n",
+                withNodes, compared);
+        failures++;
+    }
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(plain);
+}
+
+/*
  * Allocation failures
  */
 
@@ -1383,15 +1760,11 @@ testAllocationFailures(const char *text, const char *expected) {
             xp3FreeSequence(result);
             break;
         }
-        /* Either a clean failure or, if the failure was absorbed, the
-         * right result */
-        if (result != NULL)
-            check(strcmp(actual, expected) == 0,
-                  "a result despite a failed allocation is right");
-        else
-            check((strcmp(code, "NO_MEMORY") == 0) ||
-                  (strcmp(code, "setup") == 0),
-                  "a failed allocation reports NO_MEMORY");
+        /* A failed allocation is never hidden: no result, NO_MEMORY */
+        check(result == NULL, "a failed allocation fails the work");
+        check((strcmp(code, "NO_MEMORY") == 0) ||
+              (strcmp(code, "setup") == 0),
+              "a failed allocation reports NO_MEMORY");
         xp3FreeSequence(result);
     }
     check(i > 0 && i < 5000, "allocation failure points exercised");
@@ -1405,6 +1778,7 @@ main(void) {
 
     testCases();
     testConstants();
+    testRandomPaths();
     testEffectiveBoolean();
     testHugeLiteral();
     testHugeNumbers();

@@ -1692,6 +1692,12 @@ evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
         xp3ValueUnref(left);
         return(NULL);
     }
+    /* No pairs: false, without walking the other side */
+    if ((xp3ValueCount(left) == 0) || (xp3ValueCount(right) == 0)) {
+        xp3ValueUnref(left);
+        xp3ValueUnref(right);
+        return(evalBoolean(ev, 0));
+    }
 
     xp3IterInit(&leftIter, left);
     while ((result == 0) &&
@@ -1702,6 +1708,11 @@ evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
 
         if (found < 0) {
             evalNoMemory(ev);
+            result = -1;
+            break;
+        }
+        if (evalCount(ev, node) < 0) {
+            xp3ItemUnref(leftItem);
             result = -1;
             break;
         }
@@ -2079,7 +2090,7 @@ itemMatches(xp3Item item, const xp3AstNode *type) {
  */
 static int
 sequenceMatches(xp3Eval *ev, const xp3Value *value,
-                const xp3AstNode *seqType) {
+                const xp3AstNode *seqType, const xp3AstNode *node) {
     uint64_t count = xp3ValueCount(value);
     xp3Iter iter;
     xp3Item item;
@@ -2104,10 +2115,25 @@ sequenceMatches(xp3Eval *ev, const xp3Value *value,
         default:
             break;
     }
+    /* A range holds integers only: its first item stands for all */
+    if (value->shape == XP3_SEQ_RANGE) {
+        found = xp3ValueItemAt(value, 0, &item);
+        if (found < 0) {
+            evalNoMemory(ev);
+            return(-1);
+        }
+        ret = itemMatches(item, seqType->first);
+        xp3ItemUnref(item);
+        return(ret);
+    }
     xp3IterInit(&iter, value);
     while ((ret == 1) && ((found = xp3IterNext(&iter, &item)) != 0)) {
         if (found < 0) {
             evalNoMemory(ev);
+            return(-1);
+        }
+        if (evalCount(ev, node) < 0) {
+            xp3ItemUnref(item);
             return(-1);
         }
         ret = itemMatches(item, seqType->first);
@@ -2124,7 +2150,7 @@ evalInstanceOf(xp3Eval *ev, const xp3AstNode *node) {
 
     if (value == NULL)
         return(NULL);
-    result = sequenceMatches(ev, value, node->last);
+    result = sequenceMatches(ev, value, node->last, node);
     xp3ValueUnref(value);
     return((result < 0) ? NULL : evalBoolean(ev, result));
 }
@@ -2137,7 +2163,7 @@ evalTreatAs(xp3Eval *ev, const xp3AstNode *node) {
 
     if (value == NULL)
         return(NULL);
-    result = sequenceMatches(ev, value, node->last);
+    result = sequenceMatches(ev, value, node->last, node);
     if (result == 1)
         return(value);
     if (result == 0)
@@ -2444,6 +2470,7 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
 
     ev->maxItems = (ctx != NULL) ? ctx->maxSequenceLength :
                                    XP3_MAX_SEQUENCE_ITEMS;
+    ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
         ev->focus.item = xp3ItemFromNode(ctx->contextNode);

@@ -41,6 +41,8 @@ struct _xp3DynamicContext {
     int variableCount;
     int variableMax;
     size_t maxSequenceLength;
+    uint64_t maxOperations;     /* internal, for the fuzzers: steps an
+                                 * evaluation may take, 0 for no limit */
 };
 
 xp3ErrCode

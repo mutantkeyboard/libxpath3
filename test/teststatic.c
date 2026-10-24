@@ -483,13 +483,29 @@ static const char largeExpr[] =
     "(xs:integer($q), ex:a/@xml:lang, b, err:c, xsi:d, fn:true(), "
     "math:pi(), map:size(map{}), array:size([]), $v, $ex:w, $v)";
 
+/* Folding with errors, a range, pruning and a rewritten path */
+static const char foldExpr[] =
+    "for $i in 1 to 3 return $i * 2, if (0) then 1 div 0 else 1, "
+    "//x[@id = 'a']/y, (1 to 5)[. > 3], $v and 0, if (1 to 1) then 2 "
+    "else 3, -(1.5e-2 + 4 idiv 2 mod 3) * (1, 2)[. castable as xs:double]";
+
+/*
+ * Compile with each allocation failing in turn: compiling must then
+ * fail with NO_MEMORY, never hide the failure, and succeed completely
+ * once nothing fails.
+ */
 static void
-testAllocationFailures(void) {
+allocationFailures(int optimizing, const char *expr) {
     xp3StaticContext *ctx = testContext(XP3_XPATH_31);
     xmlChar *expected;
     int i;
 
-    expected = compileToString(ctx, largeExpr, NULL);
+    if (ctx == NULL) {
+        check(0, "context for allocation failures");
+        return;
+    }
+    ctx->noOptimize = !optimizing;
+    expected = compileToString(ctx, expr, NULL);
     check(expected != NULL, "reference tree compiled");
 
     if (!xp3TestAllocInstall()) {
@@ -500,12 +516,12 @@ testAllocationFailures(void) {
         xp3FreeStaticContext(ctx);
         return;
     }
-    for (i = 0; i < 1000; i++) {
+    for (i = 0; i < 5000; i++) {
         xp3Error *err = NULL;
         xmlChar *actual;
 
         xp3TestAllocFailAt(i);
-        actual = compileToString(ctx, largeExpr, &err);
+        actual = compileToString(ctx, expr, &err);
         if (!xp3TestAllocFailed()) {
             check((actual != NULL) && (expected != NULL) &&
                   xmlStrEqual(actual, expected),
@@ -524,7 +540,7 @@ testAllocationFailures(void) {
         xmlFree(actual);
         xp3ErrorFree(err);
     }
-    check((i > 0) && (i < 1000), "allocation failure points exercised");
+    check((i > 0) && (i < 5000), "allocation failure points exercised");
 
     /* Running out of memory while reporting a static error */
     for (i = 0; i < 1000; i++) {
@@ -552,6 +568,13 @@ testAllocationFailures(void) {
     xp3TestAllocRestore();
     xmlFree(expected);
     xp3FreeStaticContext(ctx);
+}
+
+static void
+testAllocationFailures(void) {
+    allocationFailures(0, largeExpr);
+    allocationFailures(1, largeExpr);
+    allocationFailures(1, foldExpr);
 }
 
 /*

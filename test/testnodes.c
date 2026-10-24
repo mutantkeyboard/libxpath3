@@ -860,6 +860,9 @@ typedef struct {
 
 static xp3ModelNode modelNodes[XP3_RANDOM_MAX_NODES];
 static int modelCount;
+/* Knuth's MMIX generator, for the same reasons as in testeval.c: the
+ * same trees on every platform, a full period of 2^64, and the high
+ * bits used because the low ones repeat quickly */
 static uint64_t randomState;
 static int randomNodesLeft;
 

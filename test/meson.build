@@ -23,3 +23,15 @@ foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
     )
     test(name, exe)
 endforeach
+
+# Several threads evaluating one compiled expression; the clang:tsan CI
+# job runs it under ThreadSanitizer. POSIX threads only.
+threads_dep = dependency('threads', required: false)
+if threads_dep.found() and host_machine.system() != 'windows'
+    testthreads = executable(
+        'testthreads',
+        'testthreads.c',
+        dependencies: [xpath3_dep, threads_dep],
+    )
+    test('threads', testthreads)
+endif
