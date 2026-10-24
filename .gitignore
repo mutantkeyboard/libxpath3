@@ -27,3 +27,5 @@ oom-*
 # The coverage report the README suggests producing locally
 /coverage-report/
 /qt3-eval.txt
+# Long fuzzing runs (.gitlab-ci/fuzz-long.sh)
+/fuzz-out/

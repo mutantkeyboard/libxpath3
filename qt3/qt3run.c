@@ -18,7 +18,12 @@
  * mode are reported but don't change the exit status, so it can run
  * as a report while evaluation is incomplete.
  *
- * Usage: qt3run [-e] [-s XP20|XP30|XP31] [-t PREFIX] [-k FILE] [-v]
+ * With -c, evaluation mode also compiles each test without
+ * optimizing (no constant folding or path rewrites) and evaluates it
+ * again. A test that passes one way and fails the other is a "fold
+ * mismatch", a bug in the optimizer, which always fails the run.
+ *
+ * Usage: qt3run [-e [-c]] [-s XP20|XP30|XP31] [-t PREFIX] [-k FILE] [-v]
  *               CATALOG
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
@@ -56,6 +61,7 @@ typedef struct {
     const char *prefix;         /* only test sets starting with this */
     int verbose;
     int evaluate;               /* evaluation mode */
+    int compare;                /* also evaluate without optimizing */
     xmlNodePtr catalogRoot;     /* for environments shared by test sets */
     xmlHashTable *known;        /* "set/case" of known failures */
     xmlHashTable *docs;         /* source documents by path */
@@ -66,6 +72,7 @@ typedef struct {
     int fixed;                  /* known failures that now pass */
     int notApplicable;
     int notJudged;
+    int mismatches;             /* optimized and not, different outcome */
 } qt3Run;
 
 /* How a test came out */
@@ -1107,6 +1114,47 @@ evaluateTest(qt3Run *run, xp3Expr *compiled, xmlNodePtr expected,
     return(judge(ev, expected));
 }
 
+static const char *
+outcomeName(qt3Outcome outcome) {
+    return((outcome == QT3_PASS) ? "passes" :
+           (outcome == QT3_FAIL) ? "fails" : "is not judged");
+}
+
+/*
+ * Compile a test again without optimizing, evaluate it, and report a
+ * mismatch if one way passes and the other fails.
+ */
+static void
+compareUnoptimized(qt3Run *run, const char *id, xp3StaticContext *ctx,
+                   const xmlChar *expr, xmlNodePtr expected,
+                   const qt3Eval *optimized, qt3Outcome outcome) {
+    qt3Eval plain;
+    qt3Outcome plainOutcome = QT3_FAIL;
+    xp3Expr *compiled;
+
+    memset(&plain, 0, sizeof(plain));
+    plain.env = optimized->env;
+    plain.setPath = optimized->setPath;
+    ctx->noOptimize = 1;
+    compiled = xp3Compile(ctx, expr, NULL);
+    ctx->noOptimize = 0;
+    if (compiled != NULL)
+        plainOutcome = evaluateTest(run, compiled, expected, &plain);
+    if ((outcome != plainOutcome) && (outcome != QT3_NOT_JUDGED) &&
+        (plainOutcome != QT3_NOT_JUDGED)) {
+        printf("FOLD MISMATCH %s: optimized it %s, without it %s\n", id,
+               outcomeName(outcome), outcomeName(plainOutcome));
+        run->mismatches++;
+    } else if ((outcome != plainOutcome) && (run->verbose > 1)) {
+        printf("NOTE %s: optimized it %s, without it %s\n", id,
+               outcomeName(outcome), outcomeName(plainOutcome));
+    }
+    xp3FreeSequence(plain.result);
+    xp3ErrorFree(plain.err);
+    xp3FreeDynamicContext(plain.ctx);
+    xp3FreeExpr(compiled);
+}
+
 /* Print what an evaluation gave, for -v */
 static void
 printEvaluation(const qt3Eval *ev) {
@@ -1190,9 +1238,11 @@ runTestCase(qt3Run *run, const char *setName, const char *setPath,
     compiled = xp3Compile(ctx, expr, &err);
     if (compiled == NULL)
         code = xp3ErrorCode(err);
-    if (run->evaluate && (compiled != NULL))
+    if (run->evaluate && (compiled != NULL)) {
         outcome = evaluateTest(run, compiled, result, &ev);
-    else
+        if (run->compare)
+            compareUnoptimized(run, id, ctx, expr, result, &ev, outcome);
+    } else
         outcome = accepts(result, code, (compiled != NULL) &&
                           callsError(compiled->ast->root)) ?
                   QT3_PASS : QT3_FAIL;
@@ -1348,6 +1398,8 @@ usage(void) {
     fprintf(stderr,
             "Usage: qt3run [options] CATALOG\n"
             "  -e         evaluate, not only compile\n"
+            "  -c         with -e, also evaluate without optimizing and\n"
+            "             report every test whose outcome differs\n"
             "  -s SPEC    XP20, XP30 or XP31 (default XP31)\n"
             "  -t PREFIX  only test sets whose name starts with PREFIX\n"
             "  -k FILE    known failures, one set/case per line\n"
@@ -1369,6 +1421,8 @@ main(int argc, char **argv) {
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-e") == 0) {
             run.evaluate = 1;
+        } else if (strcmp(argv[i], "-c") == 0) {
+            run.compare = 1;
         } else if ((strcmp(argv[i], "-s") == 0) && (i + 1 < argc)) {
             run.spec = argv[++i];
         } else if ((strcmp(argv[i], "-t") == 0) && (i + 1 < argc)) {
@@ -1418,6 +1472,8 @@ main(int argc, char **argv) {
         printf(" (%d known)", run.knownFailed);
     if (run.evaluate)
         printf(", %d not judged", run.notJudged);
+    if (run.compare)
+        printf(", %d fold mismatches", run.mismatches);
     printf(", %d not applicable (%.2f%%)\n", run.notApplicable,
            (run.passed + run.failed + run.knownFailed > 0) ?
            100.0 * run.passed /
@@ -1428,6 +1484,9 @@ main(int argc, char **argv) {
     /* Evaluation without known failures is a report */
     if ((status == 0) && (!run.evaluate || (run.known != NULL)) &&
         ((run.failed > 0) || (run.fixed > 0)))
+        status = 1;
+    /* An optimizer bug fails the run, report or not */
+    if ((status == 0) && (run.mismatches > 0))
         status = 1;
 
     xmlFreeDoc(catalog);

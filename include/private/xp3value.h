@@ -29,8 +29,14 @@
  * atomic value owns one reference to it. Functions document whether
  * they take over a reference ("takes") or add one. Nodes are borrowed
  * from libxml2 and never counted. Counts are not atomic: a value
- * belongs to one evaluation at a time, as libxml2's objects do.
+ * belongs to one evaluation at a time, as libxml2's objects do. The
+ * exception are constants (xp3ValueMakeConstant()), which compiled
+ * expressions share between threads: their count is XP3_REFS_CONSTANT
+ * and never changes.
  */
+
+/* The count of constants and their atomic values */
+#define XP3_REFS_CONSTANT (-1)
 
 typedef struct _xp3Atomic xp3Atomic;
 typedef struct _xp3Value xp3Value;
@@ -188,6 +194,15 @@ xp3ValueRef(xp3Value *value);
 
 xmlChar *
 xp3AtomicToString(const xp3Atomic *atomic);
+
+xp3Value *
+xp3ValueMakeConstant(const xp3Value *value);
+
+void
+xp3ValueFreeConstant(xp3Value *value);
+
+xp3Value *
+xp3ValueDetach(xp3Value *value);
 
 void
 xp3ValueUnref(xp3Value *value);

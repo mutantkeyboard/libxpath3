@@ -1,0 +1,58 @@
+# Long fuzzing runs: the child pipeline that the manual fuzz:long job in
+# .gitlab-ci.yml starts. Both fuzzers run at the same time, 50 minutes
+# each, to stay within the 1-hour job timeout, with ASan, UBSan, leak
+# detection, allocation-failure injection and a 60-second limit per
+# input, as in .gitlab-ci/fuzz-long.sh. The job log shows the end of
+# libFuzzer's output; the whole log and any finding are kept as
+# artifacts.
+
+default:
+  image: fedora:latest
+  before_script:
+    - >
+      dnf install -y --setopt=install_weak_deps=False
+      clang compiler-rt libasan libubsan
+      meson ninja-build pkgconf-pkg-config libxml2-devel
+
+variables:
+  FUZZ_SECONDS: 3000
+  ASAN_OPTIONS: "detect_leaks=1"
+  UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+
+.fuzz-long:
+  timeout: 1h
+  variables:
+    CC: clang
+  script:
+    - meson setup build --werror -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
+    - meson compile -C build
+    - mkdir corpus && cp $SEEDS/* corpus/
+    - status=0
+    - >
+      ./build/fuzz/$FUZZER -dict=fuzz/xp3.dict -max_len=10000 -timeout=60
+      -max_total_time=$FUZZ_SECONDS -print_final_stats=1 corpus
+      > fuzz.log 2>&1 || status=$?
+    - tail -n 60 fuzz.log
+    - exit $status
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - fuzz.log
+      - crash-*
+      - leak-*
+      - timeout-*
+      - oom-*
+      - slow-unit-*
+
+fuzz:parse:
+  extends: .fuzz-long
+  variables:
+    FUZZER: xp3parse-fuzz
+    SEEDS: fuzz/seed
+
+fuzz:eval:
+  extends: .fuzz-long
+  variables:
+    FUZZER: xp3eval-fuzz
+    SEEDS: fuzz/seed-eval

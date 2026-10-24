@@ -53,6 +53,8 @@ struct _xp3StaticContext {
                                  * variables, or NULL if none */
     size_t maxExprLength;       /* compile-time limit, in bytes */
     int maxParseDepth;          /* compile-time limit on nesting */
+    int noOptimize;             /* internal, for tests and the QT3
+                                 * runner: no folding or path rewrites */
 };
 
 const xmlChar *

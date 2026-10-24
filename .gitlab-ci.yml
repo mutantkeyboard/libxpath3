@@ -64,6 +64,15 @@ clang:asan:
     MESON_ARGS: "-Db_sanitize=address,undefined -Db_lundef=false"
     ASAN_OPTIONS: "detect_leaks=1"
 
+# All tests under ThreadSanitizer, for testthreads: several threads
+# evaluating one compiled expression with shared constants.
+clang:tsan:
+  extends: .meson
+  variables:
+    CC: clang
+    MESON_ARGS: "-Db_sanitize=thread -Db_lundef=false"
+    TSAN_OPTIONS: "halt_on_error=1"
+
 cmake:
   stage: build
   script:
@@ -93,8 +102,9 @@ libxml2:master:
 # listed in qt3/known-failures-*.txt; any other failure, or a known failure
 # that now passes, fails the job. It then evaluates the tests as a report:
 # while evaluation is incomplete, its failures don't fail the job, but a
-# crash does. It runs under ASan and UBSan, so every QT3 expression is
-# also a memory-safety test.
+# crash does, and so does a test whose outcome changes when compiled
+# without optimizing (-c). It runs under ASan and UBSan, so every QT3
+# expression is also a memory-safety test.
 qt3:
   stage: build
   variables:
@@ -113,7 +123,7 @@ qt3:
       done
     - >
       for spec in XP20 XP30 XP31; do
-      ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
+      ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
       tail -n 1 qt3-eval.txt;
       done
 
@@ -132,7 +142,9 @@ coverage:
     - git init -q qt3tests
     - git -C qt3tests fetch -q --depth 1 https://github.com/w3c/qt3tests.git "$QT3_COMMIT"
     - git -C qt3tests checkout -q FETCH_HEAD
-    - meson setup build -Db_coverage=true
+    # Atomic counters: testthreads runs threads, which otherwise corrupt
+    # them (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080)
+    - meson setup build -Db_coverage=true -Dc_args=-fprofile-update=atomic
     - meson compile -C build
     - meson test -C build --print-errorlogs
     - >
@@ -141,7 +153,7 @@ coverage:
       done
     - >
       for spec in XP20 XP30 XP31; do
-      ./build/qt3/qt3run -e -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
+      ./build/qt3/qt3run -e -c -s $spec qt3tests/catalog.xml > qt3-eval.txt || exit 1;
       tail -n 1 qt3-eval.txt;
       done
     - mkdir coverage
@@ -159,9 +171,12 @@ coverage:
         coverage_format: cobertura
         path: coverage.xml
 
-# Fuzzing smoke test: two minutes of libFuzzer on the parser, with ASan
-# and UBSan, seeded with the corpus and the dictionary. Long runs happen
-# outside CI; this catches regressions that the replayed corpus misses.
+# Fuzzing smoke test: two minutes of libFuzzer on compiling (xp3parse)
+# and two on evaluation (xp3eval, which also checks that optimizing
+# never changes a result), with ASan and UBSan, seeded with the corpora
+# and the dictionary. This catches regressions that the replayed corpora
+# miss; longer runs are fuzz:long below, and overnight runs happen
+# outside CI (.gitlab-ci/fuzz-long.sh).
 fuzz:
   stage: build
   variables:
@@ -170,8 +185,9 @@ fuzz:
   script:
     - meson setup build --werror -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
     - meson compile -C build
-    - mkdir corpus && cp fuzz/seed/* corpus/
+    - mkdir corpus corpus-eval && cp fuzz/seed/* corpus/ && cp fuzz/seed-eval/* corpus-eval/
     - ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus
+    - ./build/fuzz/xp3eval-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus-eval
   artifacts:
     when: on_failure
     expire_in: 1 week
@@ -180,6 +196,17 @@ fuzz:
       - leak-*
       - timeout-*
       - oom-*
+
+# Long fuzzing on demand: started by hand, it runs both fuzzers for 50
+# minutes each in a child pipeline (.gitlab-ci/fuzz-long.yml). The job
+# succeeds once the child pipeline is created, so this pipeline never
+# waits for the fuzzers; their results are in the child pipeline.
+fuzz:long:
+  stage: build
+  needs: []
+  when: manual
+  trigger:
+    include: .gitlab-ci/fuzz-long.yml
 
 docs:
   stage: docs

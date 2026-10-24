@@ -18,6 +18,9 @@ fuzz_seed = files(
     'seed/err_lex',
     'seed/err_syntax',
     'seed/flwor31',
+    'seed/fold31',
+    'seed/fold_inject',
+    'seed/fold_oom',
     'seed/hof31',
     'seed/inject',
     'seed/kinds20',
@@ -42,7 +45,46 @@ fuzz_replay = executable(
 )
 test('fuzz-replay', fuzz_replay, args: fuzz_seed)
 
+# The evaluation fuzzer compares optimized and unoptimized evaluation
+fuzz_eval_seed = files(
+    'seed-eval/big_range',
+    'seed-eval/constants',
+    'seed-eval/context_attr',
+    'seed-eval/context_text',
+    'seed-eval/flwor',
+    'seed-eval/inject',
+    'seed-eval/inject_late',
+    'seed-eval/level20',
+    'seed-eval/paths',
+    'seed-eval/pruning',
+    'seed-eval/siblings',
+    'seed-eval/skipped_error',
+)
+
+fuzz_eval_replay = executable(
+    'xp3eval',
+    'xp3eval.c',
+    '../test/testalloc.c',
+    xpath3_src,
+    xp3version_h,
+    include_directories: inc,
+    dependencies: [libxml2_dep, m_dep],
+    c_args: ['-DXP3_STATIC', '-DXP3_FUZZ_DRIVER'],
+)
+test('fuzz-eval-replay', fuzz_eval_replay, args: fuzz_eval_seed)
+
 if get_option('fuzzer')
+    executable(
+        'xp3eval-fuzz',
+        'xp3eval.c',
+        '../test/testalloc.c',
+        xpath3_src,
+        xp3version_h,
+        include_directories: inc,
+        dependencies: [libxml2_dep, m_dep],
+        c_args: ['-DXP3_STATIC', '-fsanitize=fuzzer'],
+        link_args: ['-fsanitize=fuzzer'],
+    )
     executable(
         'xp3parse-fuzz',
         'xp3parse.c',

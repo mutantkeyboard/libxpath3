@@ -33,12 +33,17 @@ static xmlStrdupFunc oldStrdup;
 static int failAt = -1;
 static int allocCount;
 static int failed;
-static int calls;   /* every call, to detect whether libxml2 uses us */
+static int used;    /* set by any call: libxml2 uses this allocator */
 
+/*
+ * Whether this allocation fails. The counts stop once the failure is
+ * past, so that a fuzzer making billions of allocations never
+ * overflows them.
+ */
 static int
 shouldFail(void) {
-    calls++;
-    if (failAt < 0)
+    used = 1;
+    if ((failAt < 0) || (allocCount > failAt))
         return(0);
     if (allocCount++ == failAt) {
         failed = 1;
@@ -82,10 +87,10 @@ xp3TestAllocInstall(void) {
 
     /* Some builds of libxml2 ignore xmlMemSetup(). Check that an
      * allocation through xmlMalloc() actually reaches testMalloc(). */
-    calls = 0;
+    used = 0;
     probe = xmlMalloc(1);
     xmlFree(probe);
-    return(calls > 0);
+    return(used);
 }
 
 void

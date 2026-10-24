@@ -86,6 +86,14 @@ if(BUILD_TESTING)
     target_link_libraries(testbasic PRIVATE xpath3)
     add_test(NAME basic COMMAND testbasic)
 
+    # Several threads evaluating one compiled expression, POSIX only
+    find_package(Threads)
+    if(CMAKE_USE_PTHREADS_INIT AND NOT WIN32)
+        add_executable(testthreads test/testthreads.c)
+        target_link_libraries(testthreads PRIVATE xpath3 Threads::Threads)
+        add_test(NAME threads COMMAND testthreads)
+    endif()
+
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval)
@@ -111,6 +119,19 @@ if(BUILD_TESTING)
     target_link_libraries(xp3parse-replay PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
     file(GLOB XP3_FUZZ_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed/*)
     add_test(NAME fuzz-replay COMMAND xp3parse-replay ${XP3_FUZZ_SEED})
+
+    # The same for the evaluation fuzzer
+    add_executable(xp3eval-replay fuzz/xp3eval.c test/testalloc.c
+        ${XP3_SOURCES})
+    target_compile_definitions(xp3eval-replay PRIVATE XP3_STATIC
+        XP3_FUZZ_DRIVER)
+    target_include_directories(xp3eval-replay PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+    )
+    target_link_libraries(xp3eval-replay PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
+    file(GLOB XP3_FUZZ_EVAL_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed-eval/*)
+    add_test(NAME fuzz-eval-replay COMMAND xp3eval-replay ${XP3_FUZZ_EVAL_SEED})
 
     # QT3 runner, and the QT3 tests if XP3_QT3_DIR points to a checkout
     add_executable(qt3run qt3/qt3run.c ${XP3_SOURCES})
