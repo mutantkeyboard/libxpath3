@@ -29,11 +29,19 @@
 /*
  * Nesting cost of one ExprSingle. A parenthesized expression or a
  * predicate goes through about 20 functions before it recurses, so it
- * counts for more than one level of the limit, as in libxml2. Unary
- * signs and chained binary operators cost 1 each, because they make the
- * tree deeper without recursing here.
+ * counts for more than one level of the limit, as in libxml2.
  */
 #define XP3_PARSE_EXPR_COST 10
+
+/*
+ * Nesting cost of a level that doesn't go through ExprSingle: a unary
+ * sign, a chained binary operator or arrow, or a nested item type. The
+ * parser doesn't recurse for chains, but analysis, folding and
+ * evaluation recurse once per level of the tree, which takes about a
+ * fifth of the stack of an ExprSingle. With a cost of 1, 4990 signs
+ * needed twice the stack of 499 parentheses.
+ */
+#define XP3_PARSE_LEVEL_COST 3
 
 /* Longest token text quoted in an error message, in bytes */
 #define XP3_PARSE_MAX_QUOTE 32
@@ -725,7 +733,7 @@ parseItemType(xp3Parser *p) {
     int next;
     int kind;
 
-    if (parserEnter(p, 1) < 0)
+    if (parserEnter(p, XP3_PARSE_LEVEL_COST) < 0)
         return(NULL);
 
     if (p->tok.kind == XP3_TOK_LPAREN) {
@@ -783,7 +791,7 @@ parseItemType(xp3Parser *p) {
         type = NULL;
 
 done:
-    p->depth -= 1;
+    p->depth -= XP3_PARSE_LEVEL_COST;
     return(type);
 }
 
@@ -1671,7 +1679,8 @@ parseBinary(xp3Parser *p, xp3ParseFunc operand, xp3MatchFunc match,
         xp3AstNode *node;
         xp3AstNode *right;
 
-        if ((parserRequireOp(p, op) < 0) || (parserEnter(p, 1) < 0)) {
+        if ((parserRequireOp(p, op) < 0) ||
+            (parserEnter(p, XP3_PARSE_LEVEL_COST) < 0)) {
             left = NULL;
             break;
         }
@@ -1692,7 +1701,7 @@ parseBinary(xp3Parser *p, xp3ParseFunc operand, xp3MatchFunc match,
         if (!chain)
             break;
     }
-    p->depth -= folds;
+    p->depth -= folds * XP3_PARSE_LEVEL_COST;
     return(left);
 }
 
@@ -1807,7 +1816,7 @@ parseUnary(xp3Parser *p) {
     while ((p->tok.kind == XP3_TOK_PLUS) || (p->tok.kind == XP3_TOK_MINUS)) {
         xp3AstNode *node;
 
-        if (parserEnter(p, 1) < 0)
+        if (parserEnter(p, XP3_PARSE_LEVEL_COST) < 0)
             goto done;
         signs++;
         node = parserTokNode(p, XP3_AST_UNARY,
@@ -1834,7 +1843,7 @@ parseUnary(xp3Parser *p) {
     }
 
 done:
-    p->depth -= signs;
+    p->depth -= signs * XP3_PARSE_LEVEL_COST;
     return(ret);
 }
 
@@ -1882,7 +1891,7 @@ parseArrow(xp3Parser *p) {
         xp3AstNode *func = NULL;
 
         if ((parserRequire(p, &p->tok, XP3_XPATH_31, "'=>'") < 0) ||
-            (parserEnter(p, 1) < 0)) {
+            (parserEnter(p, XP3_PARSE_LEVEL_COST) < 0)) {
             left = NULL;
             break;
         }
@@ -1921,7 +1930,7 @@ parseArrow(xp3Parser *p) {
         }
         left = arrow;
     }
-    p->depth -= folds;
+    p->depth -= folds * XP3_PARSE_LEVEL_COST;
     return(left);
 }
 
