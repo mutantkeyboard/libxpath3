@@ -1216,12 +1216,11 @@ stepProperties(int input, xp3Axis axis) {
 }
 
 /*
- * Whether a predicate can't depend on the position of the item it
- * filters: an expression whose value is a boolean or nodes, never a
- * number. Anything else counts as positional.
+ * Whether the value of an expression can only be a boolean or nodes,
+ * never a number. Anything else counts as possibly a number.
  */
 static int
-isPositionFree(const xp3AstNode *expr) {
+isBooleanOrNodes(const xp3AstNode *expr) {
     switch (expr->kind) {
         case XP3_AST_BINARY:
             return(((expr->op >= XP3_OP_GEN_EQ) &&
@@ -1252,6 +1251,45 @@ isPositionFree(const xp3AstNode *expr) {
         default:
             return(0);
     }
+}
+
+/*
+ * Whether an expression may read the position or size of the focus: it
+ * calls fn:position or fn:last, or fn:function-lookup, which can return
+ * either of them bound to the focus, whether in a call, an arrow or a
+ * named function reference. Other focus-dependent functions, such as
+ * fn:name#0, only read the context item. Expressions with a focus of
+ * their own, such as nested predicates, are searched too: more than
+ * needed, but never wrong.
+ */
+static int
+readsPosition(const xp3AstNode *expr) {
+    const xp3AstNode *child;
+
+    if (((expr->kind == XP3_AST_FUNCTION_CALL) ||
+         (expr->kind == XP3_AST_ARROW) ||
+         (expr->kind == XP3_AST_NAMED_FUNCTION_REF)) &&
+        (expr->func != NULL) && (expr->func->ns == XP3_FUNC_NS_FN) &&
+        ((strcmp(expr->func->name, "position") == 0) ||
+         (strcmp(expr->func->name, "last") == 0) ||
+         (strcmp(expr->func->name, "function-lookup") == 0)))
+        return(1);
+    for (child = expr->first; child != NULL; child = child->next) {
+        if (readsPosition(child))
+            return(1);
+    }
+    return(0);
+}
+
+/*
+ * Whether a predicate can't depend on the position of the item it
+ * filters: its value is a boolean or nodes, never a number, and it
+ * doesn't read the position or size of the focus, as position() = 1
+ * does.
+ */
+static int
+isPositionFree(const xp3AstNode *expr) {
+    return(isBooleanOrNodes(expr) && !readsPosition(expr));
 }
 
 /* Whether a step is descendant-or-self::node() without predicates */

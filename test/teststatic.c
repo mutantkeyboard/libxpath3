@@ -656,6 +656,34 @@ static const struct {
       "(step child (name x) (predicate (constant integer:1))))" },
     { "//x[$v]", "(path root (step descendant-or-self sorted (kind node)) "
       "(step child (name x) (predicate (var v))))" },
+    /* Boolean predicates that read the position aren't rewritten, since
+     * position() = 1 picks the first x child of each node, not the
+     * first x descendant */
+    { "//x[position() = 1]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (binary = (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position) "
+      "(constant integer:1)))))" },
+    { "//x[last() = position()]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (binary = (call "
+      "Q{http://www.w3.org/2005/xpath-functions}last) (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position)))))" },
+    { "//x[some $p in position() satisfies $p = 1]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (some (bind p (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position)) "
+      "(binary = (var p) (constant integer:1))))))" },
+    { "//x[y[last()]]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (path (step child (name y) "
+      "(predicate (call Q{http://www.w3.org/2005/xpath-functions}last))"
+      ")))))" },
+    /* Other focus-dependent functions only read the context item */
+    { "//x[name() = 'x']",
+      "(path root (step descendant sorted (name x) (predicate (binary = "
+      "(call Q{http://www.w3.org/2005/xpath-functions}name) "
+      "(constant string:x)))))" },
     { "//@x", "(path root (step descendant-or-self sorted (kind node)) "
       "(step attribute (name x)))" },
     { "a/..", "(path (step child (name a)) (step parent (kind node)))" },
@@ -671,6 +699,16 @@ static const struct {
     { "/a/following-sibling::b",
       "(path root (step child sorted (name a)) "
       "(step following-sibling (name b)))" },
+};
+
+/* Boolean predicates that read the position in other ways */
+static const char *const positionalCases[] = {
+    "//x[some $f in position#0 satisfies $f() = 1]",
+    "//x[some $f in fn:last#0 satisfies $f() = 1]",
+    "//x[function-lookup(xs:QName('fn:position'), 0)() = 1]",
+    "//x[function-lookup#2(xs:QName('fn:last'), 0)() = 1]",
+    "//x[(position() => string()) = '1']",
+    "//x[. = position()]"
 };
 
 /* A context that optimizes, with $v declared */
@@ -703,6 +741,27 @@ testOptimize(void) {
             !xmlStrEqual(tree, BAD_CAST optimizeCases[i].tree)) {
             fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
                     optimizeCases[i].expr, optimizeCases[i].tree,
+                    (tree != NULL) ? (const char *) tree :
+                    (const char *) xp3ErrorCode(err));
+            failures++;
+        }
+        xmlFree(tree);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+
+    /* Position read through a function item or an arrow: //x stays
+     * descendant-or-self::node()/child::x */
+    for (i = 0; i < sizeof(positionalCases) / sizeof(positionalCases[0]);
+         i++) {
+        xmlChar *tree = compileToString(ctx, positionalCases[i], &err);
+        const char *kept = "(path root (step descendant-or-self sorted "
+                           "(kind node)) (step child (name x) ";
+
+        if ((tree == NULL) ||
+            (xmlStrncmp(tree, BAD_CAST kept, (int) strlen(kept)) != 0)) {
+            fprintf(stderr, "FAIL: '%s' was rewritten: %s\n",
+                    positionalCases[i],
                     (tree != NULL) ? (const char *) tree :
                     (const char *) xp3ErrorCode(err));
             failures++;
