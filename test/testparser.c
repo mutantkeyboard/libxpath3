@@ -903,39 +903,39 @@ testLimits(const xp3StaticContext *defaultCtx) {
     xp3StaticContext *ctx = xp3NewStaticContext();
 
     /* With a limit of 30, three expressions can nest (cost 10 each),
-     * and 20 signs or chained operators fit inside one. */
+     * and 7 signs or chained operators (cost 3 each) fit inside one. */
     ctx->maxParseDepth = 30;
     expectLimit(ctx, repeat("(", 2, "1))"), 0, "two nested parentheses");
     expectLimit(ctx, repeat("(", 3, "1)))"), 4, "three nested parentheses");
-    expectLimit(ctx, repeat("-", 20, "1"), 0, "20 signs");
-    expectLimit(ctx, repeat("-", 21, "1"), 21, "21 signs");
-    expectLimit(ctx, repeat("1+", 20, "1"), 0, "20 additions");
-    expectLimit(ctx, repeat("1+", 21, "1"), 42, "21 additions");
-    expectLimit(ctx, repeat("a!", 20, "a"), 0, "20 simple maps");
-    expectLimit(ctx, repeat("a!", 21, "a"), 42, "21 simple maps");
-    expectLimit(ctx, wrap("$x", repeat("=>f()", 20, ""), ""), 0,
-                "20 arrows");
-    expectLimit(ctx, wrap("$x", repeat("=>f()", 21, ""), ""), 103,
-                "21 arrows");
-    /* Each item type counts 1: 19 parentheses and the name make 20 */
-    expectLimit(ctx, wrap("$x instance of ", repeat("(", 19, "xs:int"),
-                          ")))))))))))))))))))"),
-                0, "19 parenthesized item types");
-    expectLimit(ctx, wrap("$x instance of ", repeat("(", 20, "xs:int"), ""),
-                36, "20 parenthesized item types");
+    expectLimit(ctx, repeat("-", 7, "1"), 0, "7 signs");
+    expectLimit(ctx, repeat("-", 8, "1"), 8, "8 signs");
+    expectLimit(ctx, repeat("1+", 7, "1"), 0, "7 additions");
+    expectLimit(ctx, repeat("1+", 8, "1"), 16, "8 additions");
+    expectLimit(ctx, repeat("a!", 7, "a"), 0, "7 simple maps");
+    expectLimit(ctx, repeat("a!", 8, "a"), 16, "8 simple maps");
+    expectLimit(ctx, wrap("$x", repeat("=>f()", 7, ""), ""), 0,
+                "7 arrows");
+    expectLimit(ctx, wrap("$x", repeat("=>f()", 8, ""), ""), 38,
+                "8 arrows");
+    /* Each item type counts 3: 6 parentheses and the name make 7 */
+    expectLimit(ctx, wrap("$x instance of ", repeat("(", 6, "xs:int"),
+                          "))))))"),
+                0, "6 parenthesized item types");
+    expectLimit(ctx, wrap("$x instance of ", repeat("(", 7, "xs:int"), ""),
+                23, "7 parenthesized item types");
     expectLimit(ctx, wrap("", repeat("[", 3, "1"), "]]]"), 4,
                 "nested arrays");
     expectLimit(ctx, wrap("", repeat("map{1:", 3, "1"), "}}}"), 17,
                 "nested maps");
     expectLimit(ctx, wrap("", repeat("function(){", 3, "1"), "}}}"), 34,
                 "nested inline functions");
-    /* 19 function tests and item() make 20 item types */
+    /* 6 function tests and item() make 7 item types */
     expectLimit(ctx, wrap("$x instance of ",
-                          repeat("function() as ", 19, "item()"), ""),
-                0, "function types nested 19 deep");
+                          repeat("function() as ", 6, "item()"), ""),
+                0, "function types nested 6 deep");
     expectLimit(ctx, wrap("$x instance of ",
-                          repeat("function() as ", 20, "item()"), ""),
-                296, "function types nested 20 deep");
+                          repeat("function() as ", 7, "item()"), ""),
+                114, "function types nested 7 deep");
     expectLimit(ctx, repeat("1,", 1000, "1"), 0, "sequences are flat");
     expectLimit(ctx, repeat("a/", 1000, "a"), 0, "paths are flat");
     xp3FreeStaticContext(ctx);
@@ -946,8 +946,10 @@ testLimits(const xp3StaticContext *defaultCtx) {
                 "deeply nested parentheses");
     expectLimit(defaultCtx, repeat("a[", 100000, "1"), 1001,
                 "deeply nested predicates");
-    expectLimit(defaultCtx, repeat("-", 100000, "1"), 4991,
+    expectLimit(defaultCtx, repeat("-", 100000, "1"), 1665,
                 "many unary signs");
+    expectLimit(defaultCtx, repeat("1+", 100000, "1"), 3330,
+                "many additions");
 }
 
 /* An expression with most kinds of nodes, for the allocation tests */
