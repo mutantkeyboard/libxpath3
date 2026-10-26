@@ -696,7 +696,7 @@ isName(const xmlChar *str, int noColon) {
         return(0);
     while (*str != 0) {
         int len = 4;
-        int c = xmlGetUTF8Char(str, &len);
+        int c = xp3GetUTF8Char(str, &len);
 
         if (c < 0)
             return(0);
@@ -719,7 +719,7 @@ isNmtoken(const xmlChar *str) {
         return(0);
     while (*str != 0) {
         int len = 4;
-        int c = xmlGetUTF8Char(str, &len);
+        int c = xp3GetUTF8Char(str, &len);
 
         if ((c < 0) || ((c != ':') && !xp3IsNameChar(c)))
             return(0);

@@ -1036,6 +1036,42 @@ done:
     xmlFreeDoc(doc);
 }
 
+/* Text that libxml2 stored without checking it: a lead byte from 0xF8
+ * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
+ * bytes with lead byte 0xF0 are U+10000, a name character. */
+static void
+testInvalidUtf8(void) {
+    static const struct {
+        const char *text;
+        const char *expected;
+    } cases[] = {
+        { "\xf8\x90\x80\x80", "boolean:false" },
+        { "\xf0\x90\x80\x80", "boolean:true" }
+    };
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    size_t i;
+
+    check(ctx != NULL, "dynamic context created");
+    for (i = 0; (ctx != NULL) && (i < sizeof(cases) / sizeof(cases[0]));
+         i++) {
+        xmlDocPtr doc = parseDoc("<r/>");
+        xmlNodePtr root = xmlDocGetRootElement(doc);
+
+        if ((root == NULL) || (xmlAddChild(root, xmlNewDocText(doc,
+                BAD_CAST cases[i].text)) == NULL)) {
+            check(0, "text node added");
+            xmlFreeDoc(doc);
+            break;
+        }
+        check(xp3SetContextNode(ctx, root) == 0, "context node set");
+        checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
+        checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
+        xp3SetContextNode(ctx, NULL);
+        xmlFreeDoc(doc);
+    }
+    xp3FreeDynamicContext(ctx);
+}
+
 /*
  * Variables
  */
@@ -1826,6 +1862,7 @@ main(void) {
     testQNameComparison();
     testManyBindings();
     testFocus();
+    testInvalidUtf8();
     testVariables();
     testLimits();
     testBoolean();

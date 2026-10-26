@@ -3,7 +3,7 @@
  *
  * libxml2 no longer exports its character class functions, so the
  * ranges are spelled out here. The lexer and, later, the regex engine
- * use them.
+ * use them, together with a strict UTF-8 decoder.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -11,7 +11,29 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <libxml/xmlstring.h>
+
 #include "private/xp3chars.h"
+
+/**
+ * Decode one UTF-8 character, as xmlGetUTF8Char() does but without
+ * accepting the lead bytes 0xF8 to 0xFF. They never appear in UTF-8
+ * (RFC 3629, section 1), and xmlGetUTF8Char() reads any lead byte from
+ * 0xF0 by its last three bits, so F8 90 80 80 would decode as U+10000.
+ *
+ * @param utf  the bytes
+ * @param len  the number of bytes available; set to the length of the
+ *             character, or 0 for invalid UTF-8
+ * @returns the code point, or -1 for invalid UTF-8
+ */
+int
+xp3GetUTF8Char(const xmlChar *utf, int *len) {
+    if (utf[0] >= 0xF8) {
+        *len = 0;
+        return(-1);
+    }
+    return(xmlGetUTF8Char(utf, len));
+}
 
 /**
  * Check whether a code point is allowed in XML (production Char).
