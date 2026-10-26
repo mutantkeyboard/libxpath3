@@ -466,10 +466,16 @@ evalLiteral(xp3Eval *ev, const xp3AstNode *node) {
                                                      XP3_TYPE_DECIMAL, dec);
             break;
         }
-        case XP3_AST_DOUBLE:
-            atomic = xp3AtomicNewDouble(xp3DoubleParse(
-                (const char *) node->text));
+        case XP3_AST_DOUBLE: {
+            double number;
+
+            if (xp3DoubleParse((const char *) node->text, &number) < 0) {
+                evalNoMemory(ev);
+                return(NULL);
+            }
+            atomic = xp3AtomicNewDouble(number);
             break;
+        }
         default:
             atomic = xp3AtomicNewString(XP3_TYPE_STRING, node->text, len);
             break;

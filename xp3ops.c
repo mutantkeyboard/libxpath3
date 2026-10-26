@@ -113,20 +113,33 @@ newBoolean(int value, xp3Atomic **res) {
  * Numeric conversions
  */
 
+/* A number in C syntax as a double, or as a float stored in a double if
+ * isFloat is set */
+static xp3ErrCode
+parseNumberString(const xmlChar *str, int isFloat, double *value) {
+    float single;
+
+    if (!isFloat)
+        return((xp3DoubleParse((const char *) str, value) == 0) ?
+               XP3_ERR_OK : XP3_ERR_NO_MEMORY);
+    if (xp3FloatParse((const char *) str, &single) < 0)
+        return(XP3_ERR_NO_MEMORY);
+    *value = single;
+    return(XP3_ERR_OK);
+}
+
 /* A decimal as a double or float, through its string, so that both are
  * rounded once and correctly */
 static xp3ErrCode
 decimalToBinary(const xp3Decimal *dec, int isFloat, double *value) {
     xmlChar *str = xp3DecimalToString(dec);
+    xp3ErrCode err;
 
     if (str == NULL)
         return(XP3_ERR_NO_MEMORY);
-    if (isFloat)
-        *value = xp3FloatParse((const char *) str);
-    else
-        *value = xp3DoubleParse((const char *) str);
+    err = parseNumberString(str, isFloat, value);
     xmlFree(str);
-    return(XP3_ERR_OK);
+    return(err);
 }
 
 /* The value of a numeric atomic as a double, or as a float stored in a
@@ -788,11 +801,7 @@ parseBinaryFloat(const xmlChar *str, int isFloat, double *value) {
     }
     if (*cur != 0)
         return(XP3_ERR_FORG0001);
-    if (isFloat)
-        *value = xp3FloatParse((const char *) str);
-    else
-        *value = xp3DoubleParse((const char *) str);
-    return(XP3_ERR_OK);
+    return(parseNumberString(str, isFloat, value));
 }
 
 static int

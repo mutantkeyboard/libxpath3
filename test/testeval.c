@@ -12,6 +12,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -1772,6 +1773,46 @@ testAllocationFailures(const char *text, const char *expected) {
     xmlFreeDoc(doc);
 }
 
+/*
+ * Numbers longer than the buffer for parsing them with a decimal comma:
+ * a decimal promoted to a double, a cast to xs:float and a double
+ * literal. Their last digit decides the rounding.
+ */
+static const char *const xp3LocaleExpr =
+    "(xs:decimal('2.5000000000000000000000000000000000000000000000000000"
+    "0000000000000001') * 1e0, "
+    "xs:float('16777217.000000000000000000000000000000000000000000000000"
+    "00000000001'), "
+    "9007199254740993.000000000000000000000000000000000000000000000000000"
+    "1e0)";
+
+static const char *const xp3LocaleExpected =
+    "double:2.5 float:1.6777218E7 double:9.007199254740994E15";
+
+/* The same results under a locale with a decimal comma */
+static void
+testLocale(void) {
+    const char *names[] = { "de_DE.UTF-8", "de_DE.utf8", "de_DE",
+                            "fr_FR.UTF-8", "fr_FR.utf8" };
+    size_t i;
+
+    checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (setlocale(LC_NUMERIC, names[i]) != NULL)
+            break;
+    }
+    if (i == sizeof(names) / sizeof(names[0]) ||
+        strcmp(localeconv()->decimal_point, ",") != 0) {
+        printf("testeval: locale test skipped: no locale with a decimal "
+               "comma\n");
+        setlocale(LC_NUMERIC, "C");
+        return;
+    }
+    checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
+    testAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
+    setlocale(LC_NUMERIC, "C");
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -1792,6 +1833,7 @@ main(void) {
     testSequences();
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    testLocale();
 
     if (failures == 0)
         printf("testeval: OK\n");
