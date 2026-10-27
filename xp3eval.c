@@ -1538,6 +1538,10 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
             evalError(ev, err, node, "the result of %s is too large, or "
                       "idiv got NaN or infinity", name);
             break;
+        case XP3_ERR_FOCA0002:
+            evalError(ev, err, node, "the quotient of idiv is too large "
+                      "for xs:integer");
+            break;
         default:
             evalNoMemory(ev);
             break;
