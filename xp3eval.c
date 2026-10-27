@@ -91,7 +91,10 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
 /**
  * Set the context node, which "." and relative paths start from. Any
  * libxml2 node of a run of adjacent text nodes stands for the whole
- * run (doc/DESIGN.md 4.5).
+ * run (doc/DESIGN.md 4.5). The node is mapped to the XDM node it
+ * stands for when each evaluation starts, so the tree may change
+ * between evaluations; an evaluation fails with XPDY0002 if the node
+ * then stands for none, as text whose run has lost its content.
  *
  * @param ctx   the context
  * @param node  the node, or NULL for no context item
@@ -101,16 +104,11 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
  */
 int
 xp3SetContextNode(xp3DynamicContext *ctx, xmlNodePtr node) {
-    xmlNodePtr canonical = NULL;
-
     if (ctx == NULL)
         return(-1);
-    if (node != NULL) {
-        canonical = xp3NodeCanonical(node);
-        if (canonical == NULL)
-            return(-1);
-    }
-    ctx->contextNode = canonical;
+    if ((node != NULL) && (xp3NodeCanonical(node) == NULL))
+        return(-1);
+    ctx->contextNode = node;
     return(0);
 }
 
@@ -2479,7 +2477,16 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
     ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
-        ev->focus.item = xp3ItemFromNode(ctx->contextNode);
+        /* Mapped now, not when it was set: text may have been added
+         * before it or removed since, which moves its run's node */
+        xmlNodePtr canonical = xp3NodeCanonical(ctx->contextNode);
+
+        if (canonical == NULL) {
+            evalError(ev, XP3_ERR_XPDY0002, NULL, "the context node is "
+                      "no longer part of the XDM tree");
+            return(-1);
+        }
+        ev->focus.item = xp3ItemFromNode(canonical);
         ev->focus.present = 1;
         ev->focus.position = 1;
         ev->focus.size = 1;
@@ -2678,7 +2685,10 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
 
 /**
  * Create a sequence of nodes, in the order given. Any libxml2 node of
- * a run of adjacent text nodes stands for the whole run.
+ * a run of adjacent text nodes stands for the whole run. The nodes are
+ * mapped to the XDM nodes they stand for now: unlike the context node,
+ * the sequence is a snapshot, to be created again after a change to
+ * the text around a node in it.
  *
  * @param nodes  the nodes, may be NULL if count is 0
  * @param count  the number of nodes
