@@ -1572,9 +1572,16 @@ evalUnary(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(value);
         return(NULL);
     }
-    if (node->op != XP3_OP_SUB)
+    if (node->op == XP3_OP_SUB) {
+        err = xp3NegateNumber(value, &result);
+    } else if (xp3TypeIsInteger(value->type) &&
+               (value->type != XP3_TYPE_INTEGER)) {
+        /* Unary + gives an xs:integer for a derived integer type, as
+         * unary - does (F&O 3.1, 4.2.7) */
+        err = xp3CastAtomic(value, XP3_TYPE_INTEGER, &result);
+    } else {
         return(evalSingle(ev, xp3ItemFromAtomic(value)));
-    err = xp3NegateNumber(value, &result);
+    }
     xp3AtomicUnref(value);
     if (err != XP3_ERR_OK) {
         evalNoMemory(ev);
