@@ -20,6 +20,8 @@
  * accepting the lead bytes 0xF8 to 0xFF. They never appear in UTF-8
  * (RFC 3629, section 1), and xmlGetUTF8Char() reads any lead byte from
  * 0xF0 by its last three bits, so F8 90 80 80 would decode as U+10000.
+ * libxml2 rejects them from 2.16.0, so the check can go once that is
+ * the oldest version supported.
  *
  * @param utf  the bytes
  * @param len  the number of bytes available; set to the length of the
