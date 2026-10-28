@@ -36,7 +36,8 @@ typedef struct {
  * counted, so one context is used by one thread at a time.
  */
 struct _xp3DynamicContext {
-    xmlNodePtr contextNode;     /* canonical, or NULL for none */
+    xmlNodePtr contextNode;     /* as set, NULL for none; mapped to
+                                 * its XDM node per evaluation */
     xp3BoundVariable *variables;
     int variableCount;
     int variableMax;
