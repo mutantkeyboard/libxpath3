@@ -91,7 +91,10 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
 /**
  * Set the context node, which "." and relative paths start from. Any
  * libxml2 node of a run of adjacent text nodes stands for the whole
- * run (doc/DESIGN.md 4.5).
+ * run (doc/DESIGN.md 4.5). The node is mapped to the XDM node it
+ * stands for when each evaluation starts, so the tree may change
+ * between evaluations; an evaluation fails with XPDY0002 if the node
+ * then stands for none, as text whose run has lost its content.
  *
  * @param ctx   the context
  * @param node  the node, or NULL for no context item
@@ -101,16 +104,11 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
  */
 int
 xp3SetContextNode(xp3DynamicContext *ctx, xmlNodePtr node) {
-    xmlNodePtr canonical = NULL;
-
     if (ctx == NULL)
         return(-1);
-    if (node != NULL) {
-        canonical = xp3NodeCanonical(node);
-        if (canonical == NULL)
-            return(-1);
-    }
-    ctx->contextNode = canonical;
+    if ((node != NULL) && (xp3NodeCanonical(node) == NULL))
+        return(-1);
+    ctx->contextNode = node;
     return(0);
 }
 
@@ -229,8 +227,14 @@ typedef struct {
     xp3LanguageLevel level;
     uint64_t operations;        /* steps taken so far */
     uint64_t maxOperations;     /* 0 for no limit */
+    size_t maxBytes;            /* folding only: most bytes of a value,
+                                 * see evalCheckSize(); 0 for no limit */
     xp3Error *err;              /* the first error */
 } xp3Eval;
+
+/* Measuring the size of values while folding costs a step per this
+ * many bytes, so it can't take longer than the steps allow */
+#define XP3_BYTES_PER_STEP 256
 
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node);
@@ -261,7 +265,12 @@ evalNoMemory(xp3Eval *ev) {
 /* Record the failure of a builder or iterator: memory or the limit */
 static void
 evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
-    if (code == XP3_ERR_LIMIT)
+    if ((code == XP3_ERR_LIMIT) && (ev->maxBytes > 0))
+        evalError(ev, XP3_ERR_LIMIT, node,
+                  "a sequence would have more than %lu items or %lu bytes",
+                  (unsigned long) ev->maxItems,
+                  (unsigned long) ev->maxBytes);
+    else if (code == XP3_ERR_LIMIT)
         evalError(ev, XP3_ERR_LIMIT, node,
                   "a sequence would have more than %lu items",
                   (unsigned long) ev->maxItems);
@@ -276,8 +285,8 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
  * Returns 0 or -1.
  */
 static int
-evalCount(xp3Eval *ev, const xp3AstNode *node) {
-    ev->operations++;
+evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
+    ev->operations += steps;
     if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
         evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
                   "%lu steps", (unsigned long) ev->maxOperations);
@@ -286,18 +295,31 @@ evalCount(xp3Eval *ev, const xp3AstNode *node) {
     return(0);
 }
 
+static int
+evalCount(xp3Eval *ev, const xp3AstNode *node) {
+    return(evalSteps(ev, node, 1));
+}
+
 static void
 builderInit(const xp3Eval *ev, xp3SeqBuilder *builder) {
     xp3SeqBuilderInit(builder);
     builder->max = ev->maxItems;
+    builder->maxBytes = ev->maxBytes;
 }
 
 static xp3Value *
 builderFinish(xp3Eval *ev, xp3SeqBuilder *builder) {
+    size_t bytes = builder->bytes;
     xp3Value *value = xp3SeqBuilderFinish(builder);
 
-    if (value == NULL)
+    if (value == NULL) {
         evalNoMemory(ev);
+        return(NULL);
+    }
+    if (evalSteps(ev, NULL, bytes / XP3_BYTES_PER_STEP) < 0) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
     return(value);
 }
 
@@ -1538,6 +1560,10 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
             evalError(ev, err, node, "the result of %s is too large, or "
                       "idiv got NaN or infinity", name);
             break;
+        case XP3_ERR_FOCA0002:
+            evalError(ev, err, node, "the quotient of idiv is too large "
+                      "for xs:integer");
+            break;
         default:
             evalNoMemory(ev);
             break;
@@ -1572,9 +1598,16 @@ evalUnary(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(value);
         return(NULL);
     }
-    if (node->op != XP3_OP_SUB)
+    if (node->op == XP3_OP_SUB) {
+        err = xp3NegateNumber(value, &result);
+    } else if (xp3TypeIsInteger(value->type) &&
+               (value->type != XP3_TYPE_INTEGER)) {
+        /* Unary + gives an xs:integer for a derived integer type, as
+         * unary - does (F&O 3.1, 4.2.7) */
+        err = xp3CastAtomic(value, XP3_TYPE_INTEGER, &result);
+    } else {
         return(evalSingle(ev, xp3ItemFromAtomic(value)));
-    err = xp3NegateNumber(value, &result);
+    }
     xp3AtomicUnref(value);
     if (err != XP3_ERR_OK) {
         evalNoMemory(ev);
@@ -1632,15 +1665,15 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
 /*
  * The type an untyped value is cast to when compared with another
  * value in a general comparison (XPath 3.1, 3.7.2): xs:double for
- * numbers, xs:string for strings and untyped values, otherwise the
- * primitive type of the other value.
+ * numbers, xs:string for untyped values, otherwise the primitive type
+ * of the other value, so xs:anyURI for xs:anyURI, which collapses
+ * whitespace.
  */
 static xp3TypeId
 generalTarget(xp3TypeId other) {
     if (xp3TypeIsNumeric(other))
         return(XP3_TYPE_DOUBLE);
-    if (xp3TypeDerivesFrom(other, XP3_TYPE_STRING) ||
-        (other == XP3_TYPE_ANY_URI) || (other == XP3_TYPE_UNTYPED_ATOMIC))
+    if (other == XP3_TYPE_UNTYPED_ATOMIC)
         return(XP3_TYPE_STRING);
     return(xp3TypePrimitive(other));
 }
@@ -2406,8 +2439,48 @@ evalBinary(xp3Eval *ev, const xp3AstNode *node) {
  * Dispatch
  */
 
+/*
+ * While folding, check the size of a single atomic value an expression
+ * made; sequences of more items were checked by their builders. A
+ * constant, a variable or the context item only returns a value made
+ * and checked before. Returns 0, or -1 if the value is larger than
+ * ev->maxBytes.
+ */
+static int
+evalCheckSize(xp3Eval *ev, const xp3AstNode *node, const xp3Value *value) {
+    size_t size;
+
+    if ((node->kind == XP3_AST_CONSTANT) || (node->kind == XP3_AST_VARREF) ||
+        (node->kind == XP3_AST_CONTEXT_ITEM) ||
+        (value->shape != XP3_SEQ_SINGLE) ||
+        (value->u.single.kind != XP3_ITEM_ATOMIC))
+        return(0);
+    size = xp3AtomicSize(value->u.single.u.atomic, ev->maxBytes);
+    if (size > ev->maxBytes) {
+        evalError(ev, XP3_ERR_LIMIT, node, "a value would have more than "
+                  "%lu bytes", (unsigned long) ev->maxBytes);
+        return(-1);
+    }
+    return(evalSteps(ev, node, size / XP3_BYTES_PER_STEP));
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node);
+
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalNode(ev, node);
+
+    if ((value != NULL) && (ev->maxBytes > 0) &&
+        (evalCheckSize(ev, node, value) < 0)) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    return(value);
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node) {
     if (evalCount(ev, node) < 0)
         return(NULL);
     switch (node->kind) {
@@ -2479,7 +2552,16 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
     ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
-        ev->focus.item = xp3ItemFromNode(ctx->contextNode);
+        /* Mapped now, not when it was set: text may have been added
+         * before it or removed since, which moves its run's node */
+        xmlNodePtr canonical = xp3NodeCanonical(ctx->contextNode);
+
+        if (canonical == NULL) {
+            evalError(ev, XP3_ERR_XPDY0002, NULL, "the context node is "
+                      "no longer part of the XDM tree");
+            return(-1);
+        }
+        ev->focus.item = xp3ItemFromNode(canonical);
         ev->focus.present = 1;
         ev->focus.position = 1;
         ev->focus.size = 1;
@@ -2640,6 +2722,8 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
  * @param level          the language level
  * @param maxOperations  the most steps, see evalCount()
  * @param maxItems       the most items of any sequence built
+ * @param maxBytes       the most bytes of any value made, see
+ *                       xp3AtomicSize(); 0 for no limit
  * @param value          set to the value, with one reference
  * @param operations     set to the steps taken
  * @returns XP3_ERR_OK, or the code of the error evaluating raised
@@ -2647,7 +2731,7 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
 xp3ErrCode
 xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
                 xp3LanguageLevel level, uint64_t maxOperations,
-                size_t maxItems, xp3Value **value,
+                size_t maxItems, size_t maxBytes, xp3Value **value,
                 uint64_t *operations) {
     xp3ErrCode ret = XP3_ERR_OK;
     xp3Eval ev;
@@ -2656,6 +2740,7 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
     memset(&ev, 0, sizeof(ev));
     ev.level = level;
     ev.maxItems = maxItems;
+    ev.maxBytes = maxBytes;
     ev.maxOperations = maxOperations;
     ev.slots = slots;
     ev.slotCount = slotCount;
@@ -2678,7 +2763,10 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
 
 /**
  * Create a sequence of nodes, in the order given. Any libxml2 node of
- * a run of adjacent text nodes stands for the whole run.
+ * a run of adjacent text nodes stands for the whole run. The nodes are
+ * mapped to the XDM nodes they stand for now: unlike the context node,
+ * the sequence is a snapshot, to be created again after a change to
+ * the text around a node in it.
  *
  * @param nodes  the nodes, may be NULL if count is 0
  * @param count  the number of nodes

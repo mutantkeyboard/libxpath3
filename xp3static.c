@@ -849,6 +849,12 @@ analyzeNode(xp3Analysis *st, xp3AstNode *node) {
 #define XP3_FOLD_ITEMS 10000
 #define XP3_FOLD_TOTAL 1000000
 
+/* The most bytes of strings and digits of decimals (xp3AtomicSize())
+ * of any value one fold makes, and of the constants of one expression
+ * together */
+#define XP3_FOLD_BYTES 65536
+#define XP3_FOLD_TOTAL_BYTES 1048576
+
 /* A flag for the walk below: the node is closed */
 #define XP3_FOLD_CLOSED (1 << 8)
 
@@ -867,6 +873,7 @@ typedef struct {
     char *external;             /* slots of declared variables */
     xp3Value **slots;           /* lent to each fold, all NULL */
     uint64_t budget;            /* steps left for all folds */
+    size_t bytes;               /* bytes left for all constants */
     int noMemory;               /* an allocation failed: stop */
 } xp3Optimizer;
 
@@ -964,6 +971,25 @@ replaceByValue(xp3Optimizer *opt, xp3AstNode *node, const xp3Value *value) {
     makeConstantNode(node, constant);
 }
 
+/* The size of a value, the sum of its items' xp3AtomicSize(), counted
+ * up to max: folding kept it within max. A range stores no items. */
+static size_t
+valueSize(const xp3Value *value, size_t max) {
+    size_t size = 0;
+    xp3Iter iter;
+    xp3Item item;
+
+    if (value->shape == XP3_SEQ_RANGE)
+        return(0);
+    xp3IterInit(&iter, value);
+    while ((size < max) && (xp3IterNext(&iter, &item) > 0)) {
+        if (item.kind == XP3_ITEM_ATOMIC)
+            size += xp3AtomicSize(item.u.atomic, max - size);
+        xp3ItemUnref(item);
+    }
+    return((size < max) ? size : max);
+}
+
 /*
  * Fold a closed subexpression. If it can't be folded, fold the closed
  * subexpressions inside it, which are all closed too.
@@ -974,22 +1000,25 @@ tryFold(xp3Optimizer *opt, xp3AstNode *node) {
 
     if ((node->kind == XP3_AST_CONSTANT) || opt->noMemory)
         return;
-    if (isFoldable(node->kind) && (opt->budget > 0)) {
+    if (isFoldable(node->kind) && (opt->budget > 0) && (opt->bytes > 0)) {
         uint64_t limit = (opt->budget < XP3_FOLD_OPERATIONS) ?
                          opt->budget : XP3_FOLD_OPERATIONS;
+        size_t maxBytes = (opt->bytes < XP3_FOLD_BYTES) ?
+                          opt->bytes : XP3_FOLD_BYTES;
         uint64_t used = 0;
         xp3Value *value;
         xp3ErrCode err;
 
         err = xp3EvalConstant(node, opt->slots, opt->st->slotCount,
-                              opt->st->level, limit, XP3_FOLD_ITEMS, &value,
-                              &used);
+                              opt->st->level, limit, XP3_FOLD_ITEMS,
+                              maxBytes, &value, &used);
         opt->budget -= (used < opt->budget) ? used : opt->budget;
         if (err == XP3_ERR_NO_MEMORY) {
             opt->noMemory = 1;
             return;
         }
         if (err == XP3_ERR_OK) {
+            opt->bytes -= valueSize(value, opt->bytes);
             replaceByValue(opt, node, value);
             xp3ValueUnref(value);
             return;
@@ -1393,6 +1422,7 @@ optimize(xp3Analysis *st) {
     memset(&opt, 0, sizeof(opt));
     opt.st = st;
     opt.budget = XP3_FOLD_TOTAL;
+    opt.bytes = XP3_FOLD_TOTAL_BYTES;
     opt.external = xmlMalloc((st->slotCount > 0) ? (size_t) st->slotCount :
                                                    1);
     opt.slots = xmlMalloc(((st->slotCount > 0) ? (size_t) st->slotCount :

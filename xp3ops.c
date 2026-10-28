@@ -330,8 +330,10 @@ binaryArithmetic(xp3AstOp op, double left, double right, int isFloat,
             quotient = left / right;
             if (isFloat)
                 quotient = (float) quotient;
+            /* idiv is (left div right) cast as xs:integer, and casting
+             * infinity fails (F&O 3.1, 19.1.2.4) */
             if (isinf(quotient))
-                return(XP3_ERR_FOAR0002);
+                return(XP3_ERR_FOCA0002);
             err = integerFromBinary(trunc(quotient), &dec);
             if (err != XP3_ERR_OK)
                 return(err);
@@ -355,7 +357,8 @@ binaryArithmetic(xp3AstOp op, double left, double right, int isFloat,
  * @param res    where to store the result
  * @returns XP3_ERR_OK, XP3_ERR_XPTY0004 if an operand is not numeric,
  *          XP3_ERR_FOAR0001 for a division by zero, XP3_ERR_FOAR0002
- *          for an overflow or an invalid idiv, or XP3_ERR_NO_MEMORY
+ *          for an overflow or an invalid idiv, XP3_ERR_FOCA0002 for an
+ *          idiv whose quotient is infinite, or XP3_ERR_NO_MEMORY
  */
 xp3ErrCode
 xp3Arithmetic(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,

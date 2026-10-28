@@ -351,7 +351,8 @@ static const xp3EvalCase xp3Cases[] = {
     { "xs:double('NaN') idiv 1", "error:FOAR0002" },
     { "7.5e0 idiv 2", "integer:3" },
     { "-7.5e0 idiv 2", "integer:-3" },
-    { "1e300 idiv 1e-10", "error:FOAR0002" },
+    { "1e300 idiv 1e-10", "error:FOCA0002" },
+    { "xs:float(3e38) idiv xs:float(0.1)", "error:FOCA0002" },
     { "5.5e0 mod 2", "double:1.5" },
     { "-5.5e0 mod 2", "double:-1.5" },
     { "xs:float(5.5) idiv 2", "integer:2" },
@@ -370,7 +371,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "-xs:byte(1)", "integer:-1" },
     { "-xs:float(1)", "float:-1" },
     { "-1e0", "double:-1" },
-    { "+xs:byte(1)", "byte:1" },
+    { "+xs:byte(1)", "integer:1" },
+    { "+xs:unsignedLong(18446744073709551615)",
+      "integer:18446744073709551615" },
+    { "+1", "integer:1" },
+    { "+(1.5)", "decimal:1.5" },
+    { "+xs:float(1)", "float:1" },
     { "--1", "integer:1" },
     { "-()", "" },
     { "-@a", "double:-1" },
@@ -432,6 +438,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "x[1] > x[2]", "boolean:false" },
     { "x[1] >= x[1]", "boolean:true" },
     { "x[1] <= 'one'", "boolean:true" },
+    /* An untyped value is cast to xs:anyURI, which collapses
+     * whitespace, but compared as a string with a string */
+    { "xs:untypedAtomic(' 1 ') = xs:anyURI('1')", "boolean:true" },
+    { "xs:anyURI('1') != xs:untypedAtomic(' 1 ')", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = '1'", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = xs:token('1')", "boolean:false" },
 
     /* Node comparisons */
     { "x[1] is x[1]", "boolean:true" },
@@ -1033,6 +1045,56 @@ testFocus(void) {
 done:
     xp3FreeDynamicContext(ctx);
     xmlFreeNode(loose);
+    xmlFreeDoc(doc);
+}
+
+/* The context node is mapped to its XDM node when an evaluation
+ * starts, so the tree may change after it is set. libxml2 merges a
+ * text node into an adjacent one, but not a CDATA section, so these
+ * build runs of more than one node. */
+static void
+testTreeChange(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlDocPtr doc = parseDoc("<r><a/>tx<b/></r>");
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+
+    if ((ctx == NULL) || (root == NULL)) {
+        check(0, "tree change test set up");
+    } else {
+        xmlNodePtr text = root->children->next;
+
+        /* Text added before the context node starts its run */
+        check(xp3SetContextNode(ctx, text) == 0, "text as the context node");
+        checkEval(NULL, ctx, ".", "t:tx");
+        check(xmlAddPrevSibling(text, xmlNewCDataBlock(doc, BAD_CAST "pre",
+                                                       3)) != NULL,
+              "CDATA section added before the context node");
+        checkEval(NULL, ctx, ".", "t:pretx");
+        checkEval(NULL, ctx, ". is ../text()[1]", "boolean:true");
+        checkEval(NULL, ctx, "(. | ../text())[1] is .", "boolean:true");
+        checkEval(NULL, ctx, "following-sibling::node()", "e:b");
+        checkEval(NULL, ctx, "preceding-sibling::node()", "e:a");
+
+        /* The node that started the run is removed */
+        text = root->children->next;
+        check(xp3SetContextNode(ctx, text->next) == 0,
+              "a later node of the run as the context node");
+        xmlUnlinkNode(text);
+        xmlFreeNode(text);
+        checkEval(NULL, ctx, ".", "t:tx");
+        checkEval(NULL, ctx, ". is ../text()[1]", "boolean:true");
+
+        /* The run loses its content, then gets it back */
+        text = root->children->next;
+        xmlNodeSetContent(text, BAD_CAST "");
+        checkEval(NULL, ctx, ".", "error:XPDY0002");
+        checkEval(NULL, ctx, "1", "error:XPDY0002");
+        check(xp3SetContextNode(ctx, text) == -1,
+              "no text without content as the context node");
+        xmlNodeSetContent(text, BAD_CAST "back");
+        checkEval(NULL, ctx, ".", "t:back");
+    }
+    xp3FreeDynamicContext(ctx);
     xmlFreeDoc(doc);
 }
 
@@ -1862,6 +1924,7 @@ main(void) {
     testQNameComparison();
     testManyBindings();
     testFocus();
+    testTreeChange();
     testInvalidUtf8();
     testVariables();
     testLimits();
