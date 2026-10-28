@@ -1632,15 +1632,15 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
 /*
  * The type an untyped value is cast to when compared with another
  * value in a general comparison (XPath 3.1, 3.7.2): xs:double for
- * numbers, xs:string for strings and untyped values, otherwise the
- * primitive type of the other value.
+ * numbers, xs:string for untyped values, otherwise the primitive type
+ * of the other value, so xs:anyURI for xs:anyURI, which collapses
+ * whitespace.
  */
 static xp3TypeId
 generalTarget(xp3TypeId other) {
     if (xp3TypeIsNumeric(other))
         return(XP3_TYPE_DOUBLE);
-    if (xp3TypeDerivesFrom(other, XP3_TYPE_STRING) ||
-        (other == XP3_TYPE_ANY_URI) || (other == XP3_TYPE_UNTYPED_ATOMIC))
+    if (other == XP3_TYPE_UNTYPED_ATOMIC)
         return(XP3_TYPE_STRING);
     return(xp3TypePrimitive(other));
 }

@@ -432,6 +432,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "x[1] > x[2]", "boolean:false" },
     { "x[1] >= x[1]", "boolean:true" },
     { "x[1] <= 'one'", "boolean:true" },
+    /* An untyped value is cast to xs:anyURI, which collapses
+     * whitespace, but compared as a string with a string */
+    { "xs:untypedAtomic(' 1 ') = xs:anyURI('1')", "boolean:true" },
+    { "xs:anyURI('1') != xs:untypedAtomic(' 1 ')", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = '1'", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = xs:token('1')", "boolean:false" },
 
     /* Node comparisons */
     { "x[1] is x[1]", "boolean:true" },
