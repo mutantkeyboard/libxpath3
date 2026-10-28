@@ -249,6 +249,51 @@ xp3AtomicRef(xp3Atomic *atomic) {
 static void
 atomicFree(xp3Atomic *atomic);
 
+/* The length of a string, counted up to just past max */
+static size_t
+boundedLength(const xmlChar *str, size_t max) {
+    size_t len = 0;
+
+    if (str == NULL)
+        return(0);
+    while ((len <= max) && (str[len] != 0))
+        len++;
+    return(len);
+}
+
+/**
+ * Measure the payload of an atomic value: the bytes of a string, a
+ * binary value or a QName, and the digits of a decimal. Values of the
+ * other types have a fixed size and measure 0. Strings are counted
+ * only up to max, so measuring one costs at most max + 1 steps.
+ *
+ * @param atomic  the value
+ * @param max     the size that matters
+ * @returns the size, or a size above max if it is larger
+ */
+size_t
+xp3AtomicSize(const xp3Atomic *atomic, size_t max) {
+    size_t size;
+
+    switch (xp3TypeRepresentation(atomic->type)) {
+        case XP3_REP_STRING:
+            return(boundedLength(atomic->u.str, max));
+        case XP3_REP_DECIMAL:
+            return(xp3DecimalDigits(atomic->u.dec));
+        case XP3_REP_BINARY:
+            return(atomic->u.bin.len);
+        case XP3_REP_QNAME:
+            size = boundedLength(atomic->u.qname.uri, max);
+            if (size <= max)
+                size += boundedLength(atomic->u.qname.prefix, max - size);
+            if (size <= max)
+                size += boundedLength(atomic->u.qname.local, max - size);
+            return(size);
+        default:
+            return(0);
+    }
+}
+
 /**
  * Release a reference to an atomic value, freeing it with the last
  * one. NULL is ignored.
@@ -577,14 +622,25 @@ xp3SeqBuilderInit(xp3SeqBuilder *builder) {
  *
  * @param builder  the builder
  * @param item     the item
- * @returns XP3_ERR_OK, XP3_ERR_LIMIT past builder->max items, or
- *          XP3_ERR_NO_MEMORY; the builder stays usable after a failure
+ * @returns XP3_ERR_OK, XP3_ERR_LIMIT past builder->max items or
+ *          builder->maxBytes bytes, or XP3_ERR_NO_MEMORY; the builder
+ *          stays usable after a failure
  */
 xp3ErrCode
 xp3SeqBuilderAdd(xp3SeqBuilder *builder, xp3Item item) {
     if (builder->count >= builder->max) {
         xp3ItemUnref(item);
         return(XP3_ERR_LIMIT);
+    }
+    if ((builder->maxBytes > 0) && (item.kind == XP3_ITEM_ATOMIC)) {
+        size_t size = xp3AtomicSize(item.u.atomic,
+                                    builder->maxBytes - builder->bytes);
+
+        if (size > builder->maxBytes - builder->bytes) {
+            xp3ItemUnref(item);
+            return(XP3_ERR_LIMIT);
+        }
+        builder->bytes += size;
     }
     if (builder->count >= builder->cap) {
         size_t cap = (builder->cap == 0) ? 8 : builder->cap * 2;

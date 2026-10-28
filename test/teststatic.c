@@ -822,6 +822,112 @@ testFoldBudget(void) {
     xmlFree(expr);
 }
 
+/* An expression of a head, a part repeated count times with a
+ * separator between, and a tail; free it with xmlFree() */
+static char *
+repeatExpr(const char *head, const char *part, const char *separator,
+           size_t count, const char *tail) {
+    size_t size = strlen(head) + (strlen(part) + strlen(separator)) * count +
+                  strlen(tail) + 1;
+    char *expr = xmlMalloc(size);
+    size_t used;
+    size_t i;
+
+    if (expr == NULL)
+        return(NULL);
+    used = (size_t) snprintf(expr, size, "%s", head);
+    for (i = 0; i < count; i++)
+        used += (size_t) snprintf(expr + used, size - used, "%s%s",
+                                  (i > 0) ? separator : "", part);
+    snprintf(expr + used, size - used, "%s", tail);
+    return(expr);
+}
+
+/* Compile an expression of repeated parts and check the kind of its
+ * root */
+static void
+checkFoldSize(const char *head, const char *part, size_t count,
+              const char *tail, xp3AstKind kind, const char *what) {
+    char *expr = repeatExpr(head, part, "", count, tail);
+    xp3Expr *compiled = NULL;
+
+    if (expr != NULL)
+        compiled = xp3Compile(NULL, BAD_CAST expr, NULL);
+    check((compiled != NULL) && (compiled->ast->root->kind == kind), what);
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+}
+
+/*
+ * Folds whose values are too large are left: 64 KB of strings or
+ * decimal digits in one fold, 1 MB for all of an expression. The
+ * limit is checked while folding, so a fold stops at the first value
+ * too large, and evaluating still gives the value.
+ */
+static void
+testFoldSizes(void) {
+    static const char strings[] = "(for $i in 1 to %d return "
+                                  "'abcdefghijklmnopqrstuvwxyz012345')";
+    char small[128];
+    char large[128];
+    char test[256];
+    char *expr;
+    xp3Expr *compiled;
+    xp3AstNode *child;
+    int constants = 0;
+    int left = 0;
+
+    /* Strings of 32 bytes, 1000 and 2100 of them */
+    snprintf(small, sizeof(small), strings, 1000);
+    snprintf(large, sizeof(large), strings, 2100);
+    checkFoldSize(small, "", 0, "", XP3_AST_CONSTANT,
+                  "a sequence of 32,000 bytes is folded");
+    checkFoldSize(large, "", 0, "", XP3_AST_FOR,
+                  "a sequence of 67,200 bytes is left");
+    snprintf(test, sizeof(test), "%s[2100] = 'abcdefghijklmnopqrstuvwxyz"
+             "012345'", large);
+    compiled = xp3Compile(NULL, BAD_CAST test, NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "a sequence that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+
+    /* Decimal digits */
+    checkFoldSize("", "9", 60000, " + 1", XP3_AST_CONSTANT,
+                  "an integer of 60,000 digits is folded");
+    checkFoldSize("", "9", 70000, " + 1", XP3_AST_BINARY,
+                  "an integer of 70,000 digits is left");
+    expr = repeatExpr("", "9", "", 70000, " + 1 > 1");
+    compiled = (expr != NULL) ? xp3Compile(NULL, BAD_CAST expr, NULL) : NULL;
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "an integer that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+
+    /* 40 sequences of 32,000 bytes: 32 fit in 1 MB */
+    expr = repeatExpr("(", small, ", ", 40, ")");
+    compiled = (expr != NULL) ? xp3Compile(NULL, BAD_CAST expr, NULL) : NULL;
+    if ((compiled == NULL) ||
+        (compiled->ast->root->kind != XP3_AST_SEQUENCE)) {
+        check(0, "a sequence of 1,280,000 bytes is left");
+    } else {
+        for (child = compiled->ast->root->first; child != NULL;
+             child = child->next) {
+            if (child->kind == XP3_AST_CONSTANT)
+                constants++;
+            else if (child->kind == XP3_AST_FOR)
+                left++;
+        }
+        check((constants == 32) && (left == 8),
+              "32 sequences of 32,000 bytes of 40 are folded");
+    }
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -834,6 +940,7 @@ main(void) {
     testApi();
     testOptimize();
     testFoldBudget();
+    testFoldSizes();
     testAllocationFailures();
 
     if (failures == 0)

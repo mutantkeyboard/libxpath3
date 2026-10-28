@@ -227,8 +227,14 @@ typedef struct {
     xp3LanguageLevel level;
     uint64_t operations;        /* steps taken so far */
     uint64_t maxOperations;     /* 0 for no limit */
+    size_t maxBytes;            /* folding only: most bytes of a value,
+                                 * see evalCheckSize(); 0 for no limit */
     xp3Error *err;              /* the first error */
 } xp3Eval;
+
+/* Measuring the size of values while folding costs a step per this
+ * many bytes, so it can't take longer than the steps allow */
+#define XP3_BYTES_PER_STEP 256
 
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node);
@@ -259,7 +265,12 @@ evalNoMemory(xp3Eval *ev) {
 /* Record the failure of a builder or iterator: memory or the limit */
 static void
 evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
-    if (code == XP3_ERR_LIMIT)
+    if ((code == XP3_ERR_LIMIT) && (ev->maxBytes > 0))
+        evalError(ev, XP3_ERR_LIMIT, node,
+                  "a sequence would have more than %lu items or %lu bytes",
+                  (unsigned long) ev->maxItems,
+                  (unsigned long) ev->maxBytes);
+    else if (code == XP3_ERR_LIMIT)
         evalError(ev, XP3_ERR_LIMIT, node,
                   "a sequence would have more than %lu items",
                   (unsigned long) ev->maxItems);
@@ -274,8 +285,8 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
  * Returns 0 or -1.
  */
 static int
-evalCount(xp3Eval *ev, const xp3AstNode *node) {
-    ev->operations++;
+evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
+    ev->operations += steps;
     if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
         evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
                   "%lu steps", (unsigned long) ev->maxOperations);
@@ -284,18 +295,31 @@ evalCount(xp3Eval *ev, const xp3AstNode *node) {
     return(0);
 }
 
+static int
+evalCount(xp3Eval *ev, const xp3AstNode *node) {
+    return(evalSteps(ev, node, 1));
+}
+
 static void
 builderInit(const xp3Eval *ev, xp3SeqBuilder *builder) {
     xp3SeqBuilderInit(builder);
     builder->max = ev->maxItems;
+    builder->maxBytes = ev->maxBytes;
 }
 
 static xp3Value *
 builderFinish(xp3Eval *ev, xp3SeqBuilder *builder) {
+    size_t bytes = builder->bytes;
     xp3Value *value = xp3SeqBuilderFinish(builder);
 
-    if (value == NULL)
+    if (value == NULL) {
         evalNoMemory(ev);
+        return(NULL);
+    }
+    if (evalSteps(ev, NULL, bytes / XP3_BYTES_PER_STEP) < 0) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
     return(value);
 }
 
@@ -2415,8 +2439,48 @@ evalBinary(xp3Eval *ev, const xp3AstNode *node) {
  * Dispatch
  */
 
+/*
+ * While folding, check the size of a single atomic value an expression
+ * made; sequences of more items were checked by their builders. A
+ * constant, a variable or the context item only returns a value made
+ * and checked before. Returns 0, or -1 if the value is larger than
+ * ev->maxBytes.
+ */
+static int
+evalCheckSize(xp3Eval *ev, const xp3AstNode *node, const xp3Value *value) {
+    size_t size;
+
+    if ((node->kind == XP3_AST_CONSTANT) || (node->kind == XP3_AST_VARREF) ||
+        (node->kind == XP3_AST_CONTEXT_ITEM) ||
+        (value->shape != XP3_SEQ_SINGLE) ||
+        (value->u.single.kind != XP3_ITEM_ATOMIC))
+        return(0);
+    size = xp3AtomicSize(value->u.single.u.atomic, ev->maxBytes);
+    if (size > ev->maxBytes) {
+        evalError(ev, XP3_ERR_LIMIT, node, "a value would have more than "
+                  "%lu bytes", (unsigned long) ev->maxBytes);
+        return(-1);
+    }
+    return(evalSteps(ev, node, size / XP3_BYTES_PER_STEP));
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node);
+
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalNode(ev, node);
+
+    if ((value != NULL) && (ev->maxBytes > 0) &&
+        (evalCheckSize(ev, node, value) < 0)) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    return(value);
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node) {
     if (evalCount(ev, node) < 0)
         return(NULL);
     switch (node->kind) {
@@ -2658,6 +2722,8 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
  * @param level          the language level
  * @param maxOperations  the most steps, see evalCount()
  * @param maxItems       the most items of any sequence built
+ * @param maxBytes       the most bytes of any value made, see
+ *                       xp3AtomicSize(); 0 for no limit
  * @param value          set to the value, with one reference
  * @param operations     set to the steps taken
  * @returns XP3_ERR_OK, or the code of the error evaluating raised
@@ -2665,7 +2731,7 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
 xp3ErrCode
 xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
                 xp3LanguageLevel level, uint64_t maxOperations,
-                size_t maxItems, xp3Value **value,
+                size_t maxItems, size_t maxBytes, xp3Value **value,
                 uint64_t *operations) {
     xp3ErrCode ret = XP3_ERR_OK;
     xp3Eval ev;
@@ -2674,6 +2740,7 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
     memset(&ev, 0, sizeof(ev));
     ev.level = level;
     ev.maxItems = maxItems;
+    ev.maxBytes = maxBytes;
     ev.maxOperations = maxOperations;
     ev.slots = slots;
     ev.slotCount = slotCount;

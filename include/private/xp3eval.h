@@ -52,7 +52,7 @@ xp3EffectiveBoolean(const xp3Value *value, int *result);
 xp3ErrCode
 xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
                 xp3LanguageLevel level, uint64_t maxOperations,
-                size_t maxItems, xp3Value **value,
+                size_t maxItems, size_t maxBytes, xp3Value **value,
                 uint64_t *operations);
 
 #endif /* XP3_XP3EVAL_H */
