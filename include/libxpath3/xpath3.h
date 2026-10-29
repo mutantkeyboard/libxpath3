@@ -73,101 +73,101 @@ typedef enum {
 
 /**
  * Built-in atomic types of XML Schema 1.1 and XDM 3.1, all in the
- * namespace http://www.w3.org/2001/XMLSchema. The values never change;
- * new types are only appended.
+ * namespace http://www.w3.org/2001/XMLSchema, each after the type it
+ * derives from. The values never change; new types are only appended.
  */
 typedef enum {
-    /** xs:anyAtomicType */
+    /** xs:anyAtomicType, the root of all atomic types */
     XP3_TYPE_ANY_ATOMIC = 0,
-    /** xs:untypedAtomic */
+    /** xs:untypedAtomic, derived from xs:anyAtomicType */
     XP3_TYPE_UNTYPED_ATOMIC = 1,
-    /** xs:string */
+    /** xs:string, derived from xs:anyAtomicType */
     XP3_TYPE_STRING = 2,
-    /** xs:normalizedString */
+    /** xs:normalizedString, derived from xs:string */
     XP3_TYPE_NORMALIZED_STRING = 3,
-    /** xs:token */
+    /** xs:token, derived from xs:normalizedString */
     XP3_TYPE_TOKEN = 4,
-    /** xs:language */
+    /** xs:language, derived from xs:token */
     XP3_TYPE_LANGUAGE = 5,
-    /** xs:NMTOKEN */
+    /** xs:NMTOKEN, derived from xs:token */
     XP3_TYPE_NMTOKEN = 6,
-    /** xs:Name */
+    /** xs:Name, derived from xs:token */
     XP3_TYPE_NAME = 7,
-    /** xs:NCName */
+    /** xs:NCName, derived from xs:Name */
     XP3_TYPE_NCNAME = 8,
-    /** xs:ID */
+    /** xs:ID, derived from xs:NCName */
     XP3_TYPE_ID = 9,
-    /** xs:IDREF */
+    /** xs:IDREF, derived from xs:NCName */
     XP3_TYPE_IDREF = 10,
-    /** xs:ENTITY */
+    /** xs:ENTITY, derived from xs:NCName */
     XP3_TYPE_ENTITY = 11,
-    /** xs:boolean */
+    /** xs:boolean, derived from xs:anyAtomicType */
     XP3_TYPE_BOOLEAN = 12,
-    /** xs:decimal */
+    /** xs:decimal, derived from xs:anyAtomicType */
     XP3_TYPE_DECIMAL = 13,
-    /** xs:integer */
+    /** xs:integer, derived from xs:decimal */
     XP3_TYPE_INTEGER = 14,
-    /** xs:nonPositiveInteger */
+    /** xs:nonPositiveInteger, derived from xs:integer */
     XP3_TYPE_NON_POSITIVE_INTEGER = 15,
-    /** xs:negativeInteger */
+    /** xs:negativeInteger, derived from xs:nonPositiveInteger */
     XP3_TYPE_NEGATIVE_INTEGER = 16,
-    /** xs:long */
+    /** xs:long, derived from xs:integer */
     XP3_TYPE_LONG = 17,
-    /** xs:int */
+    /** xs:int, derived from xs:long */
     XP3_TYPE_INT = 18,
-    /** xs:short */
+    /** xs:short, derived from xs:int */
     XP3_TYPE_SHORT = 19,
-    /** xs:byte */
+    /** xs:byte, derived from xs:short */
     XP3_TYPE_BYTE = 20,
-    /** xs:nonNegativeInteger */
+    /** xs:nonNegativeInteger, derived from xs:integer */
     XP3_TYPE_NON_NEGATIVE_INTEGER = 21,
-    /** xs:unsignedLong */
+    /** xs:unsignedLong, derived from xs:nonNegativeInteger */
     XP3_TYPE_UNSIGNED_LONG = 22,
-    /** xs:unsignedInt */
+    /** xs:unsignedInt, derived from xs:unsignedLong */
     XP3_TYPE_UNSIGNED_INT = 23,
-    /** xs:unsignedShort */
+    /** xs:unsignedShort, derived from xs:unsignedInt */
     XP3_TYPE_UNSIGNED_SHORT = 24,
-    /** xs:unsignedByte */
+    /** xs:unsignedByte, derived from xs:unsignedShort */
     XP3_TYPE_UNSIGNED_BYTE = 25,
-    /** xs:positiveInteger */
+    /** xs:positiveInteger, derived from xs:nonNegativeInteger */
     XP3_TYPE_POSITIVE_INTEGER = 26,
-    /** xs:float */
+    /** xs:float, derived from xs:anyAtomicType */
     XP3_TYPE_FLOAT = 27,
-    /** xs:double */
+    /** xs:double, derived from xs:anyAtomicType */
     XP3_TYPE_DOUBLE = 28,
-    /** xs:duration */
+    /** xs:duration, derived from xs:anyAtomicType */
     XP3_TYPE_DURATION = 29,
-    /** xs:yearMonthDuration */
+    /** xs:yearMonthDuration, derived from xs:duration */
     XP3_TYPE_YEAR_MONTH_DURATION = 30,
-    /** xs:dayTimeDuration */
+    /** xs:dayTimeDuration, derived from xs:duration */
     XP3_TYPE_DAY_TIME_DURATION = 31,
-    /** xs:dateTime */
+    /** xs:dateTime, derived from xs:anyAtomicType */
     XP3_TYPE_DATE_TIME = 32,
-    /** xs:dateTimeStamp */
+    /** xs:dateTimeStamp, derived from xs:dateTime */
     XP3_TYPE_DATE_TIME_STAMP = 33,
-    /** xs:time */
+    /** xs:time, derived from xs:anyAtomicType */
     XP3_TYPE_TIME = 34,
-    /** xs:date */
+    /** xs:date, derived from xs:anyAtomicType */
     XP3_TYPE_DATE = 35,
-    /** xs:gYearMonth */
+    /** xs:gYearMonth, derived from xs:anyAtomicType */
     XP3_TYPE_G_YEAR_MONTH = 36,
-    /** xs:gYear */
+    /** xs:gYear, derived from xs:anyAtomicType */
     XP3_TYPE_G_YEAR = 37,
-    /** xs:gMonthDay */
+    /** xs:gMonthDay, derived from xs:anyAtomicType */
     XP3_TYPE_G_MONTH_DAY = 38,
-    /** xs:gDay */
+    /** xs:gDay, derived from xs:anyAtomicType */
     XP3_TYPE_G_DAY = 39,
-    /** xs:gMonth */
+    /** xs:gMonth, derived from xs:anyAtomicType */
     XP3_TYPE_G_MONTH = 40,
-    /** xs:hexBinary */
+    /** xs:hexBinary, derived from xs:anyAtomicType */
     XP3_TYPE_HEX_BINARY = 41,
-    /** xs:base64Binary */
+    /** xs:base64Binary, derived from xs:anyAtomicType */
     XP3_TYPE_BASE64_BINARY = 42,
-    /** xs:anyURI */
+    /** xs:anyURI, derived from xs:anyAtomicType */
     XP3_TYPE_ANY_URI = 43,
-    /** xs:QName */
+    /** xs:QName, derived from xs:anyAtomicType */
     XP3_TYPE_QNAME = 44,
-    /** xs:NOTATION */
+    /** xs:NOTATION, derived from xs:anyAtomicType */
     XP3_TYPE_NOTATION = 45
 } xp3AtomicType;
 
