@@ -146,6 +146,11 @@ static const xp3TypeInfo xp3Types[] = {
 typedef char xp3TypesSize[
     (XP3_TABLE_SIZE(xp3Types) == XP3_TYPE_COUNT) ? 1 : -1];
 
+/* XP3_TYPE_COUNT is one past the last xp3AtomicType: a type appended
+ * to the enum moves the count and the type named here. */
+typedef char xp3TypesLast[
+    (XP3_TYPE_NOTATION + 1 == XP3_TYPE_COUNT) ? 1 : -1];
+
 static int
 xp3TypeValid(xp3TypeId type) {
     return((unsigned) type < XP3_TYPE_COUNT);
@@ -263,4 +268,35 @@ xp3TypeLookup(const xmlChar *localName) {
             return(i);
     }
     return(-1);
+}
+
+/*
+ * Public API
+ */
+
+/**
+ * Get the local name of an atomic type, in the namespace
+ * http://www.w3.org/2001/XMLSchema.
+ *
+ * @param type  the type
+ * @returns the name, a static string such as "integer", or NULL for
+ *          an unknown type
+ */
+const xmlChar *
+xp3AtomicTypeName(xp3AtomicType type) {
+    return(xp3TypeLocalName(type));
+}
+
+/**
+ * Check whether an atomic type is the same as another or derived from
+ * it, so that a binding can handle xs:int and xs:positiveInteger as
+ * integers.
+ *
+ * @param type      the type
+ * @param ancestor  the type it may derive from
+ * @returns 1 if it is, 0 if not or if either type is unknown
+ */
+int
+xp3AtomicTypeDerivesFrom(xp3AtomicType type, xp3AtomicType ancestor) {
+    return(xp3TypeDerivesFrom(type, ancestor));
 }

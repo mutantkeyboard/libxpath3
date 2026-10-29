@@ -656,6 +656,34 @@ static const struct {
       "(step child (name x) (predicate (constant integer:1))))" },
     { "//x[$v]", "(path root (step descendant-or-self sorted (kind node)) "
       "(step child (name x) (predicate (var v))))" },
+    /* Boolean predicates that read the position aren't rewritten, since
+     * position() = 1 picks the first x child of each node, not the
+     * first x descendant */
+    { "//x[position() = 1]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (binary = (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position) "
+      "(constant integer:1)))))" },
+    { "//x[last() = position()]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (binary = (call "
+      "Q{http://www.w3.org/2005/xpath-functions}last) (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position)))))" },
+    { "//x[some $p in position() satisfies $p = 1]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (some (bind p (call "
+      "Q{http://www.w3.org/2005/xpath-functions}position)) "
+      "(binary = (var p) (constant integer:1))))))" },
+    { "//x[y[last()]]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (path (step child (name y) "
+      "(predicate (call Q{http://www.w3.org/2005/xpath-functions}last))"
+      ")))))" },
+    /* Other focus-dependent functions only read the context item */
+    { "//x[name() = 'x']",
+      "(path root (step descendant sorted (name x) (predicate (binary = "
+      "(call Q{http://www.w3.org/2005/xpath-functions}name) "
+      "(constant string:x)))))" },
     { "//@x", "(path root (step descendant-or-self sorted (kind node)) "
       "(step attribute (name x)))" },
     { "a/..", "(path (step child (name a)) (step parent (kind node)))" },
@@ -671,6 +699,16 @@ static const struct {
     { "/a/following-sibling::b",
       "(path root (step child sorted (name a)) "
       "(step following-sibling (name b)))" },
+};
+
+/* Boolean predicates that read the position in other ways */
+static const char *const positionalCases[] = {
+    "//x[some $f in position#0 satisfies $f() = 1]",
+    "//x[some $f in fn:last#0 satisfies $f() = 1]",
+    "//x[function-lookup(xs:QName('fn:position'), 0)() = 1]",
+    "//x[function-lookup#2(xs:QName('fn:last'), 0)() = 1]",
+    "//x[(position() => string()) = '1']",
+    "//x[. = position()]"
 };
 
 /* A context that optimizes, with $v declared */
@@ -703,6 +741,27 @@ testOptimize(void) {
             !xmlStrEqual(tree, BAD_CAST optimizeCases[i].tree)) {
             fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
                     optimizeCases[i].expr, optimizeCases[i].tree,
+                    (tree != NULL) ? (const char *) tree :
+                    (const char *) xp3ErrorCode(err));
+            failures++;
+        }
+        xmlFree(tree);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+
+    /* Position read through a function item or an arrow: //x stays
+     * descendant-or-self::node()/child::x */
+    for (i = 0; i < sizeof(positionalCases) / sizeof(positionalCases[0]);
+         i++) {
+        xmlChar *tree = compileToString(ctx, positionalCases[i], &err);
+        const char *kept = "(path root (step descendant-or-self sorted "
+                           "(kind node)) (step child (name x) ";
+
+        if ((tree == NULL) ||
+            (xmlStrncmp(tree, BAD_CAST kept, (int) strlen(kept)) != 0)) {
+            fprintf(stderr, "FAIL: '%s' was rewritten: %s\n",
+                    positionalCases[i],
                     (tree != NULL) ? (const char *) tree :
                     (const char *) xp3ErrorCode(err));
             failures++;
@@ -763,6 +822,112 @@ testFoldBudget(void) {
     xmlFree(expr);
 }
 
+/* An expression of a head, a part repeated count times with a
+ * separator between, and a tail; free it with xmlFree() */
+static char *
+repeatExpr(const char *head, const char *part, const char *separator,
+           size_t count, const char *tail) {
+    size_t size = strlen(head) + (strlen(part) + strlen(separator)) * count +
+                  strlen(tail) + 1;
+    char *expr = xmlMalloc(size);
+    size_t used;
+    size_t i;
+
+    if (expr == NULL)
+        return(NULL);
+    used = (size_t) snprintf(expr, size, "%s", head);
+    for (i = 0; i < count; i++)
+        used += (size_t) snprintf(expr + used, size - used, "%s%s",
+                                  (i > 0) ? separator : "", part);
+    snprintf(expr + used, size - used, "%s", tail);
+    return(expr);
+}
+
+/* Compile an expression of repeated parts and check the kind of its
+ * root */
+static void
+checkFoldSize(const char *head, const char *part, size_t count,
+              const char *tail, xp3AstKind kind, const char *what) {
+    char *expr = repeatExpr(head, part, "", count, tail);
+    xp3Expr *compiled = NULL;
+
+    if (expr != NULL)
+        compiled = xp3Compile(NULL, BAD_CAST expr, NULL);
+    check((compiled != NULL) && (compiled->ast->root->kind == kind), what);
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+}
+
+/*
+ * Folds whose values are too large are left: 64 KB of strings or
+ * decimal digits in one fold, 1 MB for all of an expression. The
+ * limit is checked while folding, so a fold stops at the first value
+ * too large, and evaluating still gives the value.
+ */
+static void
+testFoldSizes(void) {
+    static const char strings[] = "(for $i in 1 to %d return "
+                                  "'abcdefghijklmnopqrstuvwxyz012345')";
+    char small[128];
+    char large[128];
+    char test[256];
+    char *expr;
+    xp3Expr *compiled;
+    xp3AstNode *child;
+    int constants = 0;
+    int left = 0;
+
+    /* Strings of 32 bytes, 1000 and 2100 of them */
+    snprintf(small, sizeof(small), strings, 1000);
+    snprintf(large, sizeof(large), strings, 2100);
+    checkFoldSize(small, "", 0, "", XP3_AST_CONSTANT,
+                  "a sequence of 32,000 bytes is folded");
+    checkFoldSize(large, "", 0, "", XP3_AST_FOR,
+                  "a sequence of 67,200 bytes is left");
+    snprintf(test, sizeof(test), "%s[2100] = 'abcdefghijklmnopqrstuvwxyz"
+             "012345'", large);
+    compiled = xp3Compile(NULL, BAD_CAST test, NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "a sequence that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+
+    /* Decimal digits */
+    checkFoldSize("", "9", 60000, " + 1", XP3_AST_CONSTANT,
+                  "an integer of 60,000 digits is folded");
+    checkFoldSize("", "9", 70000, " + 1", XP3_AST_BINARY,
+                  "an integer of 70,000 digits is left");
+    expr = repeatExpr("", "9", "", 70000, " + 1 > 1");
+    compiled = (expr != NULL) ? xp3Compile(NULL, BAD_CAST expr, NULL) : NULL;
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "an integer that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+
+    /* 40 sequences of 32,000 bytes: 32 fit in 1 MB */
+    expr = repeatExpr("(", small, ", ", 40, ")");
+    compiled = (expr != NULL) ? xp3Compile(NULL, BAD_CAST expr, NULL) : NULL;
+    if ((compiled == NULL) ||
+        (compiled->ast->root->kind != XP3_AST_SEQUENCE)) {
+        check(0, "a sequence of 1,280,000 bytes is left");
+    } else {
+        for (child = compiled->ast->root->first; child != NULL;
+             child = child->next) {
+            if (child->kind == XP3_AST_CONSTANT)
+                constants++;
+            else if (child->kind == XP3_AST_FOR)
+                left++;
+        }
+        check((constants == 32) && (left == 8),
+              "32 sequences of 32,000 bytes of 40 are folded");
+    }
+    xp3FreeExpr(compiled);
+    xmlFree(expr);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -775,6 +940,7 @@ main(void) {
     testApi();
     testOptimize();
     testFoldBudget();
+    testFoldSizes();
     testAllocationFailures();
 
     if (failures == 0)

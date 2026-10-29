@@ -178,6 +178,11 @@ static const struct {
     { "a % b",    0, "XPST0003", 1, 3 },
     { "a\n  ^",   0, "XPST0003", 2, 3 },
     { "a \xff",   0, "XPST0003", 1, 3 },
+    /* Lead bytes 0xF8 to 0xFF are not UTF-8, even with continuation
+     * bytes after them */
+    { "'\xf8\x90\x80\x80'", 0, "XPST0003", 1, 2 },
+    { "a \xf9\x80\x80\x80",  0, "XPST0003", 1, 3 },
+    { "'\xfc\x80\x80\x80'", 0, "XPST0003", 1, 2 },
     { "a\0b",     3, "XPST0003", 1, 2 },
     { "'a\x01'",  0, "XPST0003", 1, 3 }
 };

@@ -126,6 +126,9 @@ typedef struct {
     size_t cap;
     size_t max;                 /* most items allowed, see
                                  * xp3SeqBuilderInit() */
+    size_t maxBytes;            /* most bytes of atomic payloads
+                                 * (xp3AtomicSize()), 0 for no limit */
+    size_t bytes;               /* bytes of the items so far */
 } xp3SeqBuilder;
 
 /*
@@ -161,6 +164,9 @@ xp3AtomicRef(xp3Atomic *atomic);
 
 void
 xp3AtomicUnref(xp3Atomic *atomic);
+
+size_t
+xp3AtomicSize(const xp3Atomic *atomic, size_t max);
 
 /*
  * Items

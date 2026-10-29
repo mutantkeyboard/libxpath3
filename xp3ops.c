@@ -113,20 +113,33 @@ newBoolean(int value, xp3Atomic **res) {
  * Numeric conversions
  */
 
+/* A number in C syntax as a double, or as a float stored in a double if
+ * isFloat is set */
+static xp3ErrCode
+parseNumberString(const xmlChar *str, int isFloat, double *value) {
+    float single;
+
+    if (!isFloat)
+        return((xp3DoubleParse((const char *) str, value) == 0) ?
+               XP3_ERR_OK : XP3_ERR_NO_MEMORY);
+    if (xp3FloatParse((const char *) str, &single) < 0)
+        return(XP3_ERR_NO_MEMORY);
+    *value = single;
+    return(XP3_ERR_OK);
+}
+
 /* A decimal as a double or float, through its string, so that both are
  * rounded once and correctly */
 static xp3ErrCode
 decimalToBinary(const xp3Decimal *dec, int isFloat, double *value) {
     xmlChar *str = xp3DecimalToString(dec);
+    xp3ErrCode err;
 
     if (str == NULL)
         return(XP3_ERR_NO_MEMORY);
-    if (isFloat)
-        *value = xp3FloatParse((const char *) str);
-    else
-        *value = xp3DoubleParse((const char *) str);
+    err = parseNumberString(str, isFloat, value);
     xmlFree(str);
-    return(XP3_ERR_OK);
+    return(err);
 }
 
 /* The value of a numeric atomic as a double, or as a float stored in a
@@ -317,8 +330,10 @@ binaryArithmetic(xp3AstOp op, double left, double right, int isFloat,
             quotient = left / right;
             if (isFloat)
                 quotient = (float) quotient;
+            /* idiv is (left div right) cast as xs:integer, and casting
+             * infinity fails (F&O 3.1, 19.1.2.4) */
             if (isinf(quotient))
-                return(XP3_ERR_FOAR0002);
+                return(XP3_ERR_FOCA0002);
             err = integerFromBinary(trunc(quotient), &dec);
             if (err != XP3_ERR_OK)
                 return(err);
@@ -342,7 +357,8 @@ binaryArithmetic(xp3AstOp op, double left, double right, int isFloat,
  * @param res    where to store the result
  * @returns XP3_ERR_OK, XP3_ERR_XPTY0004 if an operand is not numeric,
  *          XP3_ERR_FOAR0001 for a division by zero, XP3_ERR_FOAR0002
- *          for an overflow or an invalid idiv, or XP3_ERR_NO_MEMORY
+ *          for an overflow or an invalid idiv, XP3_ERR_FOCA0002 for an
+ *          idiv whose quotient is infinite, or XP3_ERR_NO_MEMORY
  */
 xp3ErrCode
 xp3Arithmetic(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
@@ -683,7 +699,7 @@ isName(const xmlChar *str, int noColon) {
         return(0);
     while (*str != 0) {
         int len = 4;
-        int c = xmlGetUTF8Char(str, &len);
+        int c = xp3GetUTF8Char(str, &len);
 
         if (c < 0)
             return(0);
@@ -706,7 +722,7 @@ isNmtoken(const xmlChar *str) {
         return(0);
     while (*str != 0) {
         int len = 4;
-        int c = xmlGetUTF8Char(str, &len);
+        int c = xp3GetUTF8Char(str, &len);
 
         if ((c < 0) || ((c != ':') && !xp3IsNameChar(c)))
             return(0);
@@ -788,11 +804,7 @@ parseBinaryFloat(const xmlChar *str, int isFloat, double *value) {
     }
     if (*cur != 0)
         return(XP3_ERR_FORG0001);
-    if (isFloat)
-        *value = xp3FloatParse((const char *) str);
-    else
-        *value = xp3DoubleParse((const char *) str);
-    return(XP3_ERR_OK);
+    return(parseNumberString(str, isFloat, value));
 }
 
 static int

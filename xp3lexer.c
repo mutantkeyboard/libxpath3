@@ -119,7 +119,7 @@ lexCharAt(const xp3Lexer *lex, size_t pos, int *len) {
         size_t avail = lex->length - pos;
 
         byteLen = (avail > 4) ? 4 : (int) avail;
-        codePoint = xmlGetUTF8Char(lex->input + pos, &byteLen);
+        codePoint = xp3GetUTF8Char(lex->input + pos, &byteLen);
         if (codePoint < 0)
             return(LEX_INVALID);
     }

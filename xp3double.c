@@ -49,27 +49,41 @@ xp3DoubleNaN(void) {
 }
 
 /*
- * Copy a number in C syntax into buf with the locale's decimal point,
- * for strtod() and strtof(). Returns buf, or str itself if the locale
- * uses "." anyway or the result does not fit.
+ * Parse a number in C syntax with strtod(), or with strtof() if isFloat
+ * is set, after replacing its "." with the locale's decimal point. The
+ * copy goes into a buffer on the stack, or on the heap if it doesn't
+ * fit, as for decimals with many digits: strtod() rounds correctly only
+ * if it sees all of them. Returns 0, or -1 if memory allocation failed.
  */
-static const char *
-localizeNumber(const char *str, char *buf, size_t size) {
+static int
+parseNumber(const char *str, int isFloat, double *value) {
     const char *point = localeconv()->decimal_point;
     const char *dot = strchr(str, '.');
+    char buf[XP3_NUM_BUF];
+    char *copy = buf;
     size_t pointLen;
     size_t before;
+    size_t size;
 
-    if ((dot == NULL) || (point == NULL) || (strcmp(point, ".") == 0))
-        return(str);
+    if ((dot == NULL) || (point == NULL) || (strcmp(point, ".") == 0)) {
+        *value = isFloat ? (double) strtof(str, NULL) : strtod(str, NULL);
+        return(0);
+    }
     pointLen = strlen(point);
     before = (size_t) (dot - str);
-    if (before + pointLen + strlen(dot + 1) + 1 > size)
-        return(str);
-    memcpy(buf, str, before);
-    memcpy(buf + before, point, pointLen);
-    strcpy(buf + before + pointLen, dot + 1);
-    return(buf);
+    size = before + pointLen + strlen(dot + 1) + 1;
+    if (size > sizeof(buf)) {
+        copy = xmlMalloc(size);
+        if (copy == NULL)
+            return(-1);
+    }
+    memcpy(copy, str, before);
+    memcpy(copy + before, point, pointLen);
+    strcpy(copy + before + pointLen, dot + 1);
+    *value = isFloat ? (double) strtof(copy, NULL) : strtod(copy, NULL);
+    if (copy != buf)
+        xmlFree(copy);
+    return(0);
 }
 
 /**
@@ -77,26 +91,30 @@ localizeNumber(const char *str, char *buf, size_t size) {
  * the locale, rounding correctly as strtod() does.
  *
  * @param str  the number, for example "1.5e-3"
- * @returns the double; out-of-range values become infinity or zero
+ * @param value  set to the double; out-of-range values become infinity
+ *               or zero
+ * @returns 0, or -1 if memory allocation failed
  */
-double
-xp3DoubleParse(const char *str) {
-    char buf[XP3_NUM_BUF];
-
-    return(strtod(localizeNumber(str, buf, sizeof(buf)), NULL));
+int
+xp3DoubleParse(const char *str, double *value) {
+    return(parseNumber(str, 0, value));
 }
 
 /**
  * Parse a number as a float, as xp3DoubleParse() does for doubles.
  *
  * @param str  the number
- * @returns the float
+ * @param value  set to the float
+ * @returns 0, or -1 if memory allocation failed
  */
-float
-xp3FloatParse(const char *str) {
-    char buf[XP3_NUM_BUF];
+int
+xp3FloatParse(const char *str, float *value) {
+    double result;
 
-    return(strtof(localizeNumber(str, buf, sizeof(buf)), NULL));
+    if (parseNumber(str, 1, &result) < 0)
+        return(-1);
+    *value = (float) result;
+    return(0);
 }
 
 /*
@@ -120,7 +138,7 @@ shortestDigits(double value, int isFloat, char *digits, int *exponent) {
         char buf[XP3_NUM_BUF];
         char canon[XP3_NUM_BUF];
         const char *cur;
-        int ok;
+        double back;
 
         snprintf(buf, sizeof(buf), "%.*e", prec - 1, value);
 
@@ -134,14 +152,12 @@ shortestDigits(double value, int isFloat, char *digits, int *exponent) {
         }
         *exponent = (*cur != 0) ? atoi(cur + 1) : 0;
 
-        /* Read it back in C syntax. */
+        /* Read it back in C syntax. It is short enough for the buffer
+         * of parseNumber(), so nothing is allocated and it can't fail. */
         snprintf(canon, sizeof(canon), "%c.%.*se%d", digits[0], n - 1,
                  (n > 1) ? digits + 1 : "0", *exponent);
-        if (isFloat)
-            ok = (xp3FloatParse(canon) == (float) value);
-        else
-            ok = (xp3DoubleParse(canon) == value);
-        if (ok)
+        if ((parseNumber(canon, isFloat, &back) == 0) &&
+            (isFloat ? ((float) back == (float) value) : (back == value)))
             break;
     }
 

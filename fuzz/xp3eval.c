@@ -121,6 +121,7 @@ LLVMFuzzerInitialize(int *argc, char ***argv) {
     static const xp3LanguageLevel levels[3] = {
         XP3_XPATH_20, XP3_XPATH_30, XP3_XPATH_31
     };
+    const xmlChar *text = BAD_CAST "1.5";
     xmlNodePtr root;
     xmlNodePtr nodes[2];
     size_t i;
@@ -151,7 +152,7 @@ LLVMFuzzerInitialize(int *argc, char ***argv) {
     nodes[0] = fuzzContexts[2];
     nodes[1] = root;
     fuzzVariable = xp3NewNodeSequence(nodes, 2);
-    fuzzString = xp3NewStringSequence(BAD_CAST "1.5");
+    fuzzString = xp3NewStringSequence(&text, 1);
     if ((fuzzContexts[2] == NULL) || (fuzzContexts[3] == NULL) ||
         (fuzzVariable == NULL) || (fuzzString == NULL)) {
         fprintf(stderr, "xp3eval: cannot set up the document\n");

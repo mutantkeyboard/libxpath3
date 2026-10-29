@@ -709,7 +709,8 @@ xp3DecimalToDouble(const xp3Decimal *dec) {
 
     if (str == NULL)
         return(xp3DoubleNaN());
-    ret = xp3DoubleParse((const char *) str);
+    if (xp3DoubleParse((const char *) str, &ret) < 0)
+        ret = xp3DoubleNaN();
     xmlFree(str);
     return(ret);
 }
@@ -735,6 +736,25 @@ xp3DecimalSign(const xp3Decimal *dec) {
     if ((dec == NULL) || (dec->count == 0))
         return(0);
     return(dec->negative ? -1 : 1);
+}
+
+/**
+ * Count the digits of a decimal's coefficient, without leading zeros.
+ *
+ * @param dec  the decimal
+ * @returns the number of digits, 0 for zero
+ */
+size_t
+xp3DecimalDigits(const xp3Decimal *dec) {
+    size_t digits;
+    uint32_t top;
+
+    if ((dec == NULL) || (dec->count == 0))
+        return(0);
+    digits = (dec->count - 1) * XP3_BASE_DIGITS;
+    for (top = dec->limbs[dec->count - 1]; top > 0; top /= 10)
+        digits++;
+    return(digits);
 }
 
 /**

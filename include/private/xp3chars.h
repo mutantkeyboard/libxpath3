@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * @brief Character classes from XML 1.0 (internal)
+ * @brief UTF-8 decoding and character classes from XML 1.0 (internal)
  *
  * @copyright Copyright (C) 2026 Antonio Nešić (nesic.antonio@gmail.com).
  * See COPYING for the status of this software.
@@ -11,6 +11,11 @@
 
 #ifndef XP3_XP3CHARS_H
 #define XP3_XP3CHARS_H
+
+#include <libxml/xmlstring.h>
+
+int
+xp3GetUTF8Char(const xmlChar *utf, int *len);
 
 int
 xp3IsXmlChar(int c);

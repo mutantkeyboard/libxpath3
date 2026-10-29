@@ -91,7 +91,10 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
 /**
  * Set the context node, which "." and relative paths start from. Any
  * libxml2 node of a run of adjacent text nodes stands for the whole
- * run (doc/DESIGN.md 4.5).
+ * run (doc/DESIGN.md 4.5). The node is mapped to the XDM node it
+ * stands for when each evaluation starts, so the tree may change
+ * between evaluations; an evaluation fails with XPDY0002 if the node
+ * then stands for none, as text whose run has lost its content.
  *
  * @param ctx   the context
  * @param node  the node, or NULL for no context item
@@ -101,16 +104,11 @@ xp3FreeDynamicContext(xp3DynamicContext *ctx) {
  */
 int
 xp3SetContextNode(xp3DynamicContext *ctx, xmlNodePtr node) {
-    xmlNodePtr canonical = NULL;
-
     if (ctx == NULL)
         return(-1);
-    if (node != NULL) {
-        canonical = xp3NodeCanonical(node);
-        if (canonical == NULL)
-            return(-1);
-    }
-    ctx->contextNode = canonical;
+    if ((node != NULL) && (xp3NodeCanonical(node) == NULL))
+        return(-1);
+    ctx->contextNode = node;
     return(0);
 }
 
@@ -229,8 +227,14 @@ typedef struct {
     xp3LanguageLevel level;
     uint64_t operations;        /* steps taken so far */
     uint64_t maxOperations;     /* 0 for no limit */
+    size_t maxBytes;            /* folding only: most bytes of a value,
+                                 * see evalCheckSize(); 0 for no limit */
     xp3Error *err;              /* the first error */
 } xp3Eval;
+
+/* Measuring the size of values while folding costs a step per this
+ * many bytes, so it can't take longer than the steps allow */
+#define XP3_BYTES_PER_STEP 256
 
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node);
@@ -261,7 +265,12 @@ evalNoMemory(xp3Eval *ev) {
 /* Record the failure of a builder or iterator: memory or the limit */
 static void
 evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
-    if (code == XP3_ERR_LIMIT)
+    if ((code == XP3_ERR_LIMIT) && (ev->maxBytes > 0))
+        evalError(ev, XP3_ERR_LIMIT, node,
+                  "a sequence would have more than %lu items or %lu bytes",
+                  (unsigned long) ev->maxItems,
+                  (unsigned long) ev->maxBytes);
+    else if (code == XP3_ERR_LIMIT)
         evalError(ev, XP3_ERR_LIMIT, node,
                   "a sequence would have more than %lu items",
                   (unsigned long) ev->maxItems);
@@ -276,8 +285,8 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
  * Returns 0 or -1.
  */
 static int
-evalCount(xp3Eval *ev, const xp3AstNode *node) {
-    ev->operations++;
+evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
+    ev->operations += steps;
     if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
         evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
                   "%lu steps", (unsigned long) ev->maxOperations);
@@ -286,18 +295,31 @@ evalCount(xp3Eval *ev, const xp3AstNode *node) {
     return(0);
 }
 
+static int
+evalCount(xp3Eval *ev, const xp3AstNode *node) {
+    return(evalSteps(ev, node, 1));
+}
+
 static void
 builderInit(const xp3Eval *ev, xp3SeqBuilder *builder) {
     xp3SeqBuilderInit(builder);
     builder->max = ev->maxItems;
+    builder->maxBytes = ev->maxBytes;
 }
 
 static xp3Value *
 builderFinish(xp3Eval *ev, xp3SeqBuilder *builder) {
+    size_t bytes = builder->bytes;
     xp3Value *value = xp3SeqBuilderFinish(builder);
 
-    if (value == NULL)
+    if (value == NULL) {
         evalNoMemory(ev);
+        return(NULL);
+    }
+    if (evalSteps(ev, NULL, bytes / XP3_BYTES_PER_STEP) < 0) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
     return(value);
 }
 
@@ -466,10 +488,16 @@ evalLiteral(xp3Eval *ev, const xp3AstNode *node) {
                                                      XP3_TYPE_DECIMAL, dec);
             break;
         }
-        case XP3_AST_DOUBLE:
-            atomic = xp3AtomicNewDouble(xp3DoubleParse(
-                (const char *) node->text));
+        case XP3_AST_DOUBLE: {
+            double number;
+
+            if (xp3DoubleParse((const char *) node->text, &number) < 0) {
+                evalNoMemory(ev);
+                return(NULL);
+            }
+            atomic = xp3AtomicNewDouble(number);
             break;
+        }
         default:
             atomic = xp3AtomicNewString(XP3_TYPE_STRING, node->text, len);
             break;
@@ -1532,6 +1560,10 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
             evalError(ev, err, node, "the result of %s is too large, or "
                       "idiv got NaN or infinity", name);
             break;
+        case XP3_ERR_FOCA0002:
+            evalError(ev, err, node, "the quotient of idiv is too large "
+                      "for xs:integer");
+            break;
         default:
             evalNoMemory(ev);
             break;
@@ -1566,9 +1598,16 @@ evalUnary(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(value);
         return(NULL);
     }
-    if (node->op != XP3_OP_SUB)
+    if (node->op == XP3_OP_SUB) {
+        err = xp3NegateNumber(value, &result);
+    } else if (xp3TypeIsInteger(value->type) &&
+               (value->type != XP3_TYPE_INTEGER)) {
+        /* Unary + gives an xs:integer for a derived integer type, as
+         * unary - does (F&O 3.1, 4.2.7) */
+        err = xp3CastAtomic(value, XP3_TYPE_INTEGER, &result);
+    } else {
         return(evalSingle(ev, xp3ItemFromAtomic(value)));
-    err = xp3NegateNumber(value, &result);
+    }
     xp3AtomicUnref(value);
     if (err != XP3_ERR_OK) {
         evalNoMemory(ev);
@@ -1626,15 +1665,15 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
 /*
  * The type an untyped value is cast to when compared with another
  * value in a general comparison (XPath 3.1, 3.7.2): xs:double for
- * numbers, xs:string for strings and untyped values, otherwise the
- * primitive type of the other value.
+ * numbers, xs:string for untyped values, otherwise the primitive type
+ * of the other value, so xs:anyURI for xs:anyURI, which collapses
+ * whitespace.
  */
 static xp3TypeId
 generalTarget(xp3TypeId other) {
     if (xp3TypeIsNumeric(other))
         return(XP3_TYPE_DOUBLE);
-    if (xp3TypeDerivesFrom(other, XP3_TYPE_STRING) ||
-        (other == XP3_TYPE_ANY_URI) || (other == XP3_TYPE_UNTYPED_ATOMIC))
+    if (other == XP3_TYPE_UNTYPED_ATOMIC)
         return(XP3_TYPE_STRING);
     return(xp3TypePrimitive(other));
 }
@@ -2400,8 +2439,48 @@ evalBinary(xp3Eval *ev, const xp3AstNode *node) {
  * Dispatch
  */
 
+/*
+ * While folding, check the size of a single atomic value an expression
+ * made; sequences of more items were checked by their builders. A
+ * constant, a variable or the context item only returns a value made
+ * and checked before. Returns 0, or -1 if the value is larger than
+ * ev->maxBytes.
+ */
+static int
+evalCheckSize(xp3Eval *ev, const xp3AstNode *node, const xp3Value *value) {
+    size_t size;
+
+    if ((node->kind == XP3_AST_CONSTANT) || (node->kind == XP3_AST_VARREF) ||
+        (node->kind == XP3_AST_CONTEXT_ITEM) ||
+        (value->shape != XP3_SEQ_SINGLE) ||
+        (value->u.single.kind != XP3_ITEM_ATOMIC))
+        return(0);
+    size = xp3AtomicSize(value->u.single.u.atomic, ev->maxBytes);
+    if (size > ev->maxBytes) {
+        evalError(ev, XP3_ERR_LIMIT, node, "a value would have more than "
+                  "%lu bytes", (unsigned long) ev->maxBytes);
+        return(-1);
+    }
+    return(evalSteps(ev, node, size / XP3_BYTES_PER_STEP));
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node);
+
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value = evalNode(ev, node);
+
+    if ((value != NULL) && (ev->maxBytes > 0) &&
+        (evalCheckSize(ev, node, value) < 0)) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    return(value);
+}
+
+static xp3Value *
+evalNode(xp3Eval *ev, const xp3AstNode *node) {
     if (evalCount(ev, node) < 0)
         return(NULL);
     switch (node->kind) {
@@ -2473,7 +2552,16 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
     ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
-        ev->focus.item = xp3ItemFromNode(ctx->contextNode);
+        /* Mapped now, not when it was set: text may have been added
+         * before it or removed since, which moves its run's node */
+        xmlNodePtr canonical = xp3NodeCanonical(ctx->contextNode);
+
+        if (canonical == NULL) {
+            evalError(ev, XP3_ERR_XPDY0002, NULL, "the context node is "
+                      "no longer part of the XDM tree");
+            return(-1);
+        }
+        ev->focus.item = xp3ItemFromNode(canonical);
         ev->focus.present = 1;
         ev->focus.position = 1;
         ev->focus.size = 1;
@@ -2634,6 +2722,8 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
  * @param level          the language level
  * @param maxOperations  the most steps, see evalCount()
  * @param maxItems       the most items of any sequence built
+ * @param maxBytes       the most bytes of any value made, see
+ *                       xp3AtomicSize(); 0 for no limit
  * @param value          set to the value, with one reference
  * @param operations     set to the steps taken
  * @returns XP3_ERR_OK, or the code of the error evaluating raised
@@ -2641,7 +2731,7 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
 xp3ErrCode
 xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
                 xp3LanguageLevel level, uint64_t maxOperations,
-                size_t maxItems, xp3Value **value,
+                size_t maxItems, size_t maxBytes, xp3Value **value,
                 uint64_t *operations) {
     xp3ErrCode ret = XP3_ERR_OK;
     xp3Eval ev;
@@ -2650,6 +2740,7 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
     memset(&ev, 0, sizeof(ev));
     ev.level = level;
     ev.maxItems = maxItems;
+    ev.maxBytes = maxBytes;
     ev.maxOperations = maxOperations;
     ev.slots = slots;
     ev.slotCount = slotCount;
@@ -2672,7 +2763,10 @@ xp3EvalConstant(const xp3AstNode *node, xp3Value **slots, int slotCount,
 
 /**
  * Create a sequence of nodes, in the order given. Any libxml2 node of
- * a run of adjacent text nodes stands for the whole run.
+ * a run of adjacent text nodes stands for the whole run. The nodes are
+ * mapped to the XDM nodes they stand for now: unlike the context node,
+ * the sequence is a snapshot, to be created again after a change to
+ * the text around a node in it.
  *
  * @param nodes  the nodes, may be NULL if count is 0
  * @param count  the number of nodes
@@ -2701,25 +2795,123 @@ xp3NewNodeSequence(xmlNodePtr *nodes, size_t count) {
     return(xp3SeqBuilderFinish(&builder));
 }
 
+/*
+ * Add a new atomic value to a sequence being built. A NULL value is a
+ * failed allocation. On failure the builder is cleared.
+ */
+static int
+builderAddAtomic(xp3SeqBuilder *builder, xp3Atomic *atomic) {
+    if ((atomic == NULL) ||
+        (xp3SeqBuilderAdd(builder, xp3ItemFromAtomic(atomic)) !=
+         XP3_ERR_OK)) {
+        xp3SeqBuilderClear(builder);
+        return(-1);
+    }
+    return(0);
+}
+
 /**
- * Create a sequence of one xs:string.
+ * Create a sequence of xs:string values, in the order given.
  *
- * @param str  the string in UTF-8
+ * @param strs   the strings in UTF-8, may be NULL if count is 0
+ * @param count  the number of strings
  * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
- *          if str is NULL or not valid UTF-8, or memory allocation
- *          failed
+ *          if a string is NULL or not valid UTF-8, there are more than
+ *          10 million strings, or memory allocation failed
  */
 xp3Sequence *
-xp3NewStringSequence(const xmlChar *str) {
-    xp3Atomic *atomic;
+xp3NewStringSequence(const xmlChar **strs, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
 
-    if ((str == NULL) || (!xmlCheckUTF8(str)))
+    if (((strs == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
         return(NULL);
-    atomic = xp3AtomicNewString(XP3_TYPE_STRING, str,
-                                strlen((const char *) str));
-    if (atomic == NULL)
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if ((strs[i] == NULL) || (!xmlCheckUTF8(strs[i]))) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        if (builderAddAtomic(&builder, xp3AtomicNewString(
+                XP3_TYPE_STRING, strs[i],
+                strlen((const char *) strs[i]))) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:integer values, in the order given.
+ *
+ * @param values  the integers, may be NULL if count is 0
+ * @param count   the number of integers
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewIntegerSequence(const int64_t *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
         return(NULL);
-    return(xp3ValueSingle(xp3ItemFromAtomic(atomic)));
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewInteger(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:double values, in the order given. NaN and
+ * the infinities are allowed.
+ *
+ * @param values  the doubles, may be NULL if count is 0
+ * @param count   the number of doubles
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewDoubleSequence(const double *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewDouble(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:boolean values, in the order given: 0 is
+ * false, anything else true.
+ *
+ * @param values  the booleans, may be NULL if count is 0
+ * @param count   the number of booleans
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewBooleanSequence(const int *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewBoolean(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
 }
 
 /**
@@ -2790,7 +2982,10 @@ xp3SequenceNode(const xp3Sequence *seq, size_t index) {
 
 /**
  * Get the string value of an item: of a node (XDM 3.1, 5.12), or of
- * an atomic value as cast to xs:string.
+ * an atomic value as cast to xs:string. For xs:integer, xs:decimal and
+ * the types derived from them the string is exact and never uses
+ * exponent notation (F&O 3.1, 19.1.1), so this is how to read
+ * integers outside the range of int64_t and decimals exactly.
  *
  * @param seq    the sequence
  * @param index  the 0-based position of the item
@@ -2814,4 +3009,137 @@ xp3SequenceStringValue(const xp3Sequence *seq, size_t index) {
     }
     xp3ItemUnref(item);
     return(str);
+}
+
+/*
+ * Get an atomic item with a reference the caller releases, or NULL if
+ * the item is not atomic, there is no such item, or memory allocation
+ * failed.
+ */
+static xp3Atomic *
+sequenceAtomic(const xp3Sequence *seq, size_t index) {
+    xp3Item item;
+
+    if ((index >= xp3ValueCount(seq)) ||
+        (xp3ValueItemAt(seq, index, &item) <= 0))
+        return(NULL);
+    if (item.kind != XP3_ITEM_ATOMIC) {
+        xp3ItemUnref(item);
+        return(NULL);
+    }
+    return(item.u.atomic);
+}
+
+/**
+ * Get the type of an atomic item, such as XP3_TYPE_INTEGER for 42.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns an xp3AtomicType, or -1 if the item is not atomic or there
+ *          is no such item
+ */
+int
+xp3SequenceAtomicType(const xp3Sequence *seq, size_t index) {
+    xp3Atomic *atomic;
+    int type;
+
+    if (index >= xp3ValueCount(seq))
+        return(-1);
+    if (seq->shape == XP3_SEQ_RANGE)
+        return(XP3_TYPE_INTEGER);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    type = atomic->type;
+    xp3AtomicUnref(atomic);
+    return(type);
+}
+
+/**
+ * Get an item of type xs:integer, or a type derived from it, as an
+ * int64_t. Integers have arbitrary precision: one outside the range of
+ * int64_t is read exactly with xp3SequenceStringValue().
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @param value  set to the integer on success, unchanged otherwise
+ * @returns 0 on success, 1 if the integer is outside the range of
+ *          int64_t, or -1 if the item is not an integer, there is no
+ *          such item, or value is NULL
+ */
+int
+xp3SequenceInteger(const xp3Sequence *seq, size_t index, int64_t *value) {
+    xp3Atomic *atomic;
+    int ret = -1;
+
+    if ((value == NULL) || (index >= xp3ValueCount(seq)))
+        return(-1);
+    if (seq->shape == XP3_SEQ_RANGE) {
+        *value = (int64_t) ((uint64_t) seq->u.range.first + index);
+        return(0);
+    }
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    if (xp3TypeIsInteger(atomic->type))
+        ret = (xp3DecimalToInt64(atomic->u.dec, value) == 0) ? 0 : 1;
+    xp3AtomicUnref(atomic);
+    return(ret);
+}
+
+/**
+ * Get a numeric item as a double: xs:double, xs:float, xs:decimal and
+ * the integer types, rounded to the nearest double as a cast to
+ * xs:double does (F&O 3.1, 19.1.2.2). NaN and the infinities are
+ * returned as such.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @param value  set to the number on success, unchanged otherwise
+ * @returns 0 on success, or -1 if the item is not numeric, there is no
+ *          such item, value is NULL, or memory allocation failed
+ */
+int
+xp3SequenceDouble(const xp3Sequence *seq, size_t index, double *value) {
+    xp3Atomic *atomic;
+    xp3Atomic *dbl;
+    int ret = -1;
+
+    if (value == NULL)
+        return(-1);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    if (xp3TypeIsNumeric(atomic->type) &&
+        (xp3CastAtomic(atomic, XP3_TYPE_DOUBLE, &dbl) == XP3_ERR_OK)) {
+        *value = dbl->u.d;
+        xp3AtomicUnref(dbl);
+        ret = 0;
+    }
+    xp3AtomicUnref(atomic);
+    return(ret);
+}
+
+/**
+ * Get an item of type xs:boolean. This is not the effective boolean
+ * value, which xp3EvaluateBoolean() computes.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns 1 for true, 0 for false, or -1 if the item is not an
+ *          xs:boolean or there is no such item
+ */
+int
+xp3SequenceBoolean(const xp3Sequence *seq, size_t index) {
+    xp3Atomic *atomic;
+    int ret;
+
+    if (xp3SequenceAtomicType(seq, index) != XP3_TYPE_BOOLEAN)
+        return(-1);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    ret = (atomic->u.boolean != 0);
+    xp3AtomicUnref(atomic);
+    return(ret);
 }

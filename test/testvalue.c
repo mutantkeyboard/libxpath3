@@ -113,6 +113,44 @@ testTypes(void) {
           "invalid type derives from nothing");
 }
 
+/* The public names of the types, which a binding sees */
+static void
+testPublicTypes(void) {
+    int i;
+
+    check(XP3_TYPE_NOTATION == 45, "the last type keeps its value");
+    for (i = 0; i < XP3_TYPE_COUNT; i++) {
+        char what[64];
+
+        snprintf(what, sizeof(what), "type %d has its public name", i);
+        check((xp3AtomicTypeName((xp3AtomicType) i) != NULL) &&
+              (xp3AtomicTypeName((xp3AtomicType) i) ==
+               xp3TypeLocalName((xp3TypeId) i)), what);
+        snprintf(what, sizeof(what), "type %d derives from itself", i);
+        check(xp3AtomicTypeDerivesFrom((xp3AtomicType) i,
+                                       (xp3AtomicType) i) == 1, what);
+    }
+    check(xmlStrEqual(xp3AtomicTypeName(XP3_TYPE_INTEGER),
+                      BAD_CAST "integer"), "public name of xs:integer");
+    check(xp3AtomicTypeName((xp3AtomicType) XP3_TYPE_COUNT) == NULL,
+          "no name past the last type");
+    check(xp3AtomicTypeName((xp3AtomicType) -1) == NULL,
+          "no name for a negative type");
+
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INT, XP3_TYPE_INTEGER) == 1,
+          "int derives from integer");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INTEGER, XP3_TYPE_INT) == 0,
+          "integer does not derive from int");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_DOUBLE, XP3_TYPE_DECIMAL) == 0,
+          "double does not derive from decimal");
+    check(xp3AtomicTypeDerivesFrom((xp3AtomicType) XP3_TYPE_COUNT,
+                                   XP3_TYPE_ANY_ATOMIC) == 0,
+          "an unknown type derives from nothing");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INTEGER,
+                                   (xp3AtomicType) -1) == 0,
+          "nothing derives from an unknown type");
+}
+
 /*
  * Atomic values
  */
@@ -405,7 +443,14 @@ static const struct {
     { "0.30000000000000004", "0.30000000000000004" },
     { "3.141592653589793", "3.141592653589793" },
     { "12345678901", "1.2345678901E10" },
-    { "0.00001", "0.00001" }
+    { "0.00001", "0.00001" },
+    /* Longer than the parser's buffer: a decimal-comma locale needs a
+     * copy on the heap. The digits after the halfway point between two
+     * doubles decide the rounding, so all of them must be read. */
+    { "2.50000000000000000000000000000000000000000000000000000000000000000001",
+      "2.5" },
+    { "9007199254740993.0000000000000000000000000000000000000000000000000001",
+      "9.007199254740994E15" }
 };
 
 static const struct {
@@ -422,8 +467,30 @@ static const struct {
     { "123456.7", "123456.7" },
     { "1e-7", "1.0E-7" },
     { "0.333333333", "0.33333334" },
-    { "7e-6", "0.000007" }
+    { "7e-6", "0.000007" },
+    { "16777217.00000000000000000000000000000000000000000000000000000000001",
+      "1.6777218E7" }
 };
+
+/* Long enough for a copy on the heap under a decimal-comma locale */
+static const char xp3LongNumber[] =
+    "1.000000000000000000000000000000000000000000000000000000000000000005";
+
+static double
+parseDouble(const char *str) {
+    double value = 0;
+
+    check(xp3DoubleParse(str, &value) == 0, "parse a double");
+    return(value);
+}
+
+static float
+parseFloat(const char *str) {
+    float value = 0;
+
+    check(xp3FloatParse(str, &value) == 0, "parse a float");
+    return(value);
+}
 
 static void
 expectXmlStr(xmlChar *actual, const char *expected, const char *what) {
@@ -445,7 +512,7 @@ testNumberStrings(const char *label) {
 
         snprintf(what, sizeof(what), "%sdouble %s", label,
                  doubleCases[i].input);
-        expectXmlStr(xp3DoubleToString(xp3DoubleParse(doubleCases[i].input)),
+        expectXmlStr(xp3DoubleToString(parseDouble(doubleCases[i].input)),
                      doubleCases[i].expected, what);
     }
     for (i = 0; i < sizeof(floatCases) / sizeof(floatCases[0]); i++) {
@@ -453,13 +520,42 @@ testNumberStrings(const char *label) {
 
         snprintf(what, sizeof(what), "%sfloat %s", label,
                  floatCases[i].input);
-        expectXmlStr(xp3FloatToString(xp3FloatParse(floatCases[i].input)),
+        expectXmlStr(xp3FloatToString(parseFloat(floatCases[i].input)),
                      floatCases[i].expected, what);
     }
     expectXmlStr(xp3DoubleToString(xp3DoubleNaN()), "NaN", "NaN");
     expectXmlStr(xp3DoubleToString(INFINITY), "INF", "INF");
     expectXmlStr(xp3DoubleToString(-INFINITY), "-INF", "-INF");
-    check(xp3DoubleParse("1.5e-3") == 1.5e-3, "parse with a point");
+    check(parseDouble("1.5e-3") == 1.5e-3, "parse with a point");
+    check(parseDouble(xp3LongNumber) == 1, "parse a long number");
+}
+
+/*
+ * Whether parsing the long number allocates: expected under a
+ * decimal-comma locale, where a failure must be reported, and never
+ * under a locale with a decimal point.
+ */
+static void
+testParseAllocation(int allocates) {
+    double value;
+    float single;
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestAllocRestore();
+        return;
+    }
+    xp3TestAllocFailAt(0);
+    check(xp3DoubleParse(xp3LongNumber, &value) == (allocates ? -1 : 0),
+          "a failed allocation while parsing a double is reported");
+    check(xp3TestAllocFailed() == allocates,
+          "parsing a long double allocates only for the locale");
+    xp3TestAllocFailAt(0);
+    check(xp3FloatParse(xp3LongNumber, &single) == (allocates ? -1 : 0),
+          "a failed allocation while parsing a float is reported");
+    check(xp3TestAllocFailed() == allocates,
+          "parsing a long float allocates only for the locale");
+    xp3TestAllocFailAt(-1);
+    xp3TestAllocRestore();
 }
 
 /* The same results under a locale with a decimal comma */
@@ -481,6 +577,7 @@ testLocale(void) {
         return;
     }
     testNumberStrings("decimal-comma locale: ");
+    testParseAllocation(1);
     setlocale(LC_NUMERIC, "C");
 }
 
@@ -647,10 +744,12 @@ main(void) {
     xmlInitParser();
 
     testTypes();
+    testPublicTypes();
     testAtomics();
     testSequences();
     testRanges();
     testNumberStrings("");
+    testParseAllocation(0);
     testLocale();
     testAtomicStrings();
     testAllocationFailures();

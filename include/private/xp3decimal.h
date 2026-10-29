@@ -70,6 +70,9 @@ xp3DecimalFree(xp3Decimal *dec);
 int
 xp3DecimalSign(const xp3Decimal *dec);
 
+size_t
+xp3DecimalDigits(const xp3Decimal *dec);
+
 int
 xp3DecimalIsInteger(const xp3Decimal *dec);
 

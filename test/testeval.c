@@ -12,8 +12,11 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <locale.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libxml/parser.h>
@@ -350,7 +353,8 @@ static const xp3EvalCase xp3Cases[] = {
     { "xs:double('NaN') idiv 1", "error:FOAR0002" },
     { "7.5e0 idiv 2", "integer:3" },
     { "-7.5e0 idiv 2", "integer:-3" },
-    { "1e300 idiv 1e-10", "error:FOAR0002" },
+    { "1e300 idiv 1e-10", "error:FOCA0002" },
+    { "xs:float(3e38) idiv xs:float(0.1)", "error:FOCA0002" },
     { "5.5e0 mod 2", "double:1.5" },
     { "-5.5e0 mod 2", "double:-1.5" },
     { "xs:float(5.5) idiv 2", "integer:2" },
@@ -369,7 +373,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "-xs:byte(1)", "integer:-1" },
     { "-xs:float(1)", "float:-1" },
     { "-1e0", "double:-1" },
-    { "+xs:byte(1)", "byte:1" },
+    { "+xs:byte(1)", "integer:1" },
+    { "+xs:unsignedLong(18446744073709551615)",
+      "integer:18446744073709551615" },
+    { "+1", "integer:1" },
+    { "+(1.5)", "decimal:1.5" },
+    { "+xs:float(1)", "float:1" },
     { "--1", "integer:1" },
     { "-()", "" },
     { "-@a", "double:-1" },
@@ -431,6 +440,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "x[1] > x[2]", "boolean:false" },
     { "x[1] >= x[1]", "boolean:true" },
     { "x[1] <= 'one'", "boolean:true" },
+    /* An untyped value is cast to xs:anyURI, which collapses
+     * whitespace, but compared as a string with a string */
+    { "xs:untypedAtomic(' 1 ') = xs:anyURI('1')", "boolean:true" },
+    { "xs:anyURI('1') != xs:untypedAtomic(' 1 ')", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = '1'", "boolean:false" },
+    { "xs:untypedAtomic(' 1 ') = xs:token('1')", "boolean:false" },
 
     /* Node comparisons */
     { "x[1] is x[1]", "boolean:true" },
@@ -1035,6 +1050,92 @@ done:
     xmlFreeDoc(doc);
 }
 
+/* The context node is mapped to its XDM node when an evaluation
+ * starts, so the tree may change after it is set. libxml2 merges a
+ * text node into an adjacent one, but not a CDATA section, so these
+ * build runs of more than one node. */
+static void
+testTreeChange(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlDocPtr doc = parseDoc("<r><a/>tx<b/></r>");
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+
+    if ((ctx == NULL) || (root == NULL)) {
+        check(0, "tree change test set up");
+    } else {
+        xmlNodePtr text = root->children->next;
+
+        /* Text added before the context node starts its run */
+        check(xp3SetContextNode(ctx, text) == 0, "text as the context node");
+        checkEval(NULL, ctx, ".", "t:tx");
+        check(xmlAddPrevSibling(text, xmlNewCDataBlock(doc, BAD_CAST "pre",
+                                                       3)) != NULL,
+              "CDATA section added before the context node");
+        checkEval(NULL, ctx, ".", "t:pretx");
+        checkEval(NULL, ctx, ". is ../text()[1]", "boolean:true");
+        checkEval(NULL, ctx, "(. | ../text())[1] is .", "boolean:true");
+        checkEval(NULL, ctx, "following-sibling::node()", "e:b");
+        checkEval(NULL, ctx, "preceding-sibling::node()", "e:a");
+
+        /* The node that started the run is removed */
+        text = root->children->next;
+        check(xp3SetContextNode(ctx, text->next) == 0,
+              "a later node of the run as the context node");
+        xmlUnlinkNode(text);
+        xmlFreeNode(text);
+        checkEval(NULL, ctx, ".", "t:tx");
+        checkEval(NULL, ctx, ". is ../text()[1]", "boolean:true");
+
+        /* The run loses its content, then gets it back */
+        text = root->children->next;
+        xmlNodeSetContent(text, BAD_CAST "");
+        checkEval(NULL, ctx, ".", "error:XPDY0002");
+        checkEval(NULL, ctx, "1", "error:XPDY0002");
+        check(xp3SetContextNode(ctx, text) == -1,
+              "no text without content as the context node");
+        xmlNodeSetContent(text, BAD_CAST "back");
+        checkEval(NULL, ctx, ".", "t:back");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/* Text that libxml2 stored without checking it: a lead byte from 0xF8
+ * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
+ * bytes with lead byte 0xF0 are U+10000, a name character. */
+static void
+testInvalidUtf8(void) {
+    static const struct {
+        const char *text;
+        const char *expected;
+    } cases[] = {
+        { "\xf8\x90\x80\x80", "boolean:false" },
+        { "\xf0\x90\x80\x80", "boolean:true" }
+    };
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    size_t i;
+
+    check(ctx != NULL, "dynamic context created");
+    for (i = 0; (ctx != NULL) && (i < sizeof(cases) / sizeof(cases[0]));
+         i++) {
+        xmlDocPtr doc = parseDoc("<r/>");
+        xmlNodePtr root = xmlDocGetRootElement(doc);
+
+        if ((root == NULL) || (xmlAddChild(root, xmlNewDocText(doc,
+                BAD_CAST cases[i].text)) == NULL)) {
+            check(0, "text node added");
+            xmlFreeDoc(doc);
+            break;
+        }
+        check(xp3SetContextNode(ctx, root) == 0, "context node set");
+        checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
+        checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
+        xp3SetContextNode(ctx, NULL);
+        xmlFreeDoc(doc);
+    }
+    xp3FreeDynamicContext(ctx);
+}
+
 /*
  * Variables
  */
@@ -1044,8 +1145,9 @@ testVariables(void) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3StaticContext *sctx = xp3NewStaticContext();
     xp3DynamicContext *ctx = xp3NewDynamicContext();
+    const xmlChar *hello = BAD_CAST "hello";
     xp3Sequence *nodes = NULL;
-    xp3Sequence *text = xp3NewStringSequence(BAD_CAST "hello");
+    xp3Sequence *text = xp3NewStringSequence(&hello, 1);
     xmlNodePtr list[2];
 
     if ((doc == NULL) || (sctx == NULL) || (ctx == NULL) ||
@@ -1221,6 +1323,7 @@ testSequences(void) {
                                NULL);
     xp3Sequence *seq = NULL;
     xp3DynamicContext *ctx = xp3NewDynamicContext();
+    const xmlChar *strs[2];
     xmlNodePtr list[1];
     xmlChar *str;
 
@@ -1257,9 +1360,13 @@ testSequences(void) {
     xmlFreeNode(list[0]);
     check(xp3NewNodeSequence(NULL, 1) == NULL, "no nodes");
     xp3FreeSequence(xp3NewNodeSequence(NULL, 0));
-    check(xp3NewStringSequence(BAD_CAST "\xC3") == NULL,
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "\xC3";
+    check(xp3NewStringSequence(strs, 2) == NULL,
           "invalid UTF-8 is rejected");
-    check(xp3NewStringSequence(NULL) == NULL, "no string");
+    strs[1] = NULL;
+    check(xp3NewStringSequence(strs, 2) == NULL, "no string");
+    check(xp3NewStringSequence(NULL, 1) == NULL, "no strings");
     xp3FreeSequence(NULL);
 
 done:
@@ -1267,6 +1374,325 @@ done:
     xp3FreeDynamicContext(ctx);
     xp3FreeExpr(expr);
     xmlFreeDoc(doc);
+}
+
+/*
+ * Reading and building items, as language bindings do
+ */
+
+static xp3Sequence *
+evaluate(xp3DynamicContext *ctx, const char *text) {
+    xp3Expr *expr = xp3Compile(NULL, BAD_CAST text, NULL);
+    xp3Sequence *seq = xp3Evaluate(expr, ctx, NULL);
+
+    xp3FreeExpr(expr);
+    return(seq);
+}
+
+/* Read an integer; value must stay unchanged unless ret is 0 */
+static void
+checkInteger(const xp3Sequence *seq, size_t index, int ret,
+             int64_t expected, const char *what) {
+    int64_t value = 7;
+    int actual = xp3SequenceInteger(seq, index, &value);
+
+    check((actual == ret) && (value == ((ret == 0) ? expected : 7)), what);
+}
+
+/* Read a double; value must stay unchanged unless ret is 0 */
+static void
+checkDouble(const xp3Sequence *seq, size_t index, int ret,
+            double expected, const char *what) {
+    double value = 7;
+    int actual = xp3SequenceDouble(seq, index, &value);
+
+    if (ret != 0)
+        expected = 7;
+    check((actual == ret) &&
+          (isnan(expected) ? isnan(value) :
+           ((value == expected) && (!signbit(value) == !signbit(expected)))),
+          what);
+}
+
+/* Every reader gives -1 */
+static void
+checkNoValue(const xp3Sequence *seq, size_t index, const char *what) {
+    check(xp3SequenceAtomicType(seq, index) == -1, what);
+    checkInteger(seq, index, -1, 0, what);
+    checkDouble(seq, index, -1, 0, what);
+    check(xp3SequenceBoolean(seq, index) == -1, what);
+}
+
+static void
+checkStringValue(const xp3Sequence *seq, size_t index, const char *expected,
+                 const char *what) {
+    xmlChar *str = xp3SequenceStringValue(seq, index);
+
+    check(xmlStrEqual(str, BAD_CAST expected), what);
+    xmlFree(str);
+}
+
+static void
+testReadingItems(void) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *seq = NULL;
+    xp3Sequence *range = NULL;
+    xp3Sequence *bigRange = NULL;
+    int64_t integer;
+    double number;
+
+    if ((doc == NULL) || (ctx == NULL)) {
+        check(0, "reading test set up");
+        goto done;
+    }
+    xp3SetContextNode(ctx, xmlDocGetRootElement(doc));
+    seq = evaluate(ctx, "(42, xs:int(5), (1 to 5)[3], "
+                   "9223372036854775807, -9223372036854775808, "
+                   "9223372036854775808, -9223372036854775809, "
+                   "1000, 1000000000000000000, 1.5, 0.1, xs:float(0.1), "
+                   "1e0 div 0, xs:double('NaN'), 1 eq 1, 1 eq 2, 'abc', "
+                   "x[1])");
+    check(xp3SequenceLength(seq) == 18, "items to read");
+
+    check(xp3SequenceAtomicType(seq, 0) == XP3_TYPE_INTEGER, "42 type");
+    checkInteger(seq, 0, 0, 42, "42 as an integer");
+    checkDouble(seq, 0, 0, 42, "42 as a double");
+    check(xp3SequenceBoolean(seq, 0) == -1, "42 is not a boolean");
+    check(xp3SequenceAtomicType(seq, 1) == XP3_TYPE_INT, "xs:int type");
+    checkInteger(seq, 1, 0, 5, "xs:int as an integer");
+    checkDouble(seq, 1, 0, 5, "xs:int as a double");
+    check(xp3SequenceAtomicType(seq, 2) == XP3_TYPE_INTEGER,
+          "item of a range type");
+    checkInteger(seq, 2, 0, 3, "item of a range as an integer");
+
+    checkInteger(seq, 3, 0, INT64_MAX, "largest int64_t");
+    checkInteger(seq, 4, 0, INT64_MIN, "smallest int64_t");
+    checkInteger(seq, 5, 1, 0, "above int64_t");
+    checkStringValue(seq, 5, "9223372036854775808", "above int64_t exactly");
+    checkInteger(seq, 6, 1, 0, "below int64_t");
+    checkStringValue(seq, 6, "-9223372036854775809",
+                     "below int64_t exactly");
+    checkDouble(seq, 5, 0, 9223372036854775808.0, "above int64_t as double");
+    checkInteger(seq, 7, 0, 1000, "1000, trailing zeros");
+    checkInteger(seq, 8, 0, INT64_C(1000000000000000000), "10^18");
+
+    check(xp3SequenceAtomicType(seq, 9) == XP3_TYPE_DECIMAL, "decimal type");
+    checkInteger(seq, 9, -1, 0, "a decimal is not an integer");
+    checkDouble(seq, 9, 0, 1.5, "1.5 as a double");
+    checkDouble(seq, 10, 0, 0.1, "0.1 as a double");
+    check(xp3SequenceAtomicType(seq, 11) == XP3_TYPE_FLOAT, "float type");
+    checkDouble(seq, 11, 0, (double) 0.1f, "xs:float(0.1) as a double");
+    checkInteger(seq, 11, -1, 0, "a float is not an integer");
+    checkDouble(seq, 12, 0, INFINITY, "infinity");
+    checkDouble(seq, 13, 0, NAN, "NaN");
+
+    check(xp3SequenceAtomicType(seq, 14) == XP3_TYPE_BOOLEAN,
+          "boolean type");
+    check(xp3SequenceBoolean(seq, 14) == 1, "true");
+    check(xp3SequenceBoolean(seq, 15) == 0, "false");
+    checkInteger(seq, 14, -1, 0, "a boolean is not an integer");
+    checkDouble(seq, 14, -1, 0, "a boolean is not a number");
+
+    check(xp3SequenceAtomicType(seq, 16) == XP3_TYPE_STRING, "string type");
+    checkInteger(seq, 16, -1, 0, "a string is not an integer");
+    checkDouble(seq, 16, -1, 0, "a string is not a number");
+    check(xp3SequenceBoolean(seq, 16) == -1, "a string is not a boolean");
+
+    check(xp3SequenceItemKind(seq, 17) == XP3_ITEM_NODE, "a node");
+    checkNoValue(seq, 17, "a node is not atomic");
+    checkNoValue(seq, 18, "no item past the end");
+    checkNoValue(NULL, 0, "no item in NULL");
+    check(xp3SequenceInteger(seq, 0, NULL) == -1, "integer to NULL");
+    check(xp3SequenceDouble(seq, 0, NULL) == -1, "double to NULL");
+
+    range = evaluate(ctx, "1 to 5");
+    check((range != NULL) && (range->shape == XP3_SEQ_RANGE),
+          "a range stays a range");
+    check(xp3SequenceAtomicType(range, 2) == XP3_TYPE_INTEGER, "range type");
+    checkInteger(range, 2, 0, 3, "range item as an integer");
+    checkDouble(range, 4, 0, 5, "range item as a double");
+    check(xp3SequenceBoolean(range, 0) == -1, "range item is no boolean");
+    checkNoValue(range, 5, "no item past the end of a range");
+    bigRange = evaluate(ctx, "9223372036854775806 to 9223372036854775807");
+    check((bigRange != NULL) && (bigRange->shape == XP3_SEQ_RANGE),
+          "a range up to the largest int64_t");
+    checkInteger(bigRange, 1, 0, INT64_MAX, "last item of a range");
+
+    integer = 7;
+    number = 7;
+    check((xp3SequenceInteger(NULL, 0, &integer) == -1) && (integer == 7) &&
+          (xp3SequenceDouble(NULL, 0, &number) == -1) && (number == 7),
+          "values unchanged without an item");
+
+done:
+    xp3FreeSequence(bigRange);
+    xp3FreeSequence(range);
+    xp3FreeSequence(seq);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+static void
+testBuildingSequences(void) {
+    const int64_t integers[2] = { 1, INT64_MAX };
+    const double doubles[3] = { 1.5, NAN, -0.0 };
+    const int booleans[2] = { 0, 5 };
+    const xmlChar *strs[2];
+    const char *names[] = { "i", "d", "b", "s", "x" };
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *empty[4];
+    xp3Sequence *seq;
+    int *many;
+    size_t i;
+    int ok;
+
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "b";
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "building test set up");
+        goto done;
+    }
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        check(xp3DeclareVariable(sctx, NULL, BAD_CAST names[i]) == 0,
+              "variable declared");
+
+    seq = xp3NewIntegerSequence(integers, 2);
+    check((xp3SequenceLength(seq) == 2) &&
+          (xp3SequenceAtomicType(seq, 1) == XP3_TYPE_INTEGER),
+          "integer sequence");
+    checkInteger(seq, 1, 0, INT64_MAX, "integer read back");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "i", seq) == 0, "$i bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$i", "integer:1 integer:9223372036854775807");
+    checkEval(sctx, ctx, "$i[2] - 1", "integer:9223372036854775806");
+    checkEval(sctx, ctx, "$i[2] + 1", "integer:9223372036854775808");
+    checkEval(sctx, ctx, "$i instance of xs:integer+", "boolean:true");
+
+    seq = xp3NewDoubleSequence(doubles, 3);
+    check((xp3SequenceLength(seq) == 3) &&
+          (xp3SequenceAtomicType(seq, 0) == XP3_TYPE_DOUBLE),
+          "double sequence");
+    checkDouble(seq, 1, 0, NAN, "NaN read back");
+    checkDouble(seq, 2, 0, -0.0, "negative zero read back");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "d", seq) == 0, "$d bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$d", "double:1.5 double:NaN double:-0");
+    checkEval(sctx, ctx, "$d[2] ne $d[2]", "boolean:true");
+    checkEval(sctx, ctx, "$d instance of xs:double+", "boolean:true");
+
+    seq = xp3NewBooleanSequence(booleans, 2);
+    check((xp3SequenceBoolean(seq, 0) == 0) &&
+          (xp3SequenceBoolean(seq, 1) == 1), "boolean sequence");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "b", seq) == 0, "$b bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$b", "boolean:false boolean:true");
+    checkEval(sctx, ctx, "$b[2]", "boolean:true");
+
+    seq = xp3NewStringSequence(strs, 2);
+    check((xp3SequenceLength(seq) == 2) &&
+          (xp3SequenceAtomicType(seq, 1) == XP3_TYPE_STRING),
+          "string sequence");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "s", seq) == 0, "$s bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$s", "string:a string:b");
+    checkEval(sctx, ctx, "$s[2]", "string:b");
+
+    empty[0] = xp3NewIntegerSequence(NULL, 0);
+    empty[1] = xp3NewDoubleSequence(NULL, 0);
+    empty[2] = xp3NewBooleanSequence(NULL, 0);
+    empty[3] = xp3NewStringSequence(NULL, 0);
+    for (i = 0; i < 4; i++) {
+        check((empty[i] != NULL) && (xp3SequenceLength(empty[i]) == 0),
+              "no values give the empty sequence");
+        check(xp3BindVariable(ctx, NULL, BAD_CAST "x", empty[i]) == 0,
+              "$x bound");
+        checkEval(sctx, ctx, "$x instance of empty-sequence()",
+                  "boolean:true");
+        xp3FreeSequence(empty[i]);
+    }
+
+    check(xp3NewIntegerSequence(NULL, 1) == NULL, "no integers");
+    check(xp3NewDoubleSequence(NULL, 1) == NULL, "no doubles");
+    check(xp3NewBooleanSequence(NULL, 1) == NULL, "no booleans");
+    check(xp3NewStringSequence(NULL, 1) == NULL, "no strings");
+
+    many = calloc(XP3_MAX_SEQUENCE_ITEMS + 1, sizeof(*many));
+    if (many != NULL) {
+        seq = xp3NewBooleanSequence(many, XP3_MAX_SEQUENCE_ITEMS + 1);
+        ok = (seq == NULL);
+        xp3FreeSequence(seq);
+        check(ok, "more than 10 million values are rejected");
+        free(many);
+    }
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Build every kind of sequence and read a decimal as a double, which
+ * allocates. Returns 1 if all of it succeeded.
+ */
+static int
+bindingWork(const xp3Sequence *decimal) {
+    const int64_t integers[3] = { 1, -2, INT64_MAX };
+    const double doubles[3] = { 1.5, NAN, -0.0 };
+    const int booleans[3] = { 0, 1, 2 };
+    const xmlChar *strs[3];
+    xp3Sequence *seqs[4];
+    double number = 0;
+    size_t i;
+    int ok;
+
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "b";
+    strs[2] = BAD_CAST "c";
+    seqs[0] = xp3NewIntegerSequence(integers, 3);
+    seqs[1] = xp3NewDoubleSequence(doubles, 3);
+    seqs[2] = xp3NewBooleanSequence(booleans, 3);
+    seqs[3] = xp3NewStringSequence(strs, 3);
+    ok = (xp3SequenceDouble(decimal, 0, &number) == 0) && (number == 1.5);
+    for (i = 0; i < 4; i++) {
+        if (xp3SequenceLength(seqs[i]) != 3)
+            ok = 0;
+        xp3FreeSequence(seqs[i]);
+    }
+    return(ok);
+}
+
+static void
+testBindingAllocationFailures(void) {
+    xp3Sequence *decimal = evaluate(NULL, "1.5");
+    int i;
+
+    check(bindingWork(decimal), "binding work without failures");
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: binding allocation-failure tests skipped: this "
+               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        xp3FreeSequence(decimal);
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        int injected;
+        int ok;
+
+        xp3TestAllocFailAt(i);
+        ok = bindingWork(decimal);
+        injected = xp3TestAllocFailed();
+        xp3TestAllocFailAt(-1);
+        if (!injected) {
+            check(ok, "binding work complete after allocation failures");
+            break;
+        }
+        check(!ok, "a failed allocation fails the binding work");
+    }
+    check(i > 0 && i < 1000, "binding allocation failure points exercised");
+    xp3TestAllocRestore();
+    xp3FreeSequence(decimal);
 }
 
 /*
@@ -1772,6 +2198,46 @@ testAllocationFailures(const char *text, const char *expected) {
     xmlFreeDoc(doc);
 }
 
+/*
+ * Numbers longer than the buffer for parsing them with a decimal comma:
+ * a decimal promoted to a double, a cast to xs:float and a double
+ * literal. Their last digit decides the rounding.
+ */
+static const char *const xp3LocaleExpr =
+    "(xs:decimal('2.5000000000000000000000000000000000000000000000000000"
+    "0000000000000001') * 1e0, "
+    "xs:float('16777217.000000000000000000000000000000000000000000000000"
+    "00000000001'), "
+    "9007199254740993.000000000000000000000000000000000000000000000000000"
+    "1e0)";
+
+static const char *const xp3LocaleExpected =
+    "double:2.5 float:1.6777218E7 double:9.007199254740994E15";
+
+/* The same results under a locale with a decimal comma */
+static void
+testLocale(void) {
+    const char *names[] = { "de_DE.UTF-8", "de_DE.utf8", "de_DE",
+                            "fr_FR.UTF-8", "fr_FR.utf8" };
+    size_t i;
+
+    checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (setlocale(LC_NUMERIC, names[i]) != NULL)
+            break;
+    }
+    if (i == sizeof(names) / sizeof(names[0]) ||
+        strcmp(localeconv()->decimal_point, ",") != 0) {
+        printf("testeval: locale test skipped: no locale with a decimal "
+               "comma\n");
+        setlocale(LC_NUMERIC, "C");
+        return;
+    }
+    checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
+    testAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
+    setlocale(LC_NUMERIC, "C");
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -1785,13 +2251,19 @@ main(void) {
     testQNameComparison();
     testManyBindings();
     testFocus();
+    testTreeChange();
+    testInvalidUtf8();
     testVariables();
     testLimits();
     testBoolean();
     testErrorPositions();
     testSequences();
+    testReadingItems();
+    testBuildingSequences();
+    testBindingAllocationFailures();
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    testLocale();
 
     if (failures == 0)
         printf("testeval: OK\n");
