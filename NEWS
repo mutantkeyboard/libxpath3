@@ -1,0 +1,46 @@
+NEWS file for libxpath3
+
+v0.1.0: Oct 29 2026
+
+### First release
+
+libxpath3 evaluates XPath 2.0, 3.0 and 3.1 expressions directly on
+libxml2's tree. This first release covers the language without its
+function library.
+
+- The parser handles the complete XPath 3.1 grammar, with a language
+  level for 2.0 and 3.0.
+- Static analysis resolves namespaces, variables and the signatures of
+  the F&O 3.1 functions, and raises the static errors of the
+  specification.
+- The evaluator handles paths and predicates, `for`, `let`, `some`,
+  `every` and `if`, the logical, comparison and arithmetic operators,
+  ranges, `union`, `intersect` and `except`, `cast`, `castable`,
+  `instance of` and `treat`.
+- `xs:decimal` and `xs:integer` have arbitrary precision. Decimal
+  division rounds as Saxon does.
+- Constant folding and path rewrites keep results in document order
+  without sorting where possible.
+- Limits on nesting depth, sequence length and the work of constant
+  folding make it safe to compile untrusted expressions. A compiled
+  expression can be evaluated by several threads at once, each with
+  its own dynamic context.
+- An API for language bindings reads results as numbers, booleans and
+  strings with their atomic types, and builds sequences of them to
+  bind as variables.
+
+### Conformance
+
+Against the W3C QT3 test suite at commit 201a6e4, compiling passes all
+XPath 2.0 tests and all but one known failure at 3.0 and 3.1.
+Evaluating, XPath 3.1 has 5,346 tests passed, 3 failed and 16,682 not
+judged yet, mostly because they call functions.
+
+### Not yet supported
+
+- Function calls are compiled but not evaluated yet.
+- Date, time and duration values, regular expressions, maps, arrays
+  and function items.
+- A limit on the run time of an evaluation.
+
+The namespace axis is not supported by design (XPST0010).
