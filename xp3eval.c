@@ -2795,25 +2795,123 @@ xp3NewNodeSequence(xmlNodePtr *nodes, size_t count) {
     return(xp3SeqBuilderFinish(&builder));
 }
 
+/*
+ * Add a new atomic value to a sequence being built. A NULL value is a
+ * failed allocation. On failure the builder is cleared.
+ */
+static int
+builderAddAtomic(xp3SeqBuilder *builder, xp3Atomic *atomic) {
+    if ((atomic == NULL) ||
+        (xp3SeqBuilderAdd(builder, xp3ItemFromAtomic(atomic)) !=
+         XP3_ERR_OK)) {
+        xp3SeqBuilderClear(builder);
+        return(-1);
+    }
+    return(0);
+}
+
 /**
- * Create a sequence of one xs:string.
+ * Create a sequence of xs:string values, in the order given.
  *
- * @param str  the string in UTF-8
+ * @param strs   the strings in UTF-8, may be NULL if count is 0
+ * @param count  the number of strings
  * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
- *          if str is NULL or not valid UTF-8, or memory allocation
- *          failed
+ *          if a string is NULL or not valid UTF-8, there are more than
+ *          10 million strings, or memory allocation failed
  */
 xp3Sequence *
-xp3NewStringSequence(const xmlChar *str) {
-    xp3Atomic *atomic;
+xp3NewStringSequence(const xmlChar **strs, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
 
-    if ((str == NULL) || (!xmlCheckUTF8(str)))
+    if (((strs == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
         return(NULL);
-    atomic = xp3AtomicNewString(XP3_TYPE_STRING, str,
-                                strlen((const char *) str));
-    if (atomic == NULL)
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if ((strs[i] == NULL) || (!xmlCheckUTF8(strs[i]))) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        if (builderAddAtomic(&builder, xp3AtomicNewString(
+                XP3_TYPE_STRING, strs[i],
+                strlen((const char *) strs[i]))) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:integer values, in the order given.
+ *
+ * @param values  the integers, may be NULL if count is 0
+ * @param count   the number of integers
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewIntegerSequence(const int64_t *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
         return(NULL);
-    return(xp3ValueSingle(xp3ItemFromAtomic(atomic)));
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewInteger(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:double values, in the order given. NaN and
+ * the infinities are allowed.
+ *
+ * @param values  the doubles, may be NULL if count is 0
+ * @param count   the number of doubles
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewDoubleSequence(const double *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewDouble(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
+}
+
+/**
+ * Create a sequence of xs:boolean values, in the order given: 0 is
+ * false, anything else true.
+ *
+ * @param values  the booleans, may be NULL if count is 0
+ * @param count   the number of booleans
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL
+ *          if values is NULL, there are more than 10 million values,
+ *          or memory allocation failed
+ */
+xp3Sequence *
+xp3NewBooleanSequence(const int *values, size_t count) {
+    xp3SeqBuilder builder;
+    size_t i;
+
+    if (((values == NULL) && (count > 0)) || (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        if (builderAddAtomic(&builder, xp3AtomicNewBoolean(values[i])) < 0)
+            return(NULL);
+    }
+    return(xp3SeqBuilderFinish(&builder));
 }
 
 /**
@@ -2884,7 +2982,10 @@ xp3SequenceNode(const xp3Sequence *seq, size_t index) {
 
 /**
  * Get the string value of an item: of a node (XDM 3.1, 5.12), or of
- * an atomic value as cast to xs:string.
+ * an atomic value as cast to xs:string. For xs:integer, xs:decimal and
+ * the types derived from them the string is exact and never uses
+ * exponent notation (F&O 3.1, 19.1.1), so this is how to read
+ * integers outside the range of int64_t and decimals exactly.
  *
  * @param seq    the sequence
  * @param index  the 0-based position of the item
@@ -2908,4 +3009,137 @@ xp3SequenceStringValue(const xp3Sequence *seq, size_t index) {
     }
     xp3ItemUnref(item);
     return(str);
+}
+
+/*
+ * Get an atomic item with a reference the caller releases, or NULL if
+ * the item is not atomic, there is no such item, or memory allocation
+ * failed.
+ */
+static xp3Atomic *
+sequenceAtomic(const xp3Sequence *seq, size_t index) {
+    xp3Item item;
+
+    if ((index >= xp3ValueCount(seq)) ||
+        (xp3ValueItemAt(seq, index, &item) <= 0))
+        return(NULL);
+    if (item.kind != XP3_ITEM_ATOMIC) {
+        xp3ItemUnref(item);
+        return(NULL);
+    }
+    return(item.u.atomic);
+}
+
+/**
+ * Get the type of an atomic item, such as XP3_TYPE_INTEGER for 42.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns an xp3AtomicType, or -1 if the item is not atomic or there
+ *          is no such item
+ */
+int
+xp3SequenceAtomicType(const xp3Sequence *seq, size_t index) {
+    xp3Atomic *atomic;
+    int type;
+
+    if (index >= xp3ValueCount(seq))
+        return(-1);
+    if (seq->shape == XP3_SEQ_RANGE)
+        return(XP3_TYPE_INTEGER);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    type = atomic->type;
+    xp3AtomicUnref(atomic);
+    return(type);
+}
+
+/**
+ * Get an item of type xs:integer, or a type derived from it, as an
+ * int64_t. Integers have arbitrary precision: one outside the range of
+ * int64_t is read exactly with xp3SequenceStringValue().
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @param value  set to the integer on success, unchanged otherwise
+ * @returns 0 on success, 1 if the integer is outside the range of
+ *          int64_t, or -1 if the item is not an integer, there is no
+ *          such item, or value is NULL
+ */
+int
+xp3SequenceInteger(const xp3Sequence *seq, size_t index, int64_t *value) {
+    xp3Atomic *atomic;
+    int ret = -1;
+
+    if ((value == NULL) || (index >= xp3ValueCount(seq)))
+        return(-1);
+    if (seq->shape == XP3_SEQ_RANGE) {
+        *value = (int64_t) ((uint64_t) seq->u.range.first + index);
+        return(0);
+    }
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    if (xp3TypeIsInteger(atomic->type))
+        ret = (xp3DecimalToInt64(atomic->u.dec, value) == 0) ? 0 : 1;
+    xp3AtomicUnref(atomic);
+    return(ret);
+}
+
+/**
+ * Get a numeric item as a double: xs:double, xs:float, xs:decimal and
+ * the integer types, rounded to the nearest double as a cast to
+ * xs:double does (F&O 3.1, 19.1.2.2). NaN and the infinities are
+ * returned as such.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @param value  set to the number on success, unchanged otherwise
+ * @returns 0 on success, or -1 if the item is not numeric, there is no
+ *          such item, value is NULL, or memory allocation failed
+ */
+int
+xp3SequenceDouble(const xp3Sequence *seq, size_t index, double *value) {
+    xp3Atomic *atomic;
+    xp3Atomic *dbl;
+    int ret = -1;
+
+    if (value == NULL)
+        return(-1);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    if (xp3TypeIsNumeric(atomic->type) &&
+        (xp3CastAtomic(atomic, XP3_TYPE_DOUBLE, &dbl) == XP3_ERR_OK)) {
+        *value = dbl->u.d;
+        xp3AtomicUnref(dbl);
+        ret = 0;
+    }
+    xp3AtomicUnref(atomic);
+    return(ret);
+}
+
+/**
+ * Get an item of type xs:boolean. This is not the effective boolean
+ * value, which xp3EvaluateBoolean() computes.
+ *
+ * @param seq    the sequence
+ * @param index  the 0-based position of the item
+ * @returns 1 for true, 0 for false, or -1 if the item is not an
+ *          xs:boolean or there is no such item
+ */
+int
+xp3SequenceBoolean(const xp3Sequence *seq, size_t index) {
+    xp3Atomic *atomic;
+    int ret;
+
+    if (xp3SequenceAtomicType(seq, index) != XP3_TYPE_BOOLEAN)
+        return(-1);
+    atomic = sequenceAtomic(seq, index);
+    if (atomic == NULL)
+        return(-1);
+    ret = (atomic->u.boolean != 0);
+    xp3AtomicUnref(atomic);
+    return(ret);
 }

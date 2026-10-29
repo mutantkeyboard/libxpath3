@@ -113,6 +113,44 @@ testTypes(void) {
           "invalid type derives from nothing");
 }
 
+/* The public names of the types, which a binding sees */
+static void
+testPublicTypes(void) {
+    int i;
+
+    check(XP3_TYPE_NOTATION == 45, "the last type keeps its value");
+    for (i = 0; i < XP3_TYPE_COUNT; i++) {
+        char what[64];
+
+        snprintf(what, sizeof(what), "type %d has its public name", i);
+        check((xp3AtomicTypeName((xp3AtomicType) i) != NULL) &&
+              (xp3AtomicTypeName((xp3AtomicType) i) ==
+               xp3TypeLocalName((xp3TypeId) i)), what);
+        snprintf(what, sizeof(what), "type %d derives from itself", i);
+        check(xp3AtomicTypeDerivesFrom((xp3AtomicType) i,
+                                       (xp3AtomicType) i) == 1, what);
+    }
+    check(xmlStrEqual(xp3AtomicTypeName(XP3_TYPE_INTEGER),
+                      BAD_CAST "integer"), "public name of xs:integer");
+    check(xp3AtomicTypeName((xp3AtomicType) XP3_TYPE_COUNT) == NULL,
+          "no name past the last type");
+    check(xp3AtomicTypeName((xp3AtomicType) -1) == NULL,
+          "no name for a negative type");
+
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INT, XP3_TYPE_INTEGER) == 1,
+          "int derives from integer");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INTEGER, XP3_TYPE_INT) == 0,
+          "integer does not derive from int");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_DOUBLE, XP3_TYPE_DECIMAL) == 0,
+          "double does not derive from decimal");
+    check(xp3AtomicTypeDerivesFrom((xp3AtomicType) XP3_TYPE_COUNT,
+                                   XP3_TYPE_ANY_ATOMIC) == 0,
+          "an unknown type derives from nothing");
+    check(xp3AtomicTypeDerivesFrom(XP3_TYPE_INTEGER,
+                                   (xp3AtomicType) -1) == 0,
+          "nothing derives from an unknown type");
+}
+
 /*
  * Atomic values
  */
@@ -706,6 +744,7 @@ main(void) {
     xmlInitParser();
 
     testTypes();
+    testPublicTypes();
     testAtomics();
     testSequences();
     testRanges();

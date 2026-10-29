@@ -16,6 +16,7 @@
 #define XP3_XPATH3_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <libxpath3/xp3version.h>
 #include <libxml/tree.h>
@@ -69,6 +70,106 @@ typedef enum {
     /** an array */
     XP3_ITEM_ARRAY
 } xp3ItemKind;
+
+/**
+ * Built-in atomic types of XML Schema 1.1 and XDM 3.1, all in the
+ * namespace http://www.w3.org/2001/XMLSchema, each after the type it
+ * derives from. The values never change; new types are only appended.
+ */
+typedef enum {
+    /** xs:anyAtomicType, the root of all atomic types */
+    XP3_TYPE_ANY_ATOMIC = 0,
+    /** xs:untypedAtomic, derived from xs:anyAtomicType */
+    XP3_TYPE_UNTYPED_ATOMIC = 1,
+    /** xs:string, derived from xs:anyAtomicType */
+    XP3_TYPE_STRING = 2,
+    /** xs:normalizedString, derived from xs:string */
+    XP3_TYPE_NORMALIZED_STRING = 3,
+    /** xs:token, derived from xs:normalizedString */
+    XP3_TYPE_TOKEN = 4,
+    /** xs:language, derived from xs:token */
+    XP3_TYPE_LANGUAGE = 5,
+    /** xs:NMTOKEN, derived from xs:token */
+    XP3_TYPE_NMTOKEN = 6,
+    /** xs:Name, derived from xs:token */
+    XP3_TYPE_NAME = 7,
+    /** xs:NCName, derived from xs:Name */
+    XP3_TYPE_NCNAME = 8,
+    /** xs:ID, derived from xs:NCName */
+    XP3_TYPE_ID = 9,
+    /** xs:IDREF, derived from xs:NCName */
+    XP3_TYPE_IDREF = 10,
+    /** xs:ENTITY, derived from xs:NCName */
+    XP3_TYPE_ENTITY = 11,
+    /** xs:boolean, derived from xs:anyAtomicType */
+    XP3_TYPE_BOOLEAN = 12,
+    /** xs:decimal, derived from xs:anyAtomicType */
+    XP3_TYPE_DECIMAL = 13,
+    /** xs:integer, derived from xs:decimal */
+    XP3_TYPE_INTEGER = 14,
+    /** xs:nonPositiveInteger, derived from xs:integer */
+    XP3_TYPE_NON_POSITIVE_INTEGER = 15,
+    /** xs:negativeInteger, derived from xs:nonPositiveInteger */
+    XP3_TYPE_NEGATIVE_INTEGER = 16,
+    /** xs:long, derived from xs:integer */
+    XP3_TYPE_LONG = 17,
+    /** xs:int, derived from xs:long */
+    XP3_TYPE_INT = 18,
+    /** xs:short, derived from xs:int */
+    XP3_TYPE_SHORT = 19,
+    /** xs:byte, derived from xs:short */
+    XP3_TYPE_BYTE = 20,
+    /** xs:nonNegativeInteger, derived from xs:integer */
+    XP3_TYPE_NON_NEGATIVE_INTEGER = 21,
+    /** xs:unsignedLong, derived from xs:nonNegativeInteger */
+    XP3_TYPE_UNSIGNED_LONG = 22,
+    /** xs:unsignedInt, derived from xs:unsignedLong */
+    XP3_TYPE_UNSIGNED_INT = 23,
+    /** xs:unsignedShort, derived from xs:unsignedInt */
+    XP3_TYPE_UNSIGNED_SHORT = 24,
+    /** xs:unsignedByte, derived from xs:unsignedShort */
+    XP3_TYPE_UNSIGNED_BYTE = 25,
+    /** xs:positiveInteger, derived from xs:nonNegativeInteger */
+    XP3_TYPE_POSITIVE_INTEGER = 26,
+    /** xs:float, derived from xs:anyAtomicType */
+    XP3_TYPE_FLOAT = 27,
+    /** xs:double, derived from xs:anyAtomicType */
+    XP3_TYPE_DOUBLE = 28,
+    /** xs:duration, derived from xs:anyAtomicType */
+    XP3_TYPE_DURATION = 29,
+    /** xs:yearMonthDuration, derived from xs:duration */
+    XP3_TYPE_YEAR_MONTH_DURATION = 30,
+    /** xs:dayTimeDuration, derived from xs:duration */
+    XP3_TYPE_DAY_TIME_DURATION = 31,
+    /** xs:dateTime, derived from xs:anyAtomicType */
+    XP3_TYPE_DATE_TIME = 32,
+    /** xs:dateTimeStamp, derived from xs:dateTime */
+    XP3_TYPE_DATE_TIME_STAMP = 33,
+    /** xs:time, derived from xs:anyAtomicType */
+    XP3_TYPE_TIME = 34,
+    /** xs:date, derived from xs:anyAtomicType */
+    XP3_TYPE_DATE = 35,
+    /** xs:gYearMonth, derived from xs:anyAtomicType */
+    XP3_TYPE_G_YEAR_MONTH = 36,
+    /** xs:gYear, derived from xs:anyAtomicType */
+    XP3_TYPE_G_YEAR = 37,
+    /** xs:gMonthDay, derived from xs:anyAtomicType */
+    XP3_TYPE_G_MONTH_DAY = 38,
+    /** xs:gDay, derived from xs:anyAtomicType */
+    XP3_TYPE_G_DAY = 39,
+    /** xs:gMonth, derived from xs:anyAtomicType */
+    XP3_TYPE_G_MONTH = 40,
+    /** xs:hexBinary, derived from xs:anyAtomicType */
+    XP3_TYPE_HEX_BINARY = 41,
+    /** xs:base64Binary, derived from xs:anyAtomicType */
+    XP3_TYPE_BASE64_BINARY = 42,
+    /** xs:anyURI, derived from xs:anyAtomicType */
+    XP3_TYPE_ANY_URI = 43,
+    /** xs:QName, derived from xs:anyAtomicType */
+    XP3_TYPE_QNAME = 44,
+    /** xs:NOTATION, derived from xs:anyAtomicType */
+    XP3_TYPE_NOTATION = 45
+} xp3AtomicType;
 
 /**
  * Specify the language level of the XPath expression. The default is
@@ -171,13 +272,32 @@ XP3PUBFUN int
 						 xp3Error **error);
 
 /*
+ * Atomic types
+ */
+XP3PUBFUN const xmlChar *
+		    xp3AtomicTypeName		(xp3AtomicType type);
+XP3PUBFUN int
+		    xp3AtomicTypeDerivesFrom	(xp3AtomicType type,
+						 xp3AtomicType ancestor);
+
+/*
  * Sequences
  */
 XP3PUBFUN xp3Sequence *
 		    xp3NewNodeSequence		(xmlNodePtr *nodes,
 						 size_t count);
 XP3PUBFUN xp3Sequence *
-		    xp3NewStringSequence	(const xmlChar *str);
+		    xp3NewStringSequence	(const xmlChar **strs,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewIntegerSequence	(const int64_t *values,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewDoubleSequence	(const double *values,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewBooleanSequence	(const int *values,
+						 size_t count);
 XP3PUBFUN void
 		    xp3FreeSequence		(xp3Sequence *seq);
 XP3PUBFUN size_t
@@ -190,6 +310,20 @@ XP3PUBFUN xmlNodePtr
 						 size_t index);
 XP3PUBFUN xmlChar *
 		    xp3SequenceStringValue	(const xp3Sequence *seq,
+						 size_t index);
+XP3PUBFUN int
+		    xp3SequenceAtomicType	(const xp3Sequence *seq,
+						 size_t index);
+XP3PUBFUN int
+		    xp3SequenceInteger		(const xp3Sequence *seq,
+						 size_t index,
+						 int64_t *value);
+XP3PUBFUN int
+		    xp3SequenceDouble		(const xp3Sequence *seq,
+						 size_t index,
+						 double *value);
+XP3PUBFUN int
+		    xp3SequenceBoolean		(const xp3Sequence *seq,
 						 size_t index);
 
 #ifdef __cplusplus
