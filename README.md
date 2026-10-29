@@ -266,6 +266,8 @@ ctest --test-dir build-cmake
 
 Development happens on GNOME GitLab. Issues and merge requests go to https://gitlab.gnome.org/mutantkeyboard/libxpath3.
 
+Merge requests target the `test` branch; `main` gets releases.
+
 The GitHub copy is a read-only mirror, so please open issues and merge requests on GNOME GitLab.
 
 Related upstream discussions:
