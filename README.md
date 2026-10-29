@@ -5,7 +5,7 @@
 
 libxpath3 is an XPath 3.1 engine in C for documents parsed with [libxml2](https://gitlab.gnome.org/GNOME/libxml2). It evaluates expressions directly on libxml2's tree, so existing libxml2 code can use it without converting documents.
 
-> **Work in progress.** libxpath3 is under active development and not ready for production use yet. The API may change.
+> **Early release.** libxpath3 0.1 evaluates paths and operators, but no function calls yet. The API may still change before 1.0.
 
 ## Features and scope
 
@@ -22,6 +22,63 @@ Not in scope:
 - **XSLT.** XSLT 2.0 and 3.0 belong in libxslt.
 - **Schema-aware processing.** Only the built-in XML Schema types are supported.
 - **XQuery and streaming.**
+
+## Usage
+
+Compile an expression once, then evaluate it on a document with a dynamic context. Link with `pkg-config --cflags --libs libxpath3`.
+
+```c
+#include <stdio.h>
+#include <libxml/parser.h>
+#include <libxpath3/xpath3.h>
+
+int
+main(void) {
+    static const char xml[] = "<order><item qty='3' price='2.50'/>"
+                              "<item qty='1' price='10'/></order>";
+    xmlDocPtr doc = xmlReadMemory(xml, sizeof(xml) - 1, NULL, NULL, 0);
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *dctx = xp3NewDynamicContext();
+    const int64_t min = 2;
+    xp3Sequence *minSeq = xp3NewIntegerSequence(&min, 1);
+    xp3Error *error = NULL;
+    xp3Expr *expr;
+    xp3Sequence *result;
+    size_t i;
+
+    /* $min is declared for compiling and bound for evaluating */
+    xp3DeclareVariable(sctx, NULL, BAD_CAST "min");
+    expr = xp3Compile(sctx, BAD_CAST "for $i in /order/item[@qty >= $min] "
+                                     "return $i/@qty * $i/@price", &error);
+    if (expr == NULL) {
+        fprintf(stderr, "%s: %s\n", xp3ErrorCode(error),
+                xp3ErrorMessage(error));
+        return(1);
+    }
+
+    xp3SetContextNode(dctx, (xmlNodePtr) doc);
+    xp3BindVariable(dctx, NULL, BAD_CAST "min", minSeq);
+    result = xp3Evaluate(expr, dctx, &error);
+    for (i = 0; i < xp3SequenceLength(result); i++) {
+        double total;
+
+        if (xp3SequenceDouble(result, i, &total) == 0)
+            printf("%s: %g\n",
+                   xp3AtomicTypeName(xp3SequenceAtomicType(result, i)),
+                   total);
+    }
+
+    xp3FreeSequence(result);
+    xp3FreeSequence(minSeq);
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(dctx);
+    xp3FreeStaticContext(sctx);
+    xmlFreeDoc(doc);
+    return(0);
+}
+```
+
+This prints `double: 7.5`: attributes are untyped, so the multiplication casts them to `xs:double`.
 
 ## Conformance
 
