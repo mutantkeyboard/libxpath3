@@ -16,6 +16,7 @@
 #define XP3_XPATH3_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <libxpath3/xp3version.h>
 #include <libxml/tree.h>
@@ -69,6 +70,106 @@ typedef enum {
     /** an array */
     XP3_ITEM_ARRAY
 } xp3ItemKind;
+
+/**
+ * Built-in atomic types of XML Schema 1.1 and XDM 3.1, all in the
+ * namespace http://www.w3.org/2001/XMLSchema. The values never change;
+ * new types are only appended.
+ */
+typedef enum {
+    /** xs:anyAtomicType */
+    XP3_TYPE_ANY_ATOMIC = 0,
+    /** xs:untypedAtomic */
+    XP3_TYPE_UNTYPED_ATOMIC = 1,
+    /** xs:string */
+    XP3_TYPE_STRING = 2,
+    /** xs:normalizedString */
+    XP3_TYPE_NORMALIZED_STRING = 3,
+    /** xs:token */
+    XP3_TYPE_TOKEN = 4,
+    /** xs:language */
+    XP3_TYPE_LANGUAGE = 5,
+    /** xs:NMTOKEN */
+    XP3_TYPE_NMTOKEN = 6,
+    /** xs:Name */
+    XP3_TYPE_NAME = 7,
+    /** xs:NCName */
+    XP3_TYPE_NCNAME = 8,
+    /** xs:ID */
+    XP3_TYPE_ID = 9,
+    /** xs:IDREF */
+    XP3_TYPE_IDREF = 10,
+    /** xs:ENTITY */
+    XP3_TYPE_ENTITY = 11,
+    /** xs:boolean */
+    XP3_TYPE_BOOLEAN = 12,
+    /** xs:decimal */
+    XP3_TYPE_DECIMAL = 13,
+    /** xs:integer */
+    XP3_TYPE_INTEGER = 14,
+    /** xs:nonPositiveInteger */
+    XP3_TYPE_NON_POSITIVE_INTEGER = 15,
+    /** xs:negativeInteger */
+    XP3_TYPE_NEGATIVE_INTEGER = 16,
+    /** xs:long */
+    XP3_TYPE_LONG = 17,
+    /** xs:int */
+    XP3_TYPE_INT = 18,
+    /** xs:short */
+    XP3_TYPE_SHORT = 19,
+    /** xs:byte */
+    XP3_TYPE_BYTE = 20,
+    /** xs:nonNegativeInteger */
+    XP3_TYPE_NON_NEGATIVE_INTEGER = 21,
+    /** xs:unsignedLong */
+    XP3_TYPE_UNSIGNED_LONG = 22,
+    /** xs:unsignedInt */
+    XP3_TYPE_UNSIGNED_INT = 23,
+    /** xs:unsignedShort */
+    XP3_TYPE_UNSIGNED_SHORT = 24,
+    /** xs:unsignedByte */
+    XP3_TYPE_UNSIGNED_BYTE = 25,
+    /** xs:positiveInteger */
+    XP3_TYPE_POSITIVE_INTEGER = 26,
+    /** xs:float */
+    XP3_TYPE_FLOAT = 27,
+    /** xs:double */
+    XP3_TYPE_DOUBLE = 28,
+    /** xs:duration */
+    XP3_TYPE_DURATION = 29,
+    /** xs:yearMonthDuration */
+    XP3_TYPE_YEAR_MONTH_DURATION = 30,
+    /** xs:dayTimeDuration */
+    XP3_TYPE_DAY_TIME_DURATION = 31,
+    /** xs:dateTime */
+    XP3_TYPE_DATE_TIME = 32,
+    /** xs:dateTimeStamp */
+    XP3_TYPE_DATE_TIME_STAMP = 33,
+    /** xs:time */
+    XP3_TYPE_TIME = 34,
+    /** xs:date */
+    XP3_TYPE_DATE = 35,
+    /** xs:gYearMonth */
+    XP3_TYPE_G_YEAR_MONTH = 36,
+    /** xs:gYear */
+    XP3_TYPE_G_YEAR = 37,
+    /** xs:gMonthDay */
+    XP3_TYPE_G_MONTH_DAY = 38,
+    /** xs:gDay */
+    XP3_TYPE_G_DAY = 39,
+    /** xs:gMonth */
+    XP3_TYPE_G_MONTH = 40,
+    /** xs:hexBinary */
+    XP3_TYPE_HEX_BINARY = 41,
+    /** xs:base64Binary */
+    XP3_TYPE_BASE64_BINARY = 42,
+    /** xs:anyURI */
+    XP3_TYPE_ANY_URI = 43,
+    /** xs:QName */
+    XP3_TYPE_QNAME = 44,
+    /** xs:NOTATION */
+    XP3_TYPE_NOTATION = 45
+} xp3AtomicType;
 
 /**
  * Specify the language level of the XPath expression. The default is
@@ -171,13 +272,32 @@ XP3PUBFUN int
 						 xp3Error **error);
 
 /*
+ * Atomic types
+ */
+XP3PUBFUN const xmlChar *
+		    xp3AtomicTypeName		(xp3AtomicType type);
+XP3PUBFUN int
+		    xp3AtomicTypeDerivesFrom	(xp3AtomicType type,
+						 xp3AtomicType ancestor);
+
+/*
  * Sequences
  */
 XP3PUBFUN xp3Sequence *
 		    xp3NewNodeSequence		(xmlNodePtr *nodes,
 						 size_t count);
 XP3PUBFUN xp3Sequence *
-		    xp3NewStringSequence	(const xmlChar *str);
+		    xp3NewStringSequence	(const xmlChar **strs,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewIntegerSequence	(const int64_t *values,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewDoubleSequence	(const double *values,
+						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewBooleanSequence	(const int *values,
+						 size_t count);
 XP3PUBFUN void
 		    xp3FreeSequence		(xp3Sequence *seq);
 XP3PUBFUN size_t
@@ -190,6 +310,20 @@ XP3PUBFUN xmlNodePtr
 						 size_t index);
 XP3PUBFUN xmlChar *
 		    xp3SequenceStringValue	(const xp3Sequence *seq,
+						 size_t index);
+XP3PUBFUN int
+		    xp3SequenceAtomicType	(const xp3Sequence *seq,
+						 size_t index);
+XP3PUBFUN int
+		    xp3SequenceInteger		(const xp3Sequence *seq,
+						 size_t index,
+						 int64_t *value);
+XP3PUBFUN int
+		    xp3SequenceDouble		(const xp3Sequence *seq,
+						 size_t index,
+						 double *value);
+XP3PUBFUN int
+		    xp3SequenceBoolean		(const xp3Sequence *seq,
 						 size_t index);
 
 #ifdef __cplusplus

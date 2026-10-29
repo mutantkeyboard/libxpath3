@@ -66,8 +66,9 @@ describe(const xp3Sequence *seq, char *out, size_t size) {
 /* A dynamic context with the context node and $v, all of its own */
 static xp3DynamicContext *
 newThreadContext(void) {
+    const xmlChar *text = BAD_CAST "shared";
     xp3DynamicContext *ctx = xp3NewDynamicContext();
-    xp3Sequence *value = xp3NewStringSequence(BAD_CAST "shared");
+    xp3Sequence *value = xp3NewStringSequence(&text, 1);
     int ok = (ctx != NULL) && (value != NULL) &&
              (xp3SetContextNode(ctx, xmlDocGetRootElement(threadDoc)) == 0) &&
              (xp3BindVariable(ctx, NULL, BAD_CAST "v", value) == 0);

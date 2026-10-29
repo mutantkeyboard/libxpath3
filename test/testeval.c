@@ -13,8 +13,10 @@
  */
 
 #include <locale.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libxml/parser.h>
@@ -1143,8 +1145,9 @@ testVariables(void) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3StaticContext *sctx = xp3NewStaticContext();
     xp3DynamicContext *ctx = xp3NewDynamicContext();
+    const xmlChar *hello = BAD_CAST "hello";
     xp3Sequence *nodes = NULL;
-    xp3Sequence *text = xp3NewStringSequence(BAD_CAST "hello");
+    xp3Sequence *text = xp3NewStringSequence(&hello, 1);
     xmlNodePtr list[2];
 
     if ((doc == NULL) || (sctx == NULL) || (ctx == NULL) ||
@@ -1320,6 +1323,7 @@ testSequences(void) {
                                NULL);
     xp3Sequence *seq = NULL;
     xp3DynamicContext *ctx = xp3NewDynamicContext();
+    const xmlChar *strs[2];
     xmlNodePtr list[1];
     xmlChar *str;
 
@@ -1356,9 +1360,13 @@ testSequences(void) {
     xmlFreeNode(list[0]);
     check(xp3NewNodeSequence(NULL, 1) == NULL, "no nodes");
     xp3FreeSequence(xp3NewNodeSequence(NULL, 0));
-    check(xp3NewStringSequence(BAD_CAST "\xC3") == NULL,
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "\xC3";
+    check(xp3NewStringSequence(strs, 2) == NULL,
           "invalid UTF-8 is rejected");
-    check(xp3NewStringSequence(NULL) == NULL, "no string");
+    strs[1] = NULL;
+    check(xp3NewStringSequence(strs, 2) == NULL, "no string");
+    check(xp3NewStringSequence(NULL, 1) == NULL, "no strings");
     xp3FreeSequence(NULL);
 
 done:
@@ -1366,6 +1374,325 @@ done:
     xp3FreeDynamicContext(ctx);
     xp3FreeExpr(expr);
     xmlFreeDoc(doc);
+}
+
+/*
+ * Reading and building items, as language bindings do
+ */
+
+static xp3Sequence *
+evaluate(xp3DynamicContext *ctx, const char *text) {
+    xp3Expr *expr = xp3Compile(NULL, BAD_CAST text, NULL);
+    xp3Sequence *seq = xp3Evaluate(expr, ctx, NULL);
+
+    xp3FreeExpr(expr);
+    return(seq);
+}
+
+/* Read an integer; value must stay unchanged unless ret is 0 */
+static void
+checkInteger(const xp3Sequence *seq, size_t index, int ret,
+             int64_t expected, const char *what) {
+    int64_t value = 7;
+    int actual = xp3SequenceInteger(seq, index, &value);
+
+    check((actual == ret) && (value == ((ret == 0) ? expected : 7)), what);
+}
+
+/* Read a double; value must stay unchanged unless ret is 0 */
+static void
+checkDouble(const xp3Sequence *seq, size_t index, int ret,
+            double expected, const char *what) {
+    double value = 7;
+    int actual = xp3SequenceDouble(seq, index, &value);
+
+    if (ret != 0)
+        expected = 7;
+    check((actual == ret) &&
+          (isnan(expected) ? isnan(value) :
+           ((value == expected) && (!signbit(value) == !signbit(expected)))),
+          what);
+}
+
+/* Every reader gives -1 */
+static void
+checkNoValue(const xp3Sequence *seq, size_t index, const char *what) {
+    check(xp3SequenceAtomicType(seq, index) == -1, what);
+    checkInteger(seq, index, -1, 0, what);
+    checkDouble(seq, index, -1, 0, what);
+    check(xp3SequenceBoolean(seq, index) == -1, what);
+}
+
+static void
+checkStringValue(const xp3Sequence *seq, size_t index, const char *expected,
+                 const char *what) {
+    xmlChar *str = xp3SequenceStringValue(seq, index);
+
+    check(xmlStrEqual(str, BAD_CAST expected), what);
+    xmlFree(str);
+}
+
+static void
+testReadingItems(void) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *seq = NULL;
+    xp3Sequence *range = NULL;
+    xp3Sequence *bigRange = NULL;
+    int64_t integer;
+    double number;
+
+    if ((doc == NULL) || (ctx == NULL)) {
+        check(0, "reading test set up");
+        goto done;
+    }
+    xp3SetContextNode(ctx, xmlDocGetRootElement(doc));
+    seq = evaluate(ctx, "(42, xs:int(5), (1 to 5)[3], "
+                   "9223372036854775807, -9223372036854775808, "
+                   "9223372036854775808, -9223372036854775809, "
+                   "1000, 1000000000000000000, 1.5, 0.1, xs:float(0.1), "
+                   "1e0 div 0, xs:double('NaN'), 1 eq 1, 1 eq 2, 'abc', "
+                   "x[1])");
+    check(xp3SequenceLength(seq) == 18, "items to read");
+
+    check(xp3SequenceAtomicType(seq, 0) == XP3_TYPE_INTEGER, "42 type");
+    checkInteger(seq, 0, 0, 42, "42 as an integer");
+    checkDouble(seq, 0, 0, 42, "42 as a double");
+    check(xp3SequenceBoolean(seq, 0) == -1, "42 is not a boolean");
+    check(xp3SequenceAtomicType(seq, 1) == XP3_TYPE_INT, "xs:int type");
+    checkInteger(seq, 1, 0, 5, "xs:int as an integer");
+    checkDouble(seq, 1, 0, 5, "xs:int as a double");
+    check(xp3SequenceAtomicType(seq, 2) == XP3_TYPE_INTEGER,
+          "item of a range type");
+    checkInteger(seq, 2, 0, 3, "item of a range as an integer");
+
+    checkInteger(seq, 3, 0, INT64_MAX, "largest int64_t");
+    checkInteger(seq, 4, 0, INT64_MIN, "smallest int64_t");
+    checkInteger(seq, 5, 1, 0, "above int64_t");
+    checkStringValue(seq, 5, "9223372036854775808", "above int64_t exactly");
+    checkInteger(seq, 6, 1, 0, "below int64_t");
+    checkStringValue(seq, 6, "-9223372036854775809",
+                     "below int64_t exactly");
+    checkDouble(seq, 5, 0, 9223372036854775808.0, "above int64_t as double");
+    checkInteger(seq, 7, 0, 1000, "1000, trailing zeros");
+    checkInteger(seq, 8, 0, INT64_C(1000000000000000000), "10^18");
+
+    check(xp3SequenceAtomicType(seq, 9) == XP3_TYPE_DECIMAL, "decimal type");
+    checkInteger(seq, 9, -1, 0, "a decimal is not an integer");
+    checkDouble(seq, 9, 0, 1.5, "1.5 as a double");
+    checkDouble(seq, 10, 0, 0.1, "0.1 as a double");
+    check(xp3SequenceAtomicType(seq, 11) == XP3_TYPE_FLOAT, "float type");
+    checkDouble(seq, 11, 0, (double) 0.1f, "xs:float(0.1) as a double");
+    checkInteger(seq, 11, -1, 0, "a float is not an integer");
+    checkDouble(seq, 12, 0, INFINITY, "infinity");
+    checkDouble(seq, 13, 0, NAN, "NaN");
+
+    check(xp3SequenceAtomicType(seq, 14) == XP3_TYPE_BOOLEAN,
+          "boolean type");
+    check(xp3SequenceBoolean(seq, 14) == 1, "true");
+    check(xp3SequenceBoolean(seq, 15) == 0, "false");
+    checkInteger(seq, 14, -1, 0, "a boolean is not an integer");
+    checkDouble(seq, 14, -1, 0, "a boolean is not a number");
+
+    check(xp3SequenceAtomicType(seq, 16) == XP3_TYPE_STRING, "string type");
+    checkInteger(seq, 16, -1, 0, "a string is not an integer");
+    checkDouble(seq, 16, -1, 0, "a string is not a number");
+    check(xp3SequenceBoolean(seq, 16) == -1, "a string is not a boolean");
+
+    check(xp3SequenceItemKind(seq, 17) == XP3_ITEM_NODE, "a node");
+    checkNoValue(seq, 17, "a node is not atomic");
+    checkNoValue(seq, 18, "no item past the end");
+    checkNoValue(NULL, 0, "no item in NULL");
+    check(xp3SequenceInteger(seq, 0, NULL) == -1, "integer to NULL");
+    check(xp3SequenceDouble(seq, 0, NULL) == -1, "double to NULL");
+
+    range = evaluate(ctx, "1 to 5");
+    check((range != NULL) && (range->shape == XP3_SEQ_RANGE),
+          "a range stays a range");
+    check(xp3SequenceAtomicType(range, 2) == XP3_TYPE_INTEGER, "range type");
+    checkInteger(range, 2, 0, 3, "range item as an integer");
+    checkDouble(range, 4, 0, 5, "range item as a double");
+    check(xp3SequenceBoolean(range, 0) == -1, "range item is no boolean");
+    checkNoValue(range, 5, "no item past the end of a range");
+    bigRange = evaluate(ctx, "9223372036854775806 to 9223372036854775807");
+    check((bigRange != NULL) && (bigRange->shape == XP3_SEQ_RANGE),
+          "a range up to the largest int64_t");
+    checkInteger(bigRange, 1, 0, INT64_MAX, "last item of a range");
+
+    integer = 7;
+    number = 7;
+    check((xp3SequenceInteger(NULL, 0, &integer) == -1) && (integer == 7) &&
+          (xp3SequenceDouble(NULL, 0, &number) == -1) && (number == 7),
+          "values unchanged without an item");
+
+done:
+    xp3FreeSequence(bigRange);
+    xp3FreeSequence(range);
+    xp3FreeSequence(seq);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+static void
+testBuildingSequences(void) {
+    const int64_t integers[2] = { 1, INT64_MAX };
+    const double doubles[3] = { 1.5, NAN, -0.0 };
+    const int booleans[2] = { 0, 5 };
+    const xmlChar *strs[2];
+    const char *names[] = { "i", "d", "b", "s", "x" };
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *empty[4];
+    xp3Sequence *seq;
+    int *many;
+    size_t i;
+    int ok;
+
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "b";
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "building test set up");
+        goto done;
+    }
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        check(xp3DeclareVariable(sctx, NULL, BAD_CAST names[i]) == 0,
+              "variable declared");
+
+    seq = xp3NewIntegerSequence(integers, 2);
+    check((xp3SequenceLength(seq) == 2) &&
+          (xp3SequenceAtomicType(seq, 1) == XP3_TYPE_INTEGER),
+          "integer sequence");
+    checkInteger(seq, 1, 0, INT64_MAX, "integer read back");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "i", seq) == 0, "$i bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$i", "integer:1 integer:9223372036854775807");
+    checkEval(sctx, ctx, "$i[2] - 1", "integer:9223372036854775806");
+    checkEval(sctx, ctx, "$i[2] + 1", "integer:9223372036854775808");
+    checkEval(sctx, ctx, "$i instance of xs:integer+", "boolean:true");
+
+    seq = xp3NewDoubleSequence(doubles, 3);
+    check((xp3SequenceLength(seq) == 3) &&
+          (xp3SequenceAtomicType(seq, 0) == XP3_TYPE_DOUBLE),
+          "double sequence");
+    checkDouble(seq, 1, 0, NAN, "NaN read back");
+    checkDouble(seq, 2, 0, -0.0, "negative zero read back");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "d", seq) == 0, "$d bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$d", "double:1.5 double:NaN double:-0");
+    checkEval(sctx, ctx, "$d[2] ne $d[2]", "boolean:true");
+    checkEval(sctx, ctx, "$d instance of xs:double+", "boolean:true");
+
+    seq = xp3NewBooleanSequence(booleans, 2);
+    check((xp3SequenceBoolean(seq, 0) == 0) &&
+          (xp3SequenceBoolean(seq, 1) == 1), "boolean sequence");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "b", seq) == 0, "$b bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$b", "boolean:false boolean:true");
+    checkEval(sctx, ctx, "$b[2]", "boolean:true");
+
+    seq = xp3NewStringSequence(strs, 2);
+    check((xp3SequenceLength(seq) == 2) &&
+          (xp3SequenceAtomicType(seq, 1) == XP3_TYPE_STRING),
+          "string sequence");
+    check(xp3BindVariable(ctx, NULL, BAD_CAST "s", seq) == 0, "$s bound");
+    xp3FreeSequence(seq);
+    checkEval(sctx, ctx, "$s", "string:a string:b");
+    checkEval(sctx, ctx, "$s[2]", "string:b");
+
+    empty[0] = xp3NewIntegerSequence(NULL, 0);
+    empty[1] = xp3NewDoubleSequence(NULL, 0);
+    empty[2] = xp3NewBooleanSequence(NULL, 0);
+    empty[3] = xp3NewStringSequence(NULL, 0);
+    for (i = 0; i < 4; i++) {
+        check((empty[i] != NULL) && (xp3SequenceLength(empty[i]) == 0),
+              "no values give the empty sequence");
+        check(xp3BindVariable(ctx, NULL, BAD_CAST "x", empty[i]) == 0,
+              "$x bound");
+        checkEval(sctx, ctx, "$x instance of empty-sequence()",
+                  "boolean:true");
+        xp3FreeSequence(empty[i]);
+    }
+
+    check(xp3NewIntegerSequence(NULL, 1) == NULL, "no integers");
+    check(xp3NewDoubleSequence(NULL, 1) == NULL, "no doubles");
+    check(xp3NewBooleanSequence(NULL, 1) == NULL, "no booleans");
+    check(xp3NewStringSequence(NULL, 1) == NULL, "no strings");
+
+    many = calloc(XP3_MAX_SEQUENCE_ITEMS + 1, sizeof(*many));
+    if (many != NULL) {
+        seq = xp3NewBooleanSequence(many, XP3_MAX_SEQUENCE_ITEMS + 1);
+        ok = (seq == NULL);
+        xp3FreeSequence(seq);
+        check(ok, "more than 10 million values are rejected");
+        free(many);
+    }
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Build every kind of sequence and read a decimal as a double, which
+ * allocates. Returns 1 if all of it succeeded.
+ */
+static int
+bindingWork(const xp3Sequence *decimal) {
+    const int64_t integers[3] = { 1, -2, INT64_MAX };
+    const double doubles[3] = { 1.5, NAN, -0.0 };
+    const int booleans[3] = { 0, 1, 2 };
+    const xmlChar *strs[3];
+    xp3Sequence *seqs[4];
+    double number = 0;
+    size_t i;
+    int ok;
+
+    strs[0] = BAD_CAST "a";
+    strs[1] = BAD_CAST "b";
+    strs[2] = BAD_CAST "c";
+    seqs[0] = xp3NewIntegerSequence(integers, 3);
+    seqs[1] = xp3NewDoubleSequence(doubles, 3);
+    seqs[2] = xp3NewBooleanSequence(booleans, 3);
+    seqs[3] = xp3NewStringSequence(strs, 3);
+    ok = (xp3SequenceDouble(decimal, 0, &number) == 0) && (number == 1.5);
+    for (i = 0; i < 4; i++) {
+        if (xp3SequenceLength(seqs[i]) != 3)
+            ok = 0;
+        xp3FreeSequence(seqs[i]);
+    }
+    return(ok);
+}
+
+static void
+testBindingAllocationFailures(void) {
+    xp3Sequence *decimal = evaluate(NULL, "1.5");
+    int i;
+
+    check(bindingWork(decimal), "binding work without failures");
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: binding allocation-failure tests skipped: this "
+               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        xp3FreeSequence(decimal);
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        int injected;
+        int ok;
+
+        xp3TestAllocFailAt(i);
+        ok = bindingWork(decimal);
+        injected = xp3TestAllocFailed();
+        xp3TestAllocFailAt(-1);
+        if (!injected) {
+            check(ok, "binding work complete after allocation failures");
+            break;
+        }
+        check(!ok, "a failed allocation fails the binding work");
+    }
+    check(i > 0 && i < 1000, "binding allocation failure points exercised");
+    xp3TestAllocRestore();
+    xp3FreeSequence(decimal);
 }
 
 /*
@@ -1931,6 +2258,9 @@ main(void) {
     testBoolean();
     testErrorPositions();
     testSequences();
+    testReadingItems();
+    testBuildingSequences();
+    testBindingAllocationFailures();
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     testLocale();

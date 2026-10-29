@@ -327,12 +327,23 @@ int  xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error *
 
 /* Sequences: immutable and reference counted */
 xp3Sequence  *xp3NewNodeSequence(xmlNode **nodes, size_t count);
-xp3Sequence  *xp3NewStringSequence(const xmlChar *str);
+xp3Sequence  *xp3NewStringSequence(const xmlChar **strs, size_t count);
+xp3Sequence  *xp3NewIntegerSequence(const int64_t *values, size_t count);
+xp3Sequence  *xp3NewDoubleSequence(const double *values, size_t count);
+xp3Sequence  *xp3NewBooleanSequence(const int *values, size_t count);   /* 0 false, else true */
 void          xp3FreeSequence(xp3Sequence *seq);
 size_t        xp3SequenceLength(const xp3Sequence *seq);
 int           xp3SequenceItemKind(const xp3Sequence *seq, size_t i);     /* xp3ItemKind, -1 past the end */
 xmlNode      *xp3SequenceNode(const xp3Sequence *seq, size_t i);
-xmlChar      *xp3SequenceStringValue(const xp3Sequence *seq, size_t i);  /* caller frees with xmlFree */
+xmlChar      *xp3SequenceStringValue(const xp3Sequence *seq, size_t i);  /* caller frees with xmlFree; exact for integers and decimals */
+int           xp3SequenceAtomicType(const xp3Sequence *seq, size_t i);   /* xp3AtomicType, -1 if not atomic */
+int           xp3SequenceInteger(const xp3Sequence *seq, size_t i, int64_t *v);  /* 0, 1 outside int64_t, -1 */
+int           xp3SequenceDouble(const xp3Sequence *seq, size_t i, double *v);    /* any numeric, as cast to xs:double */
+int           xp3SequenceBoolean(const xp3Sequence *seq, size_t i);     /* xs:boolean only: 1, 0, -1 */
+
+/* Atomic types: xp3AtomicType, fixed values, new types only appended */
+const xmlChar *xp3AtomicTypeName(xp3AtomicType type);                    /* "integer" */
+int            xp3AtomicTypeDerivesFrom(xp3AtomicType type, xp3AtomicType ancestor);
 
 /* Errors */
 const xmlChar *xp3ErrorCode(const xp3Error *err);      /* e.g. "FOAR0001" */
