@@ -254,4 +254,46 @@ xp3FnRound(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnRoundHalfToEven(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3MathPi(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathExp(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathExp10(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathLog(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathLog10(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathPow(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathSqrt(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathSin(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathCos(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathTan(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathAsin(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathAcos(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathAtan(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3MathAtan2(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

@@ -830,6 +830,78 @@ static const xp3EvalCase xp3Cases[] = {
       "double:NaN double:-INF" },
     { "round-half-to-even(1, '1')", "error:XPTY0004" },
 
+    /* Trigonometric and exponential functions (4.8) */
+    { "math:pi(), 2 * math:pi()",
+      "double:3.141592653589793 double:6.283185307179586" },
+    { "math:exp(()), math:exp(0), math:exp(-1), math:exp(xs:double('INF')), "
+      "math:exp(xs:double('-INF')), math:exp(1000)",
+      "double:1 double:0.36787944117144233 double:INF double:0 double:INF" },
+    { "math:exp10(()), math:exp10(0), math:exp10(1), math:exp10(-1), "
+      "math:exp10(0.5), math:exp10(xs:double('-INF')), math:exp10(400)",
+      "double:1 double:10 double:0.1 double:3.1622776601683795 double:0 "
+      "double:INF" },
+    { "math:log(()), math:log(0), math:log(-0e0), math:log(-1), math:log(2), "
+      "math:log(xs:double('INF')), math:log(xs:double('-INF'))",
+      "double:-INF double:-INF double:NaN double:0.6931471805599453 "
+      "double:INF double:NaN" },
+    { "math:log10(()), math:log10(1e3), math:log10(1e-3), math:log10(0), "
+      "math:log10(-1), math:log10(2)",
+      "double:3 double:-3 double:-INF double:NaN double:0.3010299956639812" },
+    { "math:sqrt(()), math:sqrt(0e0), math:sqrt(-0e0), math:sqrt(2), "
+      "math:sqrt(-2), math:sqrt(xs:double('INF')), "
+      "math:sqrt(xs:double('-INF')), math:sqrt(1e6)",
+      "double:0 double:-0 double:1.4142135623730951 double:NaN double:INF "
+      "double:NaN double:1000" },
+    { "math:sin(()), math:sin(-0e0), math:sin(xs:double('INF')), "
+      "math:cos(()), math:cos(-0e0), math:cos(xs:double('NaN')), "
+      "math:tan(()), math:tan(-0e0), math:tan(xs:double('-INF'))",
+      "double:-0 double:NaN double:1 double:NaN double:-0 double:NaN" },
+    { "math:asin(()), math:asin(-0e0), math:asin(1), math:asin(2), "
+      "math:acos(()), math:acos(1), math:acos(-1), math:acos(-1.5), "
+      "math:atan(()), math:atan(-0e0), math:atan(xs:double('INF'))",
+      "double:-0 double:1.5707963267948966 double:NaN double:0 "
+      "double:3.141592653589793 double:NaN double:-0 "
+      "double:1.5707963267948966" },
+    { "math:atan2(0e0, 0e0), math:atan2(-0e0, 0e0), math:atan2(0e0, -0e0), "
+      "math:atan2(-0e0, -1), math:atan2(1, 0), math:atan2(-0e0, 1), "
+      "math:atan2(xs:double('NaN'), 1)",
+      "double:0 double:-0 double:3.141592653589793 "
+      "double:-3.141592653589793 double:1.5707963267948966 double:-0 "
+      "double:NaN" },
+    { "math:atan2((), 1)", "error:XPTY0004" },
+    { "math:sqrt('4')", "error:XPTY0004" },
+    { "math:sqrt(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "math:pow((), 93.7), math:pow(2, 3), math:pow(-2, 3), math:pow(2, -3), "
+      "math:pow(-2, -3), math:pow(0, 0), math:pow(xs:double('NaN'), 0), "
+      "math:pow(-0e0, 3), math:pow(-0e0, -3), math:pow(0, -4)",
+      "double:8 double:-8 double:0.125 double:-0.125 double:1 double:1 "
+      "double:-0 double:-INF double:INF" },
+    { "math:pow(-0e0, -3.0e0), math:pow(-0e0, -3.1e0), "
+      "math:pow(-0e0, 3.1e0), math:pow(-1, xs:double('INF')), "
+      "math:pow(1, xs:double('NaN')), math:pow(-2.5e0, 2.00000001e0), "
+      "math:pow(16, 0.25e0), math:pow(-2.5e0, 2.0e0)",
+      "double:-INF double:INF double:0 double:1 double:1 double:NaN "
+      "double:2 double:6.25" },
+    { "math:pow(-1, 9007199254740993), math:pow(-1, 9007199254740992), "
+      "math:pow(-1, 99999999999999999999999), "
+      "math:pow(-1, -99999999999999999998), "
+      "math:pow(2, 99999999999999999999), "
+      "math:pow(-2, 99999999999999999999), "
+      "math:pow(-0.5e0, 99999999999999999999), "
+      "math:pow(-0e0, -99999999999999999999)",
+      "double:-1 double:1 double:-1 double:1 double:INF double:-INF "
+      "double:-0 double:-INF" },
+    { "math:pow(xs:double('-INF'), 3), math:pow(xs:double('-INF'), -3), "
+      "math:pow(xs:double('-INF'), 2), "
+      "math:pow(xs:double('NaN'), 99999999999999999999)",
+      "double:-INF double:-0 double:INF double:NaN" },
+    { "math:pow(-2, xs:byte(3)), math:pow(-2, 3.0), "
+      "math:pow(2, xs:float(0.5)), math:pow(@a, 2), "
+      "math:pow(2, xs:untypedAtomic('3'))",
+      "double:-8 double:-8 double:1.4142135623730951 double:1 double:8" },
+    { "math:pow(2, ())", "error:XPTY0004" },
+    { "math:pow(2, 'a')", "error:XPTY0004" },
+
     /* Numbers (4.5.1) */
     { "number('12'), number(' 1.5e1 '), number(true()), number(@a)",
       "double:12 double:15 double:1 double:1" },
@@ -2571,6 +2643,16 @@ static const char *const xp3AllocNumericExpected =
     "decimal:1.5 integer:2 double:1 double:-0 decimal:1 decimal:3 "
     "integer:1200 double:35.42 float:0.1 decimal:2 double:12400 double:-0";
 
+/* The math functions, with the exponents of math:pow that allocate */
+static const char *const xp3AllocMath =
+    "(math:pi(), math:sqrt(4), math:pow(-1, 99999999999999999999), "
+    "math:pow(4, 0.5), math:pow(2, 3), math:log(@a), math:exp10(()), "
+    "math:atan2(0, -1))";
+
+static const char *const xp3AllocMathExpected =
+    "double:3.141592653589793 double:2 double:-1 double:2 double:8 "
+    "double:0 double:3.141592653589793";
+
 static xp3Sequence *
 allocatingWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     xp3StaticContext *sctx = xp3NewStaticContext();
@@ -2729,6 +2811,7 @@ main(void) {
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
     testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     testLocale();
 

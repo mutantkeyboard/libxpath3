@@ -1,5 +1,6 @@
 /*
- * xp3fnnumeric.c: the functions on numeric values
+ * xp3fnnumeric.c: the functions on numeric values and the math
+ * functions
  *
  * Implementations of the numeric functions of F&O 3.1,
  * https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/, bound
@@ -15,6 +16,11 @@
  * here it is converted to its exact decimal value, at most 1074 digits
  * after the point, rounded, and cast back. The shortest decimal that
  * reads back as the double would round 35.425e0 to 35.43, not 35.42.
+ *
+ * The math functions (F&O 3.1, 4.8) are those of IEEE 754-2008, which
+ * C99 Annex F gives libm for the special values too: log(0) is -INF,
+ * sqrt(-0) is -0, pow(NaN, 0) and pow(-1, INF) are 1, and so on. Where
+ * F&O differs from C, the function says so.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -430,4 +436,329 @@ xp3Value *
 xp3FnRoundHalfToEven(xp3FuncCall *call, xp3Value **args, int count) {
     return(roundNumber(call, args, count, XP3_ROUND_HALF_EVEN,
                        "fn:round-half-to-even"));
+}
+
+/*
+ * Trigonometric and exponential functions
+ */
+
+/* An xs:double result */
+static xp3Value *
+newDouble(xp3FuncCall *call, double value) {
+    return(xp3FuncAtomic(call, xp3AtomicNewDouble(value)));
+}
+
+/* The xs:double of an argument converted to xs:double or xs:double?,
+ * which is one item, never a range */
+static double
+argDouble(const xp3Value *value) {
+    return(value->u.single.u.atomic->u.d);
+}
+
+/* A function of one xs:double? argument: the empty sequence for the
+ * empty sequence */
+static xp3Value *
+mathApply(xp3FuncCall *call, const xp3Value *arg, double (*function)(double)) {
+    if (xp3ValueCount(arg) == 0)
+        return(xp3ValueEmpty());
+    return(newDouble(call, function(argDouble(arg))));
+}
+
+/* exp10 is not in C99. pow(10, x) is exact for whole x in range and
+ * within libm's error of pow otherwise. */
+static double
+exp10Double(double value) {
+    return(pow(10, value));
+}
+
+/**
+ * math:pi#0 (F&O 3.1, 4.8.1): the xs:double 3.141592653589793e0.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:double, or NULL on error
+ */
+xp3Value *
+xp3MathPi(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) args;
+    (void) count;
+    return(newDouble(call, 3.141592653589793));
+}
+
+/**
+ * math:exp#1 (F&O 3.1, 4.8.2): e to the power of the argument.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathExp(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], exp));
+}
+
+/**
+ * math:exp10#1 (F&O 3.1, 4.8.3): ten to the power of the argument.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathExp10(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], exp10Double));
+}
+
+/**
+ * math:log#1 (F&O 3.1, 4.8.4): the natural logarithm; -INF for zero,
+ * NaN below it.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathLog(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], log));
+}
+
+/**
+ * math:log10#1 (F&O 3.1, 4.8.5): the base-ten logarithm; -INF for
+ * zero, NaN below it.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathLog10(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], log10));
+}
+
+/*
+ * pown of IEEE 754-2008: x to the power of an integer, whose parity
+ * decides the sign exactly. C's pow takes the exponent as a double,
+ * which loses the parity of integers beyond 2^53: pow(-1, n) would be
+ * 1 for every odd n above it. So the magnitude is pow(|x|, n), and an
+ * odd n gives a negative x, including -0 and -INF, a negative result.
+ * Above 2^53 the exponent is rounded to a double, which only matters
+ * for an x within a few ulps of 1, where pow's own error is of the
+ * same order. Beyond int64_t, |x|^n is 0, 1 or INF, and so is
+ * pow(|x|, +-INF).
+ */
+static xp3Value *
+powInteger(xp3FuncCall *call, double x, const xp3Decimal *n) {
+    double exponent;
+    double magnitude;
+    int64_t small;
+    int odd = 0;
+
+    if (xp3DecimalToInt64(n, &small) == 0) {
+        exponent = (double) small;
+        odd = (small % 2 != 0);
+    } else {
+        exponent = (xp3DecimalSign(n) < 0) ? -HUGE_VAL : HUGE_VAL;
+        if (signbit(x) && !isnan(x)) {
+            xp3Decimal *two = xp3DecimalFromInt64(2);
+            xp3Decimal *remainder = NULL;
+            xp3ErrCode err = XP3_ERR_NO_MEMORY;
+
+            if (two != NULL)
+                err = xp3DecimalMod(n, two, &remainder);
+            xp3DecimalFree(two);
+            if (err != XP3_ERR_OK) {
+                xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+                return(NULL);
+            }
+            odd = (xp3DecimalSign(remainder) != 0);
+            xp3DecimalFree(remainder);
+        }
+    }
+    magnitude = pow(fabs(x), exponent);
+    if (signbit(x) && !isnan(x) && odd)
+        magnitude = -magnitude;
+    return(newDouble(call, magnitude));
+}
+
+/**
+ * math:pow#2 (F&O 3.1, 4.8.6): $x to the power of $y. An xs:integer
+ * $y, or a type derived from it, is exact, as pown of IEEE 754-2008
+ * takes it; any other number is promoted to xs:double for pow, whose
+ * special values are those of C99 Annex F: pow(-0e0, -3.0e0) is -INF,
+ * pow(-2.5e0, 2.00000001e0) NaN.
+ *
+ * @param call   the call
+ * @param args   $x (xs:double?) and $y (xs:numeric)
+ * @param count  2
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathPow(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3Value *result;
+    xp3Atomic *exponent;
+    xp3Atomic *promoted;
+    double x;
+    double y;
+
+    (void) count;
+    if (xp3ValueCount(args[0]) == 0)
+        return(xp3ValueEmpty());
+    x = argDouble(args[0]);
+    if (argNumber(call, args[1], &exponent) < 0)
+        return(NULL);
+
+    switch (xp3TypeRepresentation(exponent->type)) {
+        case XP3_REP_DECIMAL:
+            if (xp3TypeIsInteger(exponent->type)) {
+                result = powInteger(call, x, exponent->u.dec);
+                xp3AtomicUnref(exponent);
+                return(result);
+            }
+            /* Rounded once, as the cast does */
+            if (xp3CastAtomic(exponent, XP3_TYPE_DOUBLE, &promoted) !=
+                XP3_ERR_OK) {
+                xp3AtomicUnref(exponent);
+                xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+                return(NULL);
+            }
+            y = promoted->u.d;
+            xp3AtomicUnref(promoted);
+            break;
+        case XP3_REP_FLOAT:
+            y = exponent->u.f;
+            break;
+        default:
+            y = exponent->u.d;
+            break;
+    }
+    xp3AtomicUnref(exponent);
+    return(newDouble(call, pow(x, y)));
+}
+
+/**
+ * math:sqrt#1 (F&O 3.1, 4.8.7): the non-negative square root; NaN
+ * below zero, and -0 for -0.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathSqrt(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], sqrt));
+}
+
+/**
+ * math:sin#1 (F&O 3.1, 4.8.8): the sine of an angle in radians.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathSin(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], sin));
+}
+
+/**
+ * math:cos#1 (F&O 3.1, 4.8.9): the cosine of an angle in radians. The
+ * notes of 4.8.9 say the result for a zero is the zero, copied from
+ * math:sin; the examples, and IEEE, give 1.0e0, as cos does.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathCos(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], cos));
+}
+
+/**
+ * math:tan#1 (F&O 3.1, 4.8.10): the tangent of an angle in radians.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathTan(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], tan));
+}
+
+/**
+ * math:asin#1 (F&O 3.1, 4.8.11): the arc sine, from -pi/2 to pi/2;
+ * NaN beyond -1 and 1.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathAsin(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], asin));
+}
+
+/**
+ * math:acos#1 (F&O 3.1, 4.8.12): the arc cosine, from 0 to pi; NaN
+ * beyond -1 and 1.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathAcos(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], acos));
+}
+
+/**
+ * math:atan#1 (F&O 3.1, 4.8.13): the arc tangent, from -pi/2 to pi/2.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:double?
+ * @param count  1
+ * @returns an xs:double or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3MathAtan(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(mathApply(call, args[0], atan));
+}
+
+/**
+ * math:atan2#2 (F&O 3.1, 4.8.14): the angle of the point ($x, $y),
+ * from -pi to pi, with the signs of zeros deciding the quadrant:
+ * math:atan2(-0.0e0, -1) is -pi.
+ *
+ * @param call   the call
+ * @param args   $y and $x, xs:double
+ * @param count  2
+ * @returns an xs:double, or NULL on error
+ */
+xp3Value *
+xp3MathAtan2(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(newDouble(call, atan2(argDouble(args[0]), argDouble(args[1]))));
 }

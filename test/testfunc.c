@@ -363,6 +363,16 @@ testImplementations(void) {
         { "error", 2, XP3_FUNC_NONDETERMINISTIC },
         { "error", 3, XP3_FUNC_NONDETERMINISTIC }
     };
+    /* All of them may be folded */
+    static const struct {
+        const char *name;
+        int arity;
+    } math[] = {
+        { "pi", 0 }, { "exp", 1 }, { "exp10", 1 }, { "log", 1 },
+        { "log10", 1 }, { "pow", 2 }, { "sqrt", 1 }, { "sin", 1 },
+        { "cos", 1 }, { "tan", 1 }, { "asin", 1 }, { "acos", 1 },
+        { "atan", 1 }, { "atan2", 2 }
+    };
     size_t count = 0;
     size_t i;
 
@@ -378,11 +388,22 @@ testImplementations(void) {
         check((info != NULL) && (xp3FuncImplementation(info) != NULL) &&
               (info->flags == implemented[i].flags), what);
     }
+    for (i = 0; i < sizeof(math) / sizeof(math[0]); i++) {
+        const xp3FuncInfo *info = lookup(MATH, math[i].name, math[i].arity,
+                                         XP3_XPATH_30);
+        char what[200];
+
+        snprintf(what, sizeof(what), "math:%s#%d implemented", math[i].name,
+                 math[i].arity);
+        check((info != NULL) && (xp3FuncImplementation(info) != NULL) &&
+              (info->flags == 0), what);
+    }
     for (i = 0; i < xp3FuncCount(); i++) {
         if (xp3FuncImplementation(xp3FuncAt(i)) != NULL)
             count++;
     }
-    check(count == sizeof(implemented) / sizeof(implemented[0]),
+    check(count == sizeof(implemented) / sizeof(implemented[0]) +
+                   sizeof(math) / sizeof(math[0]),
           "no other function implemented");
     check(xp3FuncImplementation(lookup(FN, "upper-case", 1,
                                        XP3_XPATH_31)) == NULL,
