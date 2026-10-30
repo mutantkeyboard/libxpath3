@@ -58,6 +58,13 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     /* Numbers (4) */
     [XP3_FN_NUMBER_0] = xp3FnNumber,
     [XP3_FN_NUMBER_1] = xp3FnNumber,
+    [XP3_FN_ABS_1] = xp3FnAbs,
+    [XP3_FN_CEILING_1] = xp3FnCeiling,
+    [XP3_FN_FLOOR_1] = xp3FnFloor,
+    [XP3_FN_ROUND_1] = xp3FnRound,
+    [XP3_FN_ROUND_2] = xp3FnRound,
+    [XP3_FN_ROUND_HALF_TO_EVEN_1] = xp3FnRoundHalfToEven,
+    [XP3_FN_ROUND_HALF_TO_EVEN_2] = xp3FnRoundHalfToEven,
     /* Booleans (7) */
     [XP3_FN_TRUE_0] = xp3FnTrue,
     [XP3_FN_FALSE_0] = xp3FnFalse,

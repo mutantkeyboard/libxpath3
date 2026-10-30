@@ -223,4 +223,20 @@ xp3FnExactlyOne(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnCount(xp3FuncCall *call, xp3Value **args, int count);
 
+/* Implementations in xp3fnnumeric.c */
+xp3Value *
+xp3FnAbs(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCeiling(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnFloor(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnRound(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnRoundHalfToEven(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

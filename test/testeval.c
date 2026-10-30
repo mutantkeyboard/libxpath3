@@ -732,6 +732,104 @@ static const xp3EvalCase xp3Cases[] = {
     { "data(), data(comment())", "untypedAtomic:onetwotail string:c" },
     { "data(1 to 3)", "integer:1 integer:2 integer:3" },
 
+    /* Functions on numeric values (4.4) */
+    { "abs(-1), abs(2), abs(-1.5), abs(1.5), abs(-0.0), abs(())",
+      "integer:1 integer:2 decimal:1.5 decimal:1.5 decimal:0" },
+    { "abs(-1.5e0), abs(xs:float('-2.5')), abs(-0e0), abs(xs:float('-0'))",
+      "double:1.5 float:2.5 double:0 float:0" },
+    { "abs(xs:double('-INF')), abs(xs:float('-INF')), "
+      "abs(xs:double('NaN')), abs(xs:float('NaN'))",
+      "double:INF float:INF double:NaN float:NaN" },
+    { "abs(xs:byte(-4)), abs(xs:positiveInteger(4)), "
+      "abs(xs:negativeInteger(-99999999999999999999))",
+      "integer:4 integer:4 integer:99999999999999999999" },
+    { "abs(xs:byte(-4)) instance of xs:byte, "
+      "abs(xs:unsignedShort(4)) instance of xs:unsignedShort, "
+      "abs(xs:short(4)) instance of xs:integer, "
+      "abs(xs:decimal(-1)) instance of xs:integer",
+      "boolean:false boolean:false boolean:true boolean:false" },
+    { "abs(@a), abs(xs:untypedAtomic('-3'))", "double:1 double:3" },
+    { "abs('1')", "error:XPTY0004" },
+    { "abs((1, 2))", "error:XPTY0004" },
+    { "abs(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "ceiling(10.5), ceiling(-10.5), ceiling(0.001), ceiling(-0.001), "
+      "ceiling(3), ceiling(xs:byte(-3)), ceiling(())",
+      "decimal:11 decimal:-10 decimal:1 decimal:0 integer:3 integer:-3" },
+    { "floor(10.5), floor(-10.5), floor(0.001), floor(-0.001), "
+      "floor(xs:long(7)), floor(())",
+      "decimal:10 decimal:-11 decimal:0 decimal:-1 integer:7" },
+    { "ceiling(-0.5e0), ceiling(0.5e0), ceiling(-0e0), floor(-0.5e0), "
+      "floor(-0e0), floor(0.5e0), ceiling(1e300), floor(xs:float('-1.5'))",
+      "double:-0 double:1 double:-0 double:-1 double:-0 double:0 "
+      "double:1.0E300 float:-2" },
+    { "ceiling(xs:double('-INF')), floor(xs:float('INF')), "
+      "ceiling(xs:double('NaN')), floor(xs:float('NaN'))",
+      "double:-INF float:INF double:NaN float:NaN" },
+    { "ceiling(1.5) instance of xs:decimal, floor(xs:int(1)) instance of "
+      "xs:int, floor(xs:int(1)) instance of xs:integer",
+      "boolean:true boolean:false boolean:true" },
+    { "round(2.5), round(2.4999), round(-2.5), round(-2.51), round(xs:int(7))",
+      "decimal:3 decimal:2 decimal:-2 decimal:-3 integer:7" },
+    { "round(1.125, 2), round(xs:decimal('12.345'), 2), round(8452, -2), "
+      "round(1234, -2), round(-1250, -2), round(5, -1), round(-5, -1)",
+      "decimal:1.13 decimal:12.35 integer:8500 integer:1200 integer:-1200 "
+      "integer:10 integer:0" },
+    { "round(1.5, 1000000), round(1.5, 99999999999999999999), "
+      "round(123, -1000000), round(-5.5, -99999999999999999999), "
+      "round(0.05, 1), round(-0.05, 1), round(0.0001, 3)",
+      "decimal:1.5 decimal:1.5 integer:0 decimal:0 decimal:0.1 decimal:0 "
+      "decimal:0" },
+    { "round(2.5e0), round(-2.5e0), round(-0.4e0), round(-0.5e0), "
+      "round(-0.6e0), round(0.49999999999999994e0), round(xs:float('-1.5'))",
+      "double:3 double:-2 double:-0 double:-0 double:-1 double:0 float:-1" },
+    { "round(35.425e0, 2), round(3.1415e0, 2), round(-0.04e0, 1), "
+      "round(1.5e0, 1000000), round(1e300, -1000000), "
+      "round(-1e300, -1000000), round(1.7976931348623157E308, -308)",
+      "double:35.42 double:3.14 double:-0 double:1.5 double:0 double:-0 "
+      "double:INF" },
+    { "round(4.9e-324, 323), round(4.9e-324, 324), round(4.9e-324, 1074)",
+      "double:0 double:4.9E-324 double:4.9E-324" },
+    { "round(xs:float('1.25'), 1), round(xs:float('0.05'), 1), "
+      "round(xs:float(12345.6), -2), round(xs:float('-0.04'), 1), "
+      "round(xs:float('3.4028235E38'), -35)",
+      "float:1.3 float:0.1 float:12300 float:-0 float:INF" },
+    { "round(()), round((), 2), round(xs:double('NaN'), 2), "
+      "round(xs:double('-INF')), round(xs:float('INF'), -3), round(0e0, 2), "
+      "round(-0e0, -2)",
+      "double:NaN double:-INF float:INF double:0 double:-0" },
+    { "round(@a, 1), round(xs:untypedAtomic('2.5'))", "double:1 double:3" },
+    { "round(1.5, 1.0)", "error:XPTY0004" },
+    { "round(1.5, ())", "error:XPTY0004" },
+    { "round((1.5, 2))", "error:XPTY0004" },
+    { "round('1')", "error:XPTY0004" },
+    { "round(1.5, 1 to 1)", "decimal:1.5" },
+    { "round-half-to-even(0.5), round-half-to-even(1.5), "
+      "round-half-to-even(2.5), round-half-to-even(-2.5), "
+      "round-half-to-even(2.51), round-half-to-even(xs:short(-3))",
+      "decimal:0 decimal:2 decimal:2 decimal:-2 decimal:3 integer:-3" },
+    { "round-half-to-even(35612.25, -2), round-half-to-even(1.125, 2), "
+      "round-half-to-even(1.135, 2), round-half-to-even(xs:byte(-25), -1), "
+      "round-half-to-even(-35, -1), round-half-to-even(3.567812, 4294967296)",
+      "decimal:35600 decimal:1.12 decimal:1.14 integer:-20 integer:-40 "
+      "decimal:3.567812" },
+    { "round-half-to-even(2.5e0), round-half-to-even(3.5e0), "
+      "round-half-to-even(-0.5e0), round-half-to-even(-1.5e0), "
+      "round-half-to-even(3.567812e+3, 2), round-half-to-even(4.7564e-3, 2), "
+      "round-half-to-even(12350e0, -2), round-half-to-even(-12450e0, -2)",
+      "double:2 double:4 double:-0 double:-2 double:3567.81 double:0 "
+      "double:12400 double:-12400" },
+    { "round-half-to-even(xs:float('0.05'), 1), "
+      "round-half-to-even(xs:float('3.75'), 1), "
+      "round-half-to-even(xs:float('-0'), 1), "
+      "round-half-to-even(xs:float('150.015'), 2), "
+      "round-half-to-even(xs:float('-0.5'))",
+      "float:0.1 float:3.8 float:-0 float:150.01 float:-0" },
+    { "round-half-to-even(()), round-half-to-even((), -1), "
+      "round-half-to-even(xs:double('NaN')), "
+      "round-half-to-even(xs:double('-INF'), 2)",
+      "double:NaN double:-INF" },
+    { "round-half-to-even(1, '1')", "error:XPTY0004" },
+
     /* Numbers (4.5.1) */
     { "number('12'), number(' 1.5e1 '), number(true()), number(@a)",
       "double:12 double:15 double:1 double:1" },
@@ -1059,6 +1157,13 @@ testHugeNumbers(void) {
     checkRepeated("'", "7", XP3_DECIMAL_MAX_DIGITS + 10,
                   "' cast as xs:decimal", "error:FOCA0001",
                   "a string with too many digits for a decimal");
+    checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS, ", -1)",
+                  "error:FOAR0002", "rounding up past the limit of digits");
+    checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS,
+                  ", -99999999999)", "integer:0",
+                  "rounding to a unit beyond the limit of digits");
+    checkRepeated("floor(-0.", "9", XP3_DECIMAL_MAX_DIGITS - 1, ")",
+                  "decimal:-1", "the floor of a long fraction");
 }
 
 /*
@@ -2352,6 +2457,17 @@ static const char *const xp3AllocFunctionsExpected =
     "e:x#x1 e:x#x2 string:onetwotail double:NaN integer:10000000000 "
     "integer:8 integer:9 e:x#x1 integer:2 integer:1";
 
+/* The functions on numeric values */
+static const char *const xp3AllocNumeric =
+    "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
+    "round(2.5), round(1234, -2), round(35.425e0, 2), "
+    "round(xs:float('0.05'), 1), round-half-to-even(2.5), "
+    "round-half-to-even(12350e0, -2), round(-0.04e0, 1))";
+
+static const char *const xp3AllocNumericExpected =
+    "decimal:1.5 integer:2 double:1 double:-0 decimal:1 decimal:3 "
+    "integer:1200 double:35.42 float:0.1 decimal:2 double:12400 double:-0";
+
 static xp3Sequence *
 allocatingWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     xp3StaticContext *sctx = xp3NewStaticContext();
@@ -2508,6 +2624,7 @@ main(void) {
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
+    testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
     testLocale();
 
     if (failures == 0)
