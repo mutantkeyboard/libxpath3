@@ -347,6 +347,8 @@ testImplementations(void) {
         { "number", 1, 0 }, { "abs", 1, 0 }, { "ceiling", 1, 0 },
         { "floor", 1, 0 }, { "round", 1, 0 }, { "round", 2, 0 },
         { "round-half-to-even", 1, 0 }, { "round-half-to-even", 2, 0 },
+        { "sum", 1, 0 }, { "sum", 2, 0 }, { "avg", 1, 0 },
+        { "min", 1, XP3_FUNC_CONTEXT }, { "max", 1, XP3_FUNC_CONTEXT },
         { "head", 1, 0 }, { "tail", 1, 0 },
         { "reverse", 1, 0 }, { "subsequence", 2, 0 },
         { "subsequence", 3, 0 }, { "remove", 2, 0 },

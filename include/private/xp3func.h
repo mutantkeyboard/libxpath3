@@ -141,6 +141,9 @@ xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
 int
 xp3FuncSteps(xp3FuncCall *call, uint64_t steps);
 
+xp3LanguageLevel
+xp3FuncLevel(xp3FuncCall *call);
+
 void
 xp3FuncBuilderInit(xp3FuncCall *call, xp3SeqBuilder *builder);
 
@@ -222,6 +225,18 @@ xp3FnExactlyOne(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnCount(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSum(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnAvg(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMin(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMax(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnumeric.c */
 xp3Value *

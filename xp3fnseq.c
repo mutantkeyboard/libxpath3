@@ -1,5 +1,6 @@
 /*
- * xp3fnseq.c: the accessor, boolean, error and sequence functions
+ * xp3fnseq.c: the accessor, boolean, error, sequence and aggregate
+ * functions
  *
  * Implementations of built-in functions of F&O 3.1,
  * https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/, bound
@@ -9,9 +10,9 @@
  *
  * Sequences are shared, not copied, where a result is an argument or
  * a range of integers: fn:subsequence((1 to 1000000000), 5) is a range
- * again, and fn:count never expands one. Copying items counts a step
- * per item, and results respect the limit on sequence length, as
- * everywhere in the evaluator.
+ * again, and fn:count, fn:sum, fn:avg, fn:min and fn:max never expand
+ * one. Copying items counts a step per item, and results respect the
+ * limit on sequence length, as everywhere in the evaluator.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -755,6 +756,403 @@ xp3Value *
 xp3FnCount(xp3FuncCall *call, xp3Value **args, int count) {
     (void) count;
     return(newCount(call, xp3ValueCount(args[0])));
+}
+
+/*
+ * Aggregate functions
+ */
+
+/*
+ * A value as the aggregate functions take it (F&O 3.1, 14.4), with
+ * xs:untypedAtomic cast to xs:double. Takes over the item's reference
+ * and returns the value with one, or NULL after recording an error.
+ */
+static xp3Atomic *
+aggregateValue(xp3FuncCall *call, xp3Item item) {
+    xp3Atomic *atomic = item.u.atomic;
+    xp3Atomic *result = NULL;
+    xp3ErrCode err;
+
+    if (atomic->type != XP3_TYPE_UNTYPED_ATOMIC)
+        return(atomic);
+    err = xp3CastAtomic(atomic, XP3_TYPE_DOUBLE, &result);
+    if (err == XP3_ERR_FORG0001)
+        xp3FuncError(call, err, "the untyped value \"%.40s\" is not a "
+                     "valid xs:double", (const char *) atomic->u.str);
+    else if (err != XP3_ERR_OK)
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+    xp3AtomicUnref(atomic);
+    return(result);
+}
+
+/* Whether values of a type are durations, dates or times, which come
+ * with Part 10 */
+static int
+isTemporal(xp3TypeId type) {
+    xp3Representation rep = xp3TypeRepresentation(type);
+
+    return((rep == XP3_REP_DURATION) || (rep == XP3_REP_DATE_TIME));
+}
+
+/* Record the error of an operation of an aggregate function on two
+ * values */
+static void
+aggregateError(xp3FuncCall *call, xp3ErrCode err, const char *name,
+               const xp3Atomic *left, const xp3Atomic *right) {
+    if (err == XP3_ERR_FOAR0002)
+        xp3FuncError(call, err, "the result of %s is too large", name);
+    else if (err == XP3_ERR_NO_MEMORY)
+        xp3FuncError(call, err, NULL);
+    else if (left->type == right->type)
+        xp3FuncError(call, XP3_ERR_FORG0006, "%s got values of type "
+                     "xs:%s, which have no order", name,
+                     (const char *) xp3TypeLocalName(left->type));
+    else
+        xp3FuncError(call, XP3_ERR_FORG0006, "%s got values of the "
+                     "incompatible types xs:%s and xs:%s", name,
+                     (const char *) xp3TypeLocalName(left->type),
+                     (const char *) xp3TypeLocalName(right->type));
+}
+
+/* An arithmetic operation of an aggregate function, or NULL after
+ * recording an error */
+static xp3Atomic *
+aggregateArithmetic(xp3FuncCall *call, xp3AstOp op, const xp3Atomic *left,
+                    const xp3Atomic *right, const char *name) {
+    xp3Atomic *result = NULL;
+    xp3ErrCode err = xp3Arithmetic(op, left, right, &result);
+
+    if (err != XP3_ERR_OK)
+        aggregateError(call, err, name, left, right);
+    return(result);
+}
+
+/*
+ * The sum of a range first to last, without expanding it:
+ * (first + last) * n idiv 2 for n integers, or the average
+ * (first + last) div 2, which is an xs:decimal as for any integers.
+ */
+static xp3Atomic *
+rangeSum(xp3FuncCall *call, const xp3Value *range, int average,
+         const char *name) {
+    xp3Atomic *first = xp3AtomicNewInteger(range->u.range.first);
+    xp3Atomic *last = xp3AtomicNewInteger(range->u.range.last);
+    xp3Atomic *one = xp3AtomicNewInteger(1);
+    xp3Atomic *two = xp3AtomicNewInteger(2);
+    xp3Atomic *ends = NULL;
+    xp3Atomic *difference = NULL;
+    xp3Atomic *length = NULL;
+    xp3Atomic *product = NULL;
+    xp3Atomic *result = NULL;
+
+    if ((first == NULL) || (last == NULL) || (one == NULL) ||
+        (two == NULL)) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        goto done;
+    }
+    ends = aggregateArithmetic(call, XP3_OP_ADD, first, last, name);
+    if (ends == NULL)
+        goto done;
+    if (average) {
+        result = aggregateArithmetic(call, XP3_OP_DIV, ends, two, name);
+        goto done;
+    }
+    difference = aggregateArithmetic(call, XP3_OP_SUB, last, first, name);
+    if (difference != NULL)
+        length = aggregateArithmetic(call, XP3_OP_ADD, difference, one,
+                                     name);
+    if (length != NULL)
+        product = aggregateArithmetic(call, XP3_OP_MUL, ends, length, name);
+    if (product != NULL)
+        result = aggregateArithmetic(call, XP3_OP_IDIV, product, two, name);
+
+done:
+    xp3AtomicUnref(first);
+    xp3AtomicUnref(last);
+    xp3AtomicUnref(one);
+    xp3AtomicUnref(two);
+    xp3AtomicUnref(ends);
+    xp3AtomicUnref(difference);
+    xp3AtomicUnref(length);
+    xp3AtomicUnref(product);
+    return(result);
+}
+
+/*
+ * Add up the values of a sequence with +, so that numbers are promoted
+ * and overflow as for the operator. Only numbers can be added before
+ * Part 10 brings durations. Sets *sum to NULL for the empty sequence.
+ * Returns 0, or -1 after recording an error.
+ */
+static int
+sumValues(xp3FuncCall *call, const xp3Value *value, const char *name,
+          xp3Atomic **sum) {
+    xp3Iter iter;
+    xp3Item item;
+    int found;
+
+    *sum = NULL;
+    if (xp3FuncSteps(call, xp3ValueCount(value)) < 0)
+        return(-1);
+    xp3IterInit(&iter, value);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3Atomic *atomic = aggregateValue(call, item);
+        xp3Atomic *next;
+
+        if (atomic == NULL)
+            goto error;
+        if (!xp3TypeIsNumeric(atomic->type)) {
+            if (isTemporal(atomic->type))
+                xp3FuncError(call, XP3_ERR_UNSUPPORTED, "%s of durations "
+                             "is not implemented yet", name);
+            else
+                xp3FuncError(call, XP3_ERR_FORG0006, "%s got a value of "
+                             "type xs:%s, which is not a number", name,
+                             (const char *) xp3TypeLocalName(atomic->type));
+            xp3AtomicUnref(atomic);
+            goto error;
+        }
+        if (*sum == NULL) {
+            *sum = atomic;
+            continue;
+        }
+        next = aggregateArithmetic(call, XP3_OP_ADD, *sum, atomic, name);
+        xp3AtomicUnref(atomic);
+        if (next == NULL)
+            goto error;
+        xp3AtomicUnref(*sum);
+        *sum = next;
+    }
+    if (found < 0) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        goto error;
+    }
+    return(0);
+
+error:
+    xp3AtomicUnref(*sum);
+    *sum = NULL;
+    return(-1);
+}
+
+/**
+ * fn:sum#1 and #2 (F&O 3.1, 14.4.5): the values added with +, after
+ * casting xs:untypedAtomic to xs:double. A single value is returned
+ * as it is. The sum of the empty sequence is $zero, or the
+ * xs:integer 0 for fn:sum#1. A range is summed from its bounds.
+ *
+ * @param call   the call
+ * @param args   $arg (xs:anyAtomicType*) and $zero
+ *               (xs:anyAtomicType?)
+ * @param count  1 or 2
+ * @returns the sum, or NULL on error
+ */
+xp3Value *
+xp3FnSum(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3Atomic *sum;
+
+    if (xp3ValueCount(args[0]) == 0) {
+        if (count == 2)
+            return(xp3ValueRef(args[1]));
+        return(xp3FuncAtomic(call, xp3AtomicNewInteger(0)));
+    }
+    if (args[0]->shape == XP3_SEQ_RANGE) {
+        sum = rangeSum(call, args[0], 0, "fn:sum");
+        return((sum != NULL) ? xp3FuncAtomic(call, sum) : NULL);
+    }
+    if (sumValues(call, args[0], "fn:sum", &sum) < 0)
+        return(NULL);
+    return(xp3FuncAtomic(call, sum));
+}
+
+/**
+ * fn:avg#1 (F&O 3.1, 14.4.2): the sum of the values div their count,
+ * so the average of integers is an xs:decimal, divided as by the div
+ * operator (doc/DESIGN.md, D3). A range is averaged from its bounds.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:anyAtomicType*
+ * @param count  1
+ * @returns the average or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnAvg(xp3FuncCall *call, xp3Value **args, int count) {
+    uint64_t length = xp3ValueCount(args[0]);
+    xp3Atomic *sum;
+    xp3Atomic *divisor;
+    xp3Atomic *average;
+
+    (void) count;
+    if (length == 0)
+        return(xp3ValueEmpty());
+    if (args[0]->shape == XP3_SEQ_RANGE) {
+        average = rangeSum(call, args[0], 1, "fn:avg");
+        return((average != NULL) ? xp3FuncAtomic(call, average) : NULL);
+    }
+    if (sumValues(call, args[0], "fn:avg", &sum) < 0)
+        return(NULL);
+    /* Not a range, so the length is that of an array */
+    divisor = xp3AtomicNewInteger((int64_t) length);
+    if (divisor == NULL) {
+        xp3AtomicUnref(sum);
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(NULL);
+    }
+    average = aggregateArithmetic(call, XP3_OP_DIV, sum, divisor, "fn:avg");
+    xp3AtomicUnref(sum);
+    xp3AtomicUnref(divisor);
+    return((average != NULL) ? xp3FuncAtomic(call, average) : NULL);
+}
+
+/* Numeric primitive types in a sequence, for promotion in fn:min and
+ * fn:max */
+#define XP3_HAS_DECIMAL (1 << 0)
+#define XP3_HAS_FLOAT (1 << 1)
+#define XP3_HAS_DOUBLE (1 << 2)
+
+/*
+ * fn:min and fn:max (F&O 3.1, 14.4.4 and 14.4.3): the value for which
+ * op (lt or gt) holds against every other, compared as by the value
+ * comparison. The value keeps its type, unless the sequence mixes
+ * xs:decimal, xs:float and xs:double, which promotes it to xs:float or
+ * xs:double; if there is NaN, the result is NaN. Strings need the
+ * codepoint collation, which comes with the string functions.
+ */
+static xp3Value *
+extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
+             const char *name) {
+    xp3LanguageLevel level = xp3FuncLevel(call);
+    xp3Atomic *best = NULL;
+    xp3Atomic *result;
+    xp3TypeId target;
+    xp3ErrCode err;
+    xp3Iter iter;
+    xp3Item item;
+    int numbers = 0;
+    int strings = 0;
+    int nan = 0;
+    int found;
+
+    if (xp3ValueCount(value) == 0)
+        return(xp3ValueEmpty());
+    if (value->shape == XP3_SEQ_RANGE)
+        return(xp3FuncAtomic(call, xp3AtomicNewInteger(
+            (op == XP3_OP_VAL_LT) ? value->u.range.first :
+                                    value->u.range.last)));
+    if (xp3FuncSteps(call, xp3ValueCount(value)) < 0)
+        return(NULL);
+
+    xp3IterInit(&iter, value);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3Atomic *atomic = aggregateValue(call, item);
+        int better;
+
+        if (atomic == NULL)
+            goto error;
+        if (isTemporal(atomic->type)) {
+            xp3FuncError(call, XP3_ERR_UNSUPPORTED, "%s of dates, times "
+                         "and durations is not implemented yet", name);
+            xp3AtomicUnref(atomic);
+            goto error;
+        }
+        if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_DECIMAL)) {
+            numbers |= XP3_HAS_DECIMAL;
+        } else if (atomic->type == XP3_TYPE_FLOAT) {
+            numbers |= XP3_HAS_FLOAT;
+            nan |= isnan(atomic->u.f);
+        } else if (atomic->type == XP3_TYPE_DOUBLE) {
+            numbers |= XP3_HAS_DOUBLE;
+            nan |= isnan(atomic->u.d);
+        } else if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_STRING) ||
+                   (atomic->type == XP3_TYPE_ANY_URI)) {
+            strings = 1;
+        }
+        /* The first value is compared with itself, so that a single
+         * value without an order, such as a QName, is an error too */
+        err = xp3CompareAtomics(op, atomic, (best != NULL) ? best : atomic,
+                                level, &better);
+        if (err != XP3_ERR_OK) {
+            aggregateError(call, err, name, atomic,
+                           (best != NULL) ? best : atomic);
+            xp3AtomicUnref(atomic);
+            goto error;
+        }
+        if ((best == NULL) || better) {
+            xp3AtomicUnref(best);
+            best = atomic;
+        } else {
+            xp3AtomicUnref(atomic);
+        }
+    }
+    if (found < 0) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        goto error;
+    }
+    if (strings) {
+        xp3FuncError(call, XP3_ERR_UNSUPPORTED, "%s of strings needs the "
+                     "codepoint collation, which is not implemented yet",
+                     name);
+        goto error;
+    }
+
+    /* More than one numeric primitive type promotes all of them */
+    if (numbers & (numbers - 1))
+        target = (numbers & XP3_HAS_DOUBLE) ? XP3_TYPE_DOUBLE :
+                                              XP3_TYPE_FLOAT;
+    else
+        target = best->type;
+    if (nan) {
+        xp3AtomicUnref(best);
+        if (target == XP3_TYPE_FLOAT)
+            return(xp3FuncAtomic(call, xp3AtomicNewFloat(
+                (float) xp3DoubleNaN())));
+        return(xp3FuncAtomic(call, xp3AtomicNewDouble(xp3DoubleNaN())));
+    }
+    if (target == best->type)
+        return(xp3FuncAtomic(call, best));
+    err = xp3CastAtomic(best, target, &result);
+    xp3AtomicUnref(best);
+    if (err != XP3_ERR_OK) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(NULL);
+    }
+    return(xp3FuncAtomic(call, result));
+
+error:
+    xp3AtomicUnref(best);
+    return(NULL);
+}
+
+/**
+ * fn:min#1 (F&O 3.1, 14.4.4): the lowest value, after casting
+ * xs:untypedAtomic to xs:double. The lowest of a range is its first
+ * integer.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:anyAtomicType*
+ * @param count  1
+ * @returns the value or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnMin(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(extremeValue(call, args[0], XP3_OP_VAL_LT, "fn:min"));
+}
+
+/**
+ * fn:max#1 (F&O 3.1, 14.4.3): the highest value, after casting
+ * xs:untypedAtomic to xs:double. The highest of a range is its last
+ * integer.
+ *
+ * @param call   the call
+ * @param args   the argument, xs:anyAtomicType*
+ * @param count  1
+ * @returns the value or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnMax(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(extremeValue(call, args[0], XP3_OP_VAL_GT, "fn:max"));
 }
 
 /*

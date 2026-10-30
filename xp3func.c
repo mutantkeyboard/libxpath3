@@ -84,6 +84,11 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_ONE_OR_MORE_1] = xp3FnOneOrMore,
     [XP3_FN_EXACTLY_ONE_1] = xp3FnExactlyOne,
     [XP3_FN_COUNT_1] = xp3FnCount,
+    [XP3_FN_SUM_1] = xp3FnSum,
+    [XP3_FN_SUM_2] = xp3FnSum,
+    [XP3_FN_AVG_1] = xp3FnAvg,
+    [XP3_FN_MIN_1] = xp3FnMin,
+    [XP3_FN_MAX_1] = xp3FnMax,
     /* The focus (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
     [XP3_FN_LAST_0] = xp3FnLast

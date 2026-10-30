@@ -2964,6 +2964,18 @@ xp3FuncSteps(xp3FuncCall *call, uint64_t steps) {
 }
 
 /**
+ * Get the language level of the evaluation, for operations that differ
+ * between the levels, such as ordering binary values.
+ *
+ * @param call  the call
+ * @returns the language level
+ */
+xp3LanguageLevel
+xp3FuncLevel(xp3FuncCall *call) {
+    return(call->ev->level);
+}
+
+/**
  * Start building a sequence with the limits of the evaluation.
  *
  * @param call     the call

@@ -96,13 +96,13 @@ The gate is compile-only mode: each expression is compiled with the namespaces a
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
 
-Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `||`, the simple map `!`, arrows to named functions, `cast`, `castable`, `instance of` and `treat` are evaluated. Function calls apply the function conversion rules, and the first built-in functions are implemented: `true`, `false`, `not`, `boolean`, `exists`, `empty`, `count`, `exactly-one`, `zero-or-one`, `one-or-more`, `string`, `data`, `number`, `abs`, `ceiling`, `floor`, `round`, `round-half-to-even`, `position`, `last`, `head`, `tail`, `reverse`, `subsequence`, `remove`, `insert-before` and `error`; the others raise `UNSUPPORTED` when called. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit:
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `||`, the simple map `!`, arrows to named functions, `cast`, `castable`, `instance of` and `treat` are evaluated. Function calls apply the function conversion rules, and the first built-in functions are implemented: `true`, `false`, `not`, `boolean`, `exists`, `empty`, `count`, `sum`, `avg`, `min` and `max` (not yet on strings), `exactly-one`, `zero-or-one`, `one-or-more`, `string`, `data`, `number`, `abs`, `ceiling`, `floor`, `round`, `round-half-to-even`, `position`, `last`, `head`, `tail`, `reverse`, `subsequence`, `remove`, `insert-before` and `error`; the others raise `UNSUPPORTED` when called. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit:
 
 | Spec | Passed | Failed | Not judged |
 |---|---|---|---|
-| XPath 2.0 | 7,763 | 3 | 7,527 |
-| XPath 3.0 | 8,235 | 4 (1 known) | 11,134 |
-| XPath 3.1 | 8,388 | 3 (1 known) | 13,640 |
+| XPath 2.0 | 8,509 | 3 | 6,781 |
+| XPath 3.0 | 8,993 | 4 (1 known) | 10,376 |
+| XPath 3.1 | 9,154 | 3 (1 known) | 12,874 |
 
 The failures are the known one above, two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1), and at 2.0 and 3.0 `fn-error/K-ErrorFunc-4`: `fn:error(())` raises FOER0000 as F&O 3.1 defines it, while F&O 1.0 and 3.0 required a QName, so the test expects XPTY0004 there; the 3.1 signatures apply at every level (`doc/DESIGN.md` 6.3). CI runs this as a report, which doesn't fail the pipeline yet. It also evaluates every test a second time without constant folding and path rewrites (`qt3run -e -c`), and any test whose outcome differs fails the pipeline.
 

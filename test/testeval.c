@@ -929,6 +929,77 @@ static const xp3EvalCase xp3Cases[] = {
     { "count(-9223372036854775808 to 9223372036854775806)",
       "integer:18446744073709551615" },
 
+    /* Aggregate functions (14.4) */
+    { "sum((1, 2, 3)), sum(()), sum((), ()), sum((), 'z'), sum((1, 2), 'z')",
+      "integer:6 integer:0 string:z integer:3" },
+    { "sum((1, 2.5)), sum((1, 2e0)), sum((1, xs:float(2))), "
+      "sum((xs:float(1), 2e0))",
+      "decimal:3.5 double:3 float:3 double:3" },
+    { "sum(xs:byte(1)), sum(xs:byte(1)) instance of xs:byte, "
+      "sum((xs:byte(1), xs:byte(2))) instance of xs:byte",
+      "byte:1 boolean:true boolean:false" },
+    { "sum((@a, 2)), sum(xs:untypedAtomic('1.5')), sum(@a)",
+      "double:3 double:1.5 double:1" },
+    { "sum((1, xs:double('NaN'))), sum((xs:double('INF'), "
+      "xs:double('-INF'))), sum((-0e0, -0e0)), sum(-0e0), "
+      "sum((xs:float('NaN'), 1))",
+      "double:NaN double:NaN double:-0 double:-0 float:NaN" },
+    { "sum(1 to 10), sum(1 to 10000000000), sum(-5 to 5), "
+      "sum(9223372036854775806 to 9223372036854775807), "
+      "sum(-9223372036854775808 to 9223372036854775806), sum(7 to 7)",
+      "integer:55 integer:50000000005000000000 integer:0 "
+      "integer:18446744073709551613 integer:-18446744073709551615 "
+      "integer:7" },
+    { "sum(('a', 1))", "error:FORG0006" },
+    { "sum((1, 'a'))", "error:FORG0006" },
+    { "sum('a')", "error:FORG0006" },
+    { "sum((true(), 1))", "error:FORG0006" },
+    { "sum(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "sum(x)", "error:FORG0001" },
+    { "avg((3, 4, 5)), avg(()), avg((1, 2)), avg(xs:byte(4)), "
+      "avg((1, 2, 2)) eq 5 div 3",
+      "decimal:4 decimal:1.5 decimal:4 boolean:true" },
+    { "avg(1 to 4), avg(1 to 10000000000), "
+      "avg(-9223372036854775808 to 9223372036854775806), avg(-3 to 4), "
+      "avg(3 to 3)",
+      "decimal:2.5 decimal:5000000000.5 decimal:-1 decimal:0.5 "
+      "decimal:3" },
+    { "avg((1, 2e0)), avg((xs:float('INF'), xs:float('-INF'))), "
+      "avg((3, 4, xs:float('NaN'))), avg((@a, 2)), avg(xs:float(1))",
+      "double:1.5 float:NaN float:NaN double:1.5 float:1" },
+    { "avg(('a', 1))", "error:FORG0006" },
+    { "avg(true())", "error:FORG0006" },
+    { "avg(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "min((3, 4, 5)), max((3, 4, 5)), min(()), max(()), "
+      "min(1 to 10000000000), max(1 to 10000000000), min(5 to 5)",
+      "integer:3 integer:5 integer:1 integer:10000000000 integer:5" },
+    { "max((xs:integer(5), xs:float(5.0), xs:double(0))), "
+      "min((xs:integer(5), xs:float(5), xs:double(10))), "
+      "min((1, xs:float(2))), max((2.5, xs:float(1))), "
+      "max((1, 2.5)), min((1, 2.5))",
+      "double:5 double:5 float:1 float:2.5 decimal:2.5 integer:1" },
+    { "min((xs:byte(3), 5)) instance of xs:byte, max((@a, 0)), "
+      "min(xs:untypedAtomic('2')), max(xs:short(4))",
+      "boolean:true double:1 double:2 short:4" },
+    { "min((1, xs:double('NaN'))), max((xs:double('NaN'), 1)), "
+      "min((xs:float('NaN'), 1)), max((xs:float('NaN'), 1e0)), "
+      "min(xs:double('NaN'))",
+      "double:NaN double:NaN float:NaN double:NaN double:NaN" },
+    { "min((true(), false())), max((false(), true())), max(false())",
+      "boolean:false boolean:true boolean:false" },
+    { "max((xs:hexBinary('0A'), xs:hexBinary('0B'))), "
+      "min((xs:base64Binary('AQ=='), xs:base64Binary('AA==')))",
+      "hexBinary:0B base64Binary:AA==" },
+    { "min((1, 'a'))", "error:FORG0006" },
+    { "max(('a', 1))", "error:FORG0006" },
+    { "min((true(), 1))", "error:FORG0006" },
+    { "max((xs:hexBinary('0A'), xs:base64Binary('AA==')))",
+      "error:FORG0006" },
+    { "min(('a', 'b'))", "error:UNSUPPORTED" },
+    { "max((xs:anyURI('a'), 'b'))", "error:UNSUPPORTED" },
+    { "min(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "max(x)", "error:FORG0001" },
+
     /* The focus (15) */
     { "position(), last()", "integer:1 integer:1" },
     { "(5, 6, 7)[position() = last()], x[last()], x[position() < 2]",
@@ -1157,6 +1228,10 @@ testHugeNumbers(void) {
     checkRepeated("'", "7", XP3_DECIMAL_MAX_DIGITS + 10,
                   "' cast as xs:decimal", "error:FOCA0001",
                   "a string with too many digits for a decimal");
+    checkRepeated("sum((1, ", "9", XP3_DECIMAL_MAX_DIGITS, "))",
+                  "error:FOAR0002", "a sum past the limit of digits");
+    checkRepeated("avg((1, ", "9", XP3_DECIMAL_MAX_DIGITS, "))",
+                  "error:FOAR0002", "an average past the limit of digits");
     checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS, ", -1)",
                   "error:FOAR0002", "rounding up past the limit of digits");
     checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS,
@@ -1328,6 +1403,24 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "(1, 2) ! string()", "string:1 string:2");
     checkEval(NULL, NULL, "('1', 'a') ! number()", "double:1 double:NaN");
     checkEval(NULL, NULL, "count((1, 2))", "integer:2");
+}
+
+/* Binary values are ordered from XPath 3.1 on, so fn:max can't
+ * compare them before */
+static void
+testAggregateLevels(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+
+    if ((sctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) < 0)) {
+        check(0, "static context at level 3.0");
+    } else {
+        checkEval(sctx, NULL, "max((xs:hexBinary('0A'), "
+                  "xs:hexBinary('0B')))", "error:FORG0006");
+        checkEval(sctx, NULL, "max(xs:hexBinary('0A'))", "error:FORG0006");
+        checkEval(sctx, NULL, "max((true(), false()))", "boolean:true");
+    }
+    xp3FreeStaticContext(sctx);
 }
 
 /*
@@ -2457,6 +2550,16 @@ static const char *const xp3AllocFunctionsExpected =
     "e:x#x1 e:x#x2 string:onetwotail double:NaN integer:10000000000 "
     "integer:8 integer:9 e:x#x1 integer:2 integer:1";
 
+/* The aggregate functions */
+static const char *const xp3AllocAggregate =
+    "(sum((1, 2.5, @a)), sum((), 'z'), sum(1 to 10000000000), "
+    "avg((1, 2)), avg(-3 to 4), min((3, xs:float(2))), max((@a, 0)), "
+    "min(1 to 5), max((true(), false())), sum((1, 2), ()))";
+
+static const char *const xp3AllocAggregateExpected =
+    "double:4.5 string:z integer:50000000005000000000 decimal:1.5 "
+    "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -2610,6 +2713,7 @@ main(void) {
     testManyBindings();
     testFocus();
     testFunctionFocus();
+    testAggregateLevels();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -2625,6 +2729,7 @@ main(void) {
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
     testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     testLocale();
 
     if (failures == 0)
