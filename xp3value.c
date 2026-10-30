@@ -909,10 +909,37 @@ constantItem(xp3Item item, xp3Item *copy) {
 }
 
 /**
+ * Whether a sequence holds atomic values only, which
+ * xp3ValueMakeConstant() needs: nodes, functions, maps and arrays
+ * can't be constants.
+ *
+ * @param value  the sequence
+ * @returns 1 if every item is atomic, also for the empty sequence and
+ *          ranges, otherwise 0
+ */
+int
+xp3ValueIsAtomic(const xp3Value *value) {
+    size_t i;
+
+    switch (value->shape) {
+        case XP3_SEQ_SINGLE:
+            return(value->u.single.kind == XP3_ITEM_ATOMIC);
+        case XP3_SEQ_ARRAY:
+            for (i = 0; i < value->u.array.count; i++) {
+                if (value->u.array.items[i].kind != XP3_ITEM_ATOMIC)
+                    return(0);
+            }
+            return(1);
+        default:
+            return(1);
+    }
+}
+
+/**
  * Make a constant from a value: a deep copy whose atomic values belong
  * to it alone, and whose counts never change, so that threads can
  * share it. Values with nodes, functions, maps or arrays can't be
- * constants.
+ * constants (xp3ValueIsAtomic()).
  *
  * @param value  the value, atomic values only
  * @returns the constant, to be freed with xp3ValueFreeConstant(), or

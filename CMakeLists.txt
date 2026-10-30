@@ -40,6 +40,7 @@ set(XP3_SOURCES
     xp3double.c
     xp3error.c
     xp3eval.c
+    xp3fnseq.c
     xp3func.c
     xp3lexer.c
     xp3nodes.c

@@ -739,6 +739,58 @@ testAllocationFailures(void) {
     xp3TestAllocRestore();
 }
 
+/*
+ * Constants hold atomic values only. Constant folding asks first, so
+ * that a value with nodes is a fold skipped, not a failed allocation.
+ */
+static void
+testConstants(void) {
+    xmlNode node;
+    xp3SeqBuilder builder;
+    xp3Value *nodes;
+    xp3Value *mixed;
+    xp3Value *atomics;
+    xp3Value *range = NULL;
+    xp3Value *constant;
+
+    memset(&node, 0, sizeof(node));
+    node.type = XML_ELEMENT_NODE;
+    nodes = xp3ValueSingle(xp3ItemFromNode(&node));
+    xp3SeqBuilderInit(&builder);
+    xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(xp3AtomicNewInteger(1)));
+    xp3SeqBuilderAdd(&builder, xp3ItemFromNode(&node));
+    mixed = xp3SeqBuilderFinish(&builder);
+    xp3SeqBuilderInit(&builder);
+    xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(xp3AtomicNewInteger(1)));
+    xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(xp3AtomicNewBoolean(0)));
+    atomics = xp3SeqBuilderFinish(&builder);
+    xp3ValueRange(1, 3, &range);
+    if ((nodes == NULL) || (mixed == NULL) || (atomics == NULL) ||
+        (range == NULL)) {
+        check(0, "constant test values");
+        goto done;
+    }
+
+    check(!xp3ValueIsAtomic(nodes), "a node is not atomic");
+    check(!xp3ValueIsAtomic(mixed), "a sequence with a node is not atomic");
+    check(xp3ValueIsAtomic(atomics), "atomic values");
+    check(xp3ValueIsAtomic(range), "a range is atomic");
+    check(xp3ValueIsAtomic(xp3ValueEmpty()), "the empty sequence");
+    check(xp3ValueMakeConstant(nodes) == NULL, "no constant with a node");
+    check(xp3ValueMakeConstant(mixed) == NULL,
+          "no constant with a node after an atomic value");
+    constant = xp3ValueMakeConstant(atomics);
+    check((constant != NULL) && (constant->refs == XP3_REFS_CONSTANT),
+          "a constant of atomic values");
+    xp3ValueFreeConstant(constant);
+
+done:
+    xp3ValueUnref(nodes);
+    xp3ValueUnref(mixed);
+    xp3ValueUnref(atomics);
+    xp3ValueUnref(range);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -748,6 +800,7 @@ main(void) {
     testAtomics();
     testSequences();
     testRanges();
+    testConstants();
     testNumberStrings("");
     testParseAllocation(0);
     testLocale();

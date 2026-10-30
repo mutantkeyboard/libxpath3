@@ -53,13 +53,19 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_XPTY0018]  = "XPTY0018",
     [XP3_ERR_XPTY0019]  = "XPTY0019",
     [XP3_ERR_XPTY0020]  = "XPTY0020",
+    [XP3_ERR_XPTY0117]  = "XPTY0117",
     [XP3_ERR_FOAR0001]  = "FOAR0001",
     [XP3_ERR_FOAR0002]  = "FOAR0002",
     [XP3_ERR_FORG0001]  = "FORG0001",
+    [XP3_ERR_FORG0003]  = "FORG0003",
+    [XP3_ERR_FORG0004]  = "FORG0004",
+    [XP3_ERR_FORG0005]  = "FORG0005",
     [XP3_ERR_FORG0006]  = "FORG0006",
     [XP3_ERR_FOCA0001]  = "FOCA0001",
     [XP3_ERR_FOCA0002]  = "FOCA0002",
     [XP3_ERR_FOCA0003]  = "FOCA0003",
+    [XP3_ERR_FOTY0013]  = "FOTY0013",
+    [XP3_ERR_FOTY0014]  = "FOTY0014",
     [XP3_ERR_USER]      = NULL      /* the QName is stored in the object */
 };
 

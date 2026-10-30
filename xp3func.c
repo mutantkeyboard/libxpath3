@@ -9,9 +9,14 @@
  * static context of that version.
  *
  * The table itself is codegen/functions.inc, generated from the W3C
- * specifications by codegen/genFunctions.py. Constructor functions
- * such as xs:integer() (F&O 3.1, 18) are not in it: they follow from
- * the atomic types in xp3types.c.
+ * specifications by codegen/genFunctions.py, with the types of the
+ * parameters and results that the function conversion rules need.
+ * Constructor functions such as xs:integer() (F&O 3.1, 18) are not in
+ * it: they follow from the atomic types in xp3types.c.
+ *
+ * The implementations are bound below, by the ids the generator gives
+ * the signatures. A signature without one compiles, and raises
+ * UNSUPPORTED when it is called (doc/DESIGN.md 7.2).
  *
  * The signature text is the one of F&O 3.1 at every level. Where a
  * type changed between the versions, as the argument of
@@ -32,10 +37,50 @@
 
 #include "private/xp3context.h"
 #include "private/xp3func.h"
+#include "private/xp3static.h"
 
 #include "codegen/functions.inc"
 
 #define XP3_TABLE_SIZE(t) (sizeof(t) / sizeof((t)[0]))
+
+/* The implementations, by signature; NULL for not implemented yet */
+static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
+    /* Accessors (F&O 3.1, 2) */
+    [XP3_FN_STRING_0] = xp3FnString,
+    [XP3_FN_STRING_1] = xp3FnString,
+    [XP3_FN_DATA_0] = xp3FnData,
+    [XP3_FN_DATA_1] = xp3FnData,
+    /* Errors (3) */
+    [XP3_FN_ERROR_0] = xp3FnError,
+    [XP3_FN_ERROR_1] = xp3FnError,
+    [XP3_FN_ERROR_2] = xp3FnError,
+    [XP3_FN_ERROR_3] = xp3FnError,
+    /* Numbers (4) */
+    [XP3_FN_NUMBER_0] = xp3FnNumber,
+    [XP3_FN_NUMBER_1] = xp3FnNumber,
+    /* Booleans (7) */
+    [XP3_FN_TRUE_0] = xp3FnTrue,
+    [XP3_FN_FALSE_0] = xp3FnFalse,
+    [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
+    [XP3_FN_NOT_1] = xp3FnNot,
+    /* Sequences (14) */
+    [XP3_FN_EMPTY_1] = xp3FnEmpty,
+    [XP3_FN_EXISTS_1] = xp3FnExists,
+    [XP3_FN_HEAD_1] = xp3FnHead,
+    [XP3_FN_TAIL_1] = xp3FnTail,
+    [XP3_FN_INSERT_BEFORE_3] = xp3FnInsertBefore,
+    [XP3_FN_REMOVE_2] = xp3FnRemove,
+    [XP3_FN_REVERSE_1] = xp3FnReverse,
+    [XP3_FN_SUBSEQUENCE_2] = xp3FnSubsequence,
+    [XP3_FN_SUBSEQUENCE_3] = xp3FnSubsequence,
+    [XP3_FN_ZERO_OR_ONE_1] = xp3FnZeroOrOne,
+    [XP3_FN_ONE_OR_MORE_1] = xp3FnOneOrMore,
+    [XP3_FN_EXACTLY_ONE_1] = xp3FnExactlyOne,
+    [XP3_FN_COUNT_1] = xp3FnCount,
+    /* The focus (15) */
+    [XP3_FN_POSITION_0] = xp3FnPosition,
+    [XP3_FN_LAST_0] = xp3FnLast
+};
 
 /* Indexed by xp3FuncNamespace */
 static const char *const xp3FuncNamespaces[] = {
@@ -177,6 +222,19 @@ xp3FuncNamespaceUri(xp3FuncNamespace ns) {
     if ((unsigned) ns >= XP3_TABLE_SIZE(xp3FuncNamespaces))
         return(NULL);
     return(BAD_CAST xp3FuncNamespaces[ns]);
+}
+
+/**
+ * Get the implementation of a signature.
+ *
+ * @param info  the signature, an entry of the table
+ * @returns the implementation, or NULL if the function is not
+ *          implemented yet
+ */
+xp3FuncImpl
+xp3FuncImplementation(const xp3FuncInfo *info) {
+    /* The ids are in the order of the table */
+    return(xp3FuncImpls[info - xp3Functions]);
 }
 
 /**

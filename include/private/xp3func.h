@@ -13,10 +13,14 @@
 #define XP3_XP3FUNC_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <libxml/xmlstring.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3ast.h"
+#include "private/xp3error.h"
+#include "private/xp3value.h"
 
 /* Namespace of a built-in function */
 typedef enum {
@@ -43,6 +47,26 @@ typedef enum {
                                      * ordering: fn:distinct-values,
                                      * fn:unordered, map:keys... */
 
+/*
+ * The type of a parameter or result, as a SequenceType of the parse
+ * tree (xp3ast.h) would give it:
+ *
+ *   ATOMIC_TYPE     type: an xp3TypeId, or XP3_SCHEMA_NUMERIC
+ *   KIND_TEST       type: an xp3KindTestKind; element(N) and
+ *                   document-node(E) keep only their kind
+ *   ANY_ITEM_TYPE   item()
+ *   FUNCTION_TEST,  function(*), map(*) and array(*); typed tests
+ *   MAP_TEST,       keep only their kind
+ *   ARRAY_TEST
+ *   NONE            "none", the result of fn:error, which never
+ *                   returns
+ */
+typedef struct {
+    xp3AstKind kind;
+    int type;
+    xp3Occurrence occurrence;
+} xp3FuncType;
+
 /* One signature of a built-in function, with a fixed arity */
 typedef struct _xp3FuncInfo xp3FuncInfo;
 
@@ -53,6 +77,10 @@ struct _xp3FuncInfo {
     xp3LanguageLevel level;     /* the first level that has it */
     int flags;
     const char *signature;      /* as written in F&O 3.1 */
+    xp3FuncType result;
+    const xp3FuncType *params;  /* arity of them, NULL for none; further
+                                 * arguments of a variadic function have
+                                 * the type of the last */
 };
 
 const xp3FuncInfo *
@@ -71,5 +99,128 @@ xp3FuncCount(void);
 
 const xp3FuncInfo *
 xp3FuncAt(size_t index);
+
+/*
+ * Implementations
+ *
+ * A function call is evaluated eagerly (doc/DESIGN.md 7.1): the
+ * evaluator evaluates the arguments, applies the function conversion
+ * rules of XPath 3.1, 3.1.5.2 to each, and passes them to the
+ * implementation, which so gets values of the declared types: for an
+ * xs:double? parameter, the empty sequence or one xs:double. The
+ * arguments are borrowed; the implementation returns a new value with
+ * one reference, or NULL after recording an error.
+ *
+ * Everything else an implementation needs from the evaluation goes
+ * through the call, which stays opaque: the focus, errors with their
+ * position, the step counter and the limits on sequences. Results with
+ * more than one item are built with xp3FuncBuilderInit() and its
+ * companions, so that limits and allocation failures behave as for
+ * every other expression.
+ */
+typedef struct _xp3FuncCall xp3FuncCall;
+
+typedef xp3Value *(*xp3FuncImpl)(xp3FuncCall *call, xp3Value **args,
+                                 int count);
+
+xp3FuncImpl
+xp3FuncImplementation(const xp3FuncInfo *info);
+
+/* The call interface, in xp3eval.c */
+int
+xp3FuncFocus(xp3FuncCall *call, xp3Item *item, uint64_t *position,
+             uint64_t *size);
+
+void
+xp3FuncError(xp3FuncCall *call, xp3ErrCode code, const char *format, ...);
+
+void
+xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
+                 const xmlChar *localName, const xmlChar *description);
+
+int
+xp3FuncSteps(xp3FuncCall *call, uint64_t steps);
+
+void
+xp3FuncBuilderInit(xp3FuncCall *call, xp3SeqBuilder *builder);
+
+int
+xp3FuncBuilderAdd(xp3FuncCall *call, xp3SeqBuilder *builder, xp3Item item);
+
+xp3Value *
+xp3FuncBuilderFinish(xp3FuncCall *call, xp3SeqBuilder *builder);
+
+xp3Value *
+xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic);
+
+xp3Value *
+xp3FuncAtomize(xp3FuncCall *call, xp3Value *value);
+
+/* Implementations in xp3fnseq.c */
+xp3Value *
+xp3FnTrue(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnFalse(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNot(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnBoolean(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnString(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnData(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNumber(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnError(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnPosition(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLast(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnEmpty(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnExists(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHead(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnTail(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnInsertBefore(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnRemove(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnReverse(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSubsequence(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnZeroOrOne(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnOneOrMore(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnExactlyOne(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCount(xp3FuncCall *call, xp3Value **args, int count);
 
 #endif /* XP3_XP3FUNC_H */

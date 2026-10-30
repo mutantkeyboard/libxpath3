@@ -706,10 +706,168 @@ static const xp3EvalCase xp3Cases[] = {
     { "xs:byte(300)", "error:FORG0001" },
     { "xs:integer(())", "" },
 
+    /* Booleans (F&O 3.1, 7) */
+    { "true(), fn:false()", "boolean:true boolean:false" },
+    { "not(()), not(x), not(0), not(''), not('a')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false" },
+    { "not((1, 2))", "error:FORG0006" },
+    { "not(1 to 3)", "error:FORG0006" },
+    { "boolean(x), boolean(0.0), boolean(xs:double('NaN')), boolean('a')",
+      "boolean:true boolean:false boolean:false boolean:true" },
+    { "boolean((x, 1))", "boolean:true" },
+    { "boolean((1, x))", "error:FORG0006" },
+    { "boolean(xs:QName('xs:x'))", "error:UNSUPPORTED" },
+
+    /* Accessors (2) */
+    { "string(), string(x[1]), string(@a), string(())",
+      "string:onetwotail string:one string:1 string:" },
+    { "string(1.0e0), string(1e7), string(xs:untypedAtomic('u'))",
+      "string:1 string:1.0E7 string:u" },
+    { "string(comment()), string(processing-instruction())",
+      "string:c string:d" },
+    { "string((1, 2))", "error:XPTY0004" },
+    { "data(x), data(()), data(@a), data((1, 'a'))",
+      "untypedAtomic:one untypedAtomic:two untypedAtomic:1 integer:1 "
+      "string:a" },
+    { "data(), data(comment())", "untypedAtomic:onetwotail string:c" },
+    { "data(1 to 3)", "integer:1 integer:2 integer:3" },
+
+    /* Numbers (4.5.1) */
+    { "number('12'), number(' 1.5e1 '), number(true()), number(@a)",
+      "double:12 double:15 double:1 double:1" },
+    { "number('a'), number(()), number(), number(xs:anyURI('1'))",
+      "double:NaN double:NaN double:NaN double:NaN" },
+    { "number(x[1]), number(1 to 1), number(xs:float(1.5))",
+      "double:NaN double:1 double:1.5" },
+    { "number((1, 2))", "error:XPTY0004" },
+    { "number(x)", "error:XPTY0004" },
+
+    /* Errors (3.1.1) */
+    { "error()", "error:FOER0000" },
+    { "error(())", "error:FOER0000" },
+    { "error((), 'boom')", "error:FOER0000" },
+    { "error((), 'boom', (1, x))", "error:FOER0000" },
+    { "if (x) then 1 else error()", "integer:1" },
+    { "error(1)", "error:XPTY0004" },
+    { "error(@a)", "error:XPTY0117" },
+    { "error((), 1)", "error:XPTY0004" },
+    { "error((), ())", "error:XPTY0004" },
+
+    /* Sequences (14.1) */
+    { "empty(()), empty(y), empty(x), exists(()), exists(x)",
+      "boolean:true boolean:true boolean:false boolean:false boolean:true" },
+    { "exists(1 to 100000000000), empty(1 to 100000000000)",
+      "boolean:true boolean:false" },
+    { "head((1, 2, 3)), head(()), head(x), head(1 to 100000000000)",
+      "integer:1 e:x#x1 integer:1" },
+    { "tail((1, 2, 3)), tail(5), tail(()), tail(1 to 3)",
+      "integer:2 integer:3 integer:2 integer:3" },
+    { "count(tail(1 to 10000000000)), tail(x)", "integer:9999999999 e:x#x2" },
+    { "reverse((1, 'a', x[1])), reverse(()), reverse(1 to 3), reverse(7)",
+      "e:x#x1 string:a integer:1 integer:3 integer:2 integer:1 integer:7" },
+    { "reverse(x)", "e:x#x2 e:x#x1" },
+    { "reverse(1 to 100000000000)", "error:LIMIT" },
+    { "subsequence((1, 2, 3, 4, 5), 2), subsequence((1, 2, 3, 4, 5), 2, 2)",
+      "integer:2 integer:3 integer:4 integer:5 integer:2 integer:3" },
+    { "subsequence(1 to 5, 1.5, 2), subsequence(1 to 5, 2.5, 1.5)",
+      "integer:2 integer:3 integer:3 integer:4" },
+    { "subsequence((1, 2, 3), 0), subsequence((1, 2, 3), -1, 3)",
+      "integer:1 integer:2 integer:3 integer:1" },
+    { "subsequence((1, 2, 3), -0.5), subsequence((1, 2, 3), 2.4999)",
+      "integer:1 integer:2 integer:3 integer:2 integer:3" },
+    { "subsequence((1, 2, 3), xs:double('NaN')), "
+      "subsequence((1, 2, 3), 1, xs:double('NaN')), "
+      "subsequence((1, 2, 3), xs:double('INF')), "
+      "subsequence((1, 2, 3), xs:double('-INF'), xs:double('INF')), "
+      "subsequence((1, 2, 3), 4), subsequence((1, 2, 3), 2, 0), "
+      "subsequence((1, 2, 3), 2, -1), subsequence((), 1)", "" },
+    { "subsequence((1, 2, 3), xs:double('-INF')), "
+      "subsequence((1, 2, 3), 2, xs:double('INF'))",
+      "integer:1 integer:2 integer:3 integer:2 integer:3" },
+    { "subsequence((1, 2, 3), -1e300, 1e300), subsequence((1, 2), 1e300)",
+      "" },
+    { "subsequence(1 to 10000000000, 9999999999)",
+      "integer:9999999999 integer:10000000000" },
+    { "count(subsequence(1 to 10000000000, 2, 5000000000))",
+      "integer:5000000000" },
+    { "subsequence(x, @a), subsequence(x, 2, xs:float(1))",
+      "e:x#x1 e:x#x2 e:x#x2" },
+    { "subsequence((1, 2), '1')", "error:XPTY0004" },
+    { "subsequence((1, 2), ())", "error:XPTY0004" },
+    { "subsequence((1, 2), (1, 2))", "error:XPTY0004" },
+    { "subsequence((1, 2), xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "remove((1, 2, 3), 2), remove((1, 2), 0), remove((1, 2), 3)",
+      "integer:1 integer:3 integer:1 integer:2 integer:1 integer:2" },
+    { "remove(1 to 3, 1), remove(1 to 3, 3), remove(1 to 3, 2)",
+      "integer:2 integer:3 integer:1 integer:2 integer:1 integer:3" },
+    { "remove((), 1), remove((1, 2), 99999999999999999999), "
+      "remove((1, 2), -99999999999999999999)",
+      "integer:1 integer:2 integer:1 integer:2" },
+    { "remove(x, @a), count(remove(1 to 10000000000, 1))",
+      "e:x#x2 integer:9999999999" },
+    { "remove((1, 2), 1.0)", "error:XPTY0004" },
+    { "insert-before((1, 2, 3), 2, ('a', 'b'))",
+      "integer:1 string:a string:b integer:2 integer:3" },
+    { "insert-before((1, 2), 0, 'a'), insert-before((1, 2), 3, 'b')",
+      "string:a integer:1 integer:2 integer:1 integer:2 string:b" },
+    { "insert-before((1, 2), 99999999999999999999, 'a'), "
+      "insert-before(1 to 2, -99999999999999999999, 0)",
+      "integer:1 integer:2 string:a integer:0 integer:1 integer:2" },
+    { "insert-before((), 5, x), insert-before(x, 1, ())",
+      "e:x#x1 e:x#x2 e:x#x1 e:x#x2" },
+    { "insert-before((1, 2), (), 3)", "error:XPTY0004" },
+
+    /* Cardinality and counting (14.3, 14.4.1) */
+    { "exactly-one(1), zero-or-one(()), zero-or-one(x[1]), "
+      "one-or-more(1 to 2)",
+      "integer:1 e:x#x1 integer:1 integer:2" },
+    { "exactly-one(())", "error:FORG0005" },
+    { "exactly-one(x)", "error:FORG0005" },
+    { "zero-or-one(1 to 2)", "error:FORG0003" },
+    { "one-or-more(())", "error:FORG0004" },
+    { "count(()), count(x), count(//x), count((1, 2, 3)[. > 1])",
+      "integer:0 integer:2 integer:3 integer:2" },
+    { "count(1 to 10000000000)", "integer:10000000000" },
+    { "count(-9223372036854775808 to 9223372036854775806)",
+      "integer:18446744073709551615" },
+
+    /* The focus (15) */
+    { "position(), last()", "integer:1 integer:1" },
+    { "(5, 6, 7)[position() = last()], x[last()], x[position() < 2]",
+      "integer:7 e:x#x2 e:x#x1" },
+    { "(1 to 5)[position() > 3], *[last() - 1]",
+      "integer:4 integer:5 e:x#x2" },
+    { "x/position(), x/last()", "integer:1 integer:2 integer:2 integer:2" },
+
+    /* String concatenation (XPath 3.1, 3.6) */
+    { "'a' || 'b', () || 'b', 1 || 2.5, x[1] || x[2], 1e0 || ''",
+      "string:ab string:b string:12.5 string:onetwo string:1" },
+    { "'a' || (1, 2)", "error:XPTY0004" },
+    { "'a' || x", "error:XPTY0004" },
+    { "'' || ()", "string:" },
+
+    /* Simple map (3.15) */
+    { "(1, 2, 3) ! (. * 2)", "integer:2 integer:4 integer:6" },
+    { "x ! @id", "a:id a:id" },
+    { "(x[2], x[1], x[2]) ! .", "e:x#x2 e:x#x1 e:x#x2" },
+    { "x ! (y, .)", "e:x#x1 e:y e:x#x2" },
+    { "(1 to 3) ! position(), (1 to 3) ! last()",
+      "integer:1 integer:2 integer:3 integer:3 integer:3 integer:3" },
+    { "() ! 1, 1 ! . ! (. + 1), x ! 1", "integer:2 integer:1 integer:1" },
+    { "(1, 2) ! x", "error:XPTY0020" },
+
+    /* Arrows (3.16) */
+    { "(1, 2, 3) => count(), (1, 2, 3) => subsequence(2)",
+      "integer:3 integer:2 integer:3" },
+    { "x => reverse(), 'a' => string(), 2 => xs:double()",
+      "e:x#x2 e:x#x1 string:a double:2" },
+    { "(1, 2) => exactly-one()", "error:FORG0005" },
+
     /* Not implemented yet */
-    { "count(x)", "error:UNSUPPORTED" },
-    { "'a' || 'b'", "error:UNSUPPORTED" },
-    { "x ! 1", "error:UNSUPPORTED" },
+    { "upper-case('a')", "error:UNSUPPORTED" },
+    { "'a' => upper-case()", "error:UNSUPPORTED" },
+    { "subsequence(?, 1)", "error:UNSUPPORTED" },
+    { "count#1", "error:UNSUPPORTED" },
     { "map { 1: 2 }", "error:UNSUPPORTED" },
     { "(1)?*", "error:UNSUPPORTED" },
     { "(1)(2)", "error:UNSUPPORTED" },
@@ -1050,6 +1208,61 @@ done:
     xmlFreeDoc(doc);
 }
 
+/*
+ * Functions that read the focus raise XPDY0002 without one, also in a
+ * folded subexpression; the others don't need it.
+ */
+static void
+testFunctionFocus(void) {
+    checkEval(NULL, NULL, "position()", "error:XPDY0002");
+    checkEval(NULL, NULL, "last()", "error:XPDY0002");
+    checkEval(NULL, NULL, "string()", "error:XPDY0002");
+    checkEval(NULL, NULL, "data()", "error:XPDY0002");
+    checkEval(NULL, NULL, "number()", "error:XPDY0002");
+    checkEval(NULL, NULL, "(1, 2)[position() = 2]", "integer:2");
+    checkEval(NULL, NULL, "(1, 2) ! string()", "string:1 string:2");
+    checkEval(NULL, NULL, "('1', 'a') ! number()", "double:1 double:NaN");
+    checkEval(NULL, NULL, "count((1, 2))", "integer:2");
+}
+
+/*
+ * fn:error: the code with its namespace, and the description as the
+ * message
+ */
+static void
+testUserErrors(void) {
+    static const struct {
+        const char *expr;
+        const char *ns;
+        const char *message;
+    } cases[] = {
+        { "error()", XP3_ERR_NS, NULL },
+        { "error((), 'boom')", XP3_ERR_NS, "boom" },
+        { "error((), xs:anyURI('urn:x'), 1)", XP3_ERR_NS, "urn:x" },
+        { "error((), ' ' || 1)", XP3_ERR_NS, " 1" }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        xp3Expr *expr = xp3Compile(NULL, BAD_CAST cases[i].expr, NULL);
+        xp3Error *err = NULL;
+        const xmlChar *message;
+
+        check(xp3Evaluate(expr, NULL, &err) == NULL, cases[i].expr);
+        message = xp3ErrorMessage(err);
+        check((err != NULL) &&
+              xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FOER0000") &&
+              xmlStrEqual(xp3ErrorNamespace(err), BAD_CAST cases[i].ns) &&
+              (xp3ErrorLine(err) == 1) && (xp3ErrorColumn(err) == 1) &&
+              (message != NULL) &&
+              ((cases[i].message == NULL) ||
+               xmlStrEqual(message, BAD_CAST cases[i].message)),
+              cases[i].expr);
+        xp3ErrorFree(err);
+        xp3FreeExpr(expr);
+    }
+}
+
 /* The context node is mapped to its XDM node when an evaluation
  * starts, so the tree may change after it is set. libxml2 merges a
  * text node into an adjacent one, but not a CDATA section, so these
@@ -1293,21 +1506,31 @@ testErrorPositions(void) {
     check(xp3Evaluate(expr, NULL, NULL) == NULL, "no error wanted");
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "1 ||\n2", NULL);
+    expr = xp3Compile(NULL, BAD_CAST "upper-case(())", NULL);
+    err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
           xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED") &&
           (xp3ErrorNamespace(err) == NULL) &&
-          (xp3ErrorMessage(err) != NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), "||") != NULL),
-          "UNSUPPORTED names the operator, without namespace");
+          (strstr((const char *) xp3ErrorMessage(err), " upper-case#1 ") !=
+           NULL), "UNSUPPORTED names a function without its namespace");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "count(())", NULL);
+    /* A conversion error is at the argument, a call's own at its name */
+    expr = xp3Compile(NULL, BAD_CAST "subsequence(1,\n  'a')", NULL);
     err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), " count#1 ") !=
-           NULL), "UNSUPPORTED names a function without its namespace");
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST "XPTY0004") &&
+          (xp3ErrorLine(err) == 2) && (xp3ErrorColumn(err) == 3),
+          "XPTY0004 at the argument, line 2 column 3");
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    expr = xp3Compile(NULL, BAD_CAST "1,\n  exactly-one(())", NULL);
+    err = NULL;
+    check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FORG0005") &&
+          (xp3ErrorLine(err) == 2) && (xp3ErrorColumn(err) == 3),
+          "FORG0005 at the call, line 2 column 3");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
 }
@@ -2110,6 +2333,25 @@ static const char *const xp3AllocOperatorsExpected =
     "boolean:true integer:1 integer:2 integer:18446744073709551616 "
     "integer:18446744073709551617 boolean:true integer:1";
 
+/* Function calls, the conversion rules, ||, ! and arrows */
+static const char *const xp3AllocFunctions =
+    "(count(x), exists(()), not(x), boolean('a'), string(x[1]), data(@a), "
+    "number('1.5'), head(x), tail((1, 2, 3)), reverse(x), "
+    "subsequence((1, 'a', 2), 2), remove((1, 2, 3), 2), "
+    "insert-before((1, 2), 2, 'b'), exactly-one(1), zero-or-one(()), "
+    "one-or-more(x)[1], x ! position(), 'a' || 1, x => count(), "
+    "(1 to 3)[position() = last()], subsequence(x, @a), string(), "
+    "number(), count(1 to 10000000000), subsequence(1 to 9, 8), "
+    "remove($v, 1), reverse(1 to 2))";
+
+static const char *const xp3AllocFunctionsExpected =
+    "integer:2 boolean:false boolean:false boolean:true string:one "
+    "untypedAtomic:1 double:1.5 e:x#x1 integer:2 integer:3 e:x#x2 e:x#x1 "
+    "string:a integer:2 integer:1 integer:3 integer:1 string:b integer:2 "
+    "integer:1 e:x#x1 integer:1 integer:2 string:a1 integer:2 integer:3 "
+    "e:x#x1 e:x#x2 string:onetwotail double:NaN integer:10000000000 "
+    "integer:8 integer:9 e:x#x1 integer:2 integer:1";
+
 static xp3Sequence *
 allocatingWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     xp3StaticContext *sctx = xp3NewStaticContext();
@@ -2251,6 +2493,8 @@ main(void) {
     testQNameComparison();
     testManyBindings();
     testFocus();
+    testFunctionFocus();
+    testUserErrors();
     testTreeChange();
     testInvalidUtf8();
     testVariables();
@@ -2263,6 +2507,7 @@ main(void) {
     testBindingAllocationFailures();
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
     testLocale();
 
     if (failures == 0)

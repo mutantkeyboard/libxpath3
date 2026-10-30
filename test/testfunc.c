@@ -19,6 +19,7 @@
 
 #include "private/xp3context.h"
 #include "private/xp3func.h"
+#include "private/xp3static.h"
 
 static int failures = 0;
 
@@ -255,6 +256,134 @@ testNames(void) {
           "invalid namespace");
 }
 
+/* Whether a type is kind, type and occurrence */
+static int
+isType(const xp3FuncType *type, xp3AstKind kind, int op,
+       xp3Occurrence occurrence) {
+    return((type->kind == kind) && (type->type == op) &&
+           (type->occurrence == occurrence));
+}
+
+/* The parameter and result types, from the signature text */
+static void
+testTypes(void) {
+    const xp3FuncInfo *info;
+    size_t i;
+
+    for (i = 0; i < xp3FuncCount(); i++) {
+        info = xp3FuncAt(i);
+        check((info->arity == 0) == (info->params == NULL),
+              info->signature);
+    }
+
+    info = lookup(FN, "subsequence", 3, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[0], XP3_AST_ANY_ITEM_TYPE, 0,
+                 XP3_OCC_ZERO_OR_MORE) &&
+          isType(&info->params[1], XP3_AST_ATOMIC_TYPE, XP3_TYPE_DOUBLE,
+                 XP3_OCC_ONE) &&
+          isType(&info->params[2], XP3_AST_ATOMIC_TYPE, XP3_TYPE_DOUBLE,
+                 XP3_OCC_ONE) &&
+          isType(&info->result, XP3_AST_ANY_ITEM_TYPE, 0,
+                 XP3_OCC_ZERO_OR_MORE), "fn:subsequence#3 types");
+    info = lookup(FN, "abs", 1, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[0], XP3_AST_ATOMIC_TYPE, XP3_SCHEMA_NUMERIC,
+                 XP3_OCC_OPTIONAL), "fn:abs takes xs:numeric?");
+    info = lookup(FN, "one-or-more", 1, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->result, XP3_AST_ANY_ITEM_TYPE, 0,
+                 XP3_OCC_ONE_OR_MORE), "fn:one-or-more returns item()+");
+    info = lookup(FN, "error", 1, XP3_XPATH_31);
+    check((info != NULL) && (info->result.kind == XP3_AST_NONE) &&
+          isType(&info->params[0], XP3_AST_ATOMIC_TYPE, XP3_TYPE_QNAME,
+                 XP3_OCC_OPTIONAL), "fn:error returns none");
+    info = lookup(FN, "root", 1, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[0], XP3_AST_KIND_TEST, XP3_KIND_ANY,
+                 XP3_OCC_OPTIONAL), "fn:root takes node()?");
+    info = lookup(FN, "analyze-string", 2, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->result, XP3_AST_KIND_TEST, XP3_KIND_ELEMENT,
+                 XP3_OCC_ONE), "element(fn:analyze-string-result)");
+    info = lookup(FN, "sort", 3, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[2], XP3_AST_FUNCTION_TEST, 0, XP3_OCC_ONE),
+          "a typed function test, without the occurrence of its result");
+    info = lookup(FN, "function-lookup", 2, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->result, XP3_AST_FUNCTION_TEST, 0, XP3_OCC_OPTIONAL),
+          "function(*)?");
+    info = lookup(MAP, "merge", 1, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[0], XP3_AST_MAP_TEST, 0,
+                 XP3_OCC_ZERO_OR_MORE), "map(*)*");
+    info = lookup(ARRAY, "size", 1, XP3_XPATH_31);
+    check((info != NULL) &&
+          isType(&info->params[0], XP3_AST_ARRAY_TEST, 0, XP3_OCC_ONE),
+          "array(*)");
+    info = lookup(FN, "concat", 5, XP3_XPATH_31);
+    check((info != NULL) && (info->arity == 2) &&
+          isType(&info->params[1], XP3_AST_ATOMIC_TYPE, XP3_TYPE_ANY_ATOMIC,
+                 XP3_OCC_OPTIONAL), "fn:concat lists two parameters");
+}
+
+/*
+ * The implemented functions, and the properties constant folding reads
+ * from them: the focus functions and fn:error must not be folded, the
+ * others may.
+ */
+static void
+testImplementations(void) {
+    static const struct {
+        const char *name;
+        int arity;
+        int flags;
+    } implemented[] = {
+        { "true", 0, 0 }, { "false", 0, 0 }, { "not", 1, 0 },
+        { "boolean", 1, 0 }, { "exists", 1, 0 }, { "empty", 1, 0 },
+        { "count", 1, 0 }, { "exactly-one", 1, 0 }, { "zero-or-one", 1, 0 },
+        { "one-or-more", 1, 0 }, { "string", 1, 0 }, { "data", 1, 0 },
+        { "number", 1, 0 }, { "head", 1, 0 }, { "tail", 1, 0 },
+        { "reverse", 1, 0 }, { "subsequence", 2, 0 },
+        { "subsequence", 3, 0 }, { "remove", 2, 0 },
+        { "insert-before", 3, 0 },
+        { "string", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "data", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "number", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "position", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "last", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "error", 0, XP3_FUNC_NONDETERMINISTIC },
+        { "error", 1, XP3_FUNC_NONDETERMINISTIC },
+        { "error", 2, XP3_FUNC_NONDETERMINISTIC },
+        { "error", 3, XP3_FUNC_NONDETERMINISTIC }
+    };
+    size_t count = 0;
+    size_t i;
+
+    for (i = 0; i < sizeof(implemented) / sizeof(implemented[0]); i++) {
+        const xp3FuncInfo *info = lookup(FN, implemented[i].name,
+                                         implemented[i].arity,
+                                         XP3_XPATH_31);
+        char what[200];
+
+        snprintf(what, sizeof(what), "fn:%s#%d implemented, flags %d",
+                 implemented[i].name, implemented[i].arity,
+                 implemented[i].flags);
+        check((info != NULL) && (xp3FuncImplementation(info) != NULL) &&
+              (info->flags == implemented[i].flags), what);
+    }
+    for (i = 0; i < xp3FuncCount(); i++) {
+        if (xp3FuncImplementation(xp3FuncAt(i)) != NULL)
+            count++;
+    }
+    check(count == sizeof(implemented) / sizeof(implemented[0]),
+          "no other function implemented");
+    check(xp3FuncImplementation(lookup(FN, "upper-case", 1,
+                                       XP3_XPATH_31)) == NULL,
+          "fn:upper-case is not implemented yet");
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -263,6 +392,8 @@ main(void) {
     testLookup();
     testFlags();
     testNames();
+    testTypes();
+    testImplementations();
 
     if (failures == 0)
         printf("testfunc: OK\n");

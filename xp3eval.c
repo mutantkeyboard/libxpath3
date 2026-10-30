@@ -8,12 +8,13 @@
  * is kept in the evaluation state and saved around the expressions
  * that change it: path steps, predicates and filters.
  *
- * Evaluation covers XPath 3.1 sections 3.1 (primary expressions), 3.2.1
- * (filters), 3.3 (paths), 3.4 (sequences, without the operators), 3.8
- * (and, or), 3.9 (for), 3.10 (let), 3.12 (if) and 3.13 (quantified
- * expressions). The rest raises UNSUPPORTED: operators come with Part
- * 7c, function calls with Part 8, and maps, arrays and function items
- * with Part 12.
+ * Evaluation covers XPath 3.1 sections 3.1 (primary expressions, with
+ * static function calls), 3.2.1 (filters), 3.3 (paths), 3.4 to 3.8
+ * (sequences and the operators), 3.9 (for), 3.10 (let), 3.12 (if),
+ * 3.13 (quantified expressions), 3.14 (types), 3.15 (simple map) and
+ * 3.16 (arrows to named functions). Built-in functions without an
+ * implementation raise UNSUPPORTED, and so do maps, arrays, function
+ * items and dynamic calls, which come with Part 12.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -37,6 +38,7 @@
 #include "private/xp3decimal.h"
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
+#include "private/xp3func.h"
 #include "private/xp3nodes.h"
 #include "private/xp3ops.h"
 #include "private/xp3static.h"
@@ -241,19 +243,25 @@ evalExpr(xp3Eval *ev, const xp3AstNode *node);
 
 /* Record an error at a node, unless one is recorded already. */
 static void
-evalError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node,
-          const char *format, ...) {
-    va_list args;
-
+evalErrorV(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node,
+           const char *format, va_list args) {
     if (ev->err != NULL)
         return;
     if (code == XP3_ERR_NO_MEMORY) {
         ev->err = xp3ErrorNoMemory();
         return;
     }
-    va_start(args, format);
     ev->err = xp3ErrorNewV(code, (node != NULL) ? node->line : 0,
                            (node != NULL) ? node->column : 0, format, args);
+}
+
+static void
+evalError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node,
+          const char *format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    evalErrorV(ev, code, node, format, args);
     va_end(args);
 }
 
@@ -1329,23 +1337,19 @@ static xp3Value *
 evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
     char name[XP3_NAME_BUF];
 
-    switch (node->kind) {
-        case XP3_AST_FUNCTION_CALL:
-            evalError(ev, XP3_ERR_UNSUPPORTED, node, "the function %s#%d "
-                      "is not implemented yet",
-                      displayName(node, name, sizeof(name)),
-                      (int) xp3AstChildCount(node));
-            break;
-        case XP3_AST_BINARY:
-        case XP3_AST_UNARY:
-            evalError(ev, XP3_ERR_UNSUPPORTED, node, "the operator %s is "
-                      "not implemented yet", operatorName(node->op));
-            break;
-        default:
-            evalError(ev, XP3_ERR_UNSUPPORTED, node, "%s expressions are "
-                      "not implemented yet", xp3AstKindName(node->kind));
-            break;
-    }
+    /* An arrow to a function expression, as => $f(), has no name */
+    if (((node->kind == XP3_AST_FUNCTION_CALL) ||
+         (node->kind == XP3_AST_ARROW)) && (node->text != NULL))
+        evalError(ev, XP3_ERR_UNSUPPORTED, node, "the function %s#%d is "
+                  "not implemented yet",
+                  displayName(node, name, sizeof(name)),
+                  (int) xp3AstChildCount(node));
+    else if ((node->kind == XP3_AST_BINARY) || (node->kind == XP3_AST_UNARY))
+        evalError(ev, XP3_ERR_UNSUPPORTED, node, "the operator %s is not "
+                  "implemented yet", operatorName(node->op));
+    else
+        evalError(ev, XP3_ERR_UNSUPPORTED, node, "%s expressions are not "
+                  "implemented yet", xp3AstKindName(node->kind));
     return(NULL);
 }
 
@@ -1419,10 +1423,16 @@ atomize(xp3Eval *ev, xp3Value *value, const xp3AstNode *node) {
                 err = xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(atomic));
         } else if (item.kind == XP3_ITEM_ATOMIC) {
             err = xp3SeqBuilderAdd(&builder, item);
-        } else {
+        } else if (item.kind == XP3_ITEM_ARRAY) {
             xp3ItemUnref(item);
-            evalError(ev, XP3_ERR_UNSUPPORTED, node, "atomizing function "
-                      "items, maps and arrays is not implemented yet");
+            evalError(ev, XP3_ERR_UNSUPPORTED, node, "atomizing arrays is "
+                      "not implemented yet");
+            goto error;
+        } else {
+            /* Functions and maps have no typed value */
+            xp3ItemUnref(item);
+            evalError(ev, XP3_ERR_FOTY0013, node, "a function item can't "
+                      "be atomized");
             goto error;
         }
         if (err != XP3_ERR_OK) {
@@ -2391,6 +2401,640 @@ evalCast(xp3Eval *ev, const xp3AstNode *node) {
     return(builderFinish(ev, &builder));
 }
 
+/*
+ * String concatenation and simple map
+ */
+
+/* The operand of || as a string: the empty string for the empty
+ * sequence, as fn:concat converts its arguments. Returns NULL on
+ * error. */
+static xmlChar *
+concatOperand(xp3Eval *ev, const xp3AstNode *expr) {
+    xp3Atomic *atomic;
+    xmlChar *str;
+
+    if (evalAtomic(ev, expr, "||", &atomic) < 0)
+        return(NULL);
+    if (atomic != NULL)
+        str = xp3AtomicToString(atomic);
+    else
+        str = xmlStrdup(BAD_CAST "");
+    xp3AtomicUnref(atomic);
+    if (str == NULL)
+        evalNoMemory(ev);
+    return(str);
+}
+
+/* E1 || E2 (XPath 3.1, 3.6): the same as fn:concat(E1, E2) */
+static xp3Value *
+evalConcat(xp3Eval *ev, const xp3AstNode *node) {
+    xmlChar *left = concatOperand(ev, node->first);
+    xmlChar *right = NULL;
+    xp3Atomic *atomic = NULL;
+    size_t leftLen;
+    size_t rightLen;
+    xmlChar *str;
+
+    if (left != NULL)
+        right = concatOperand(ev, node->last);
+    if (right == NULL) {
+        xmlFree(left);
+        return(NULL);
+    }
+    leftLen = strlen((const char *) left);
+    rightLen = strlen((const char *) right);
+    if (rightLen > INT32_MAX - leftLen) {
+        evalError(ev, XP3_ERR_LIMIT, node, "the result of || would be "
+                  "longer than 2 GB");
+    } else {
+        str = xmlRealloc(left, leftLen + rightLen + 1);
+        if (str != NULL) {
+            left = str;
+            memcpy(left + leftLen, right, rightLen + 1);
+            atomic = xp3AtomicNewString(XP3_TYPE_STRING, left,
+                                        leftLen + rightLen);
+        }
+        if (atomic == NULL)
+            evalNoMemory(ev);
+    }
+    xmlFree(left);
+    xmlFree(right);
+    if (atomic == NULL)
+        return(NULL);
+    return(evalSingle(ev, xp3ItemFromAtomic(atomic)));
+}
+
+/*
+ * E1 ! E2 (XPath 3.1, 3.15): E2 for each item of E1 as the context
+ * item, with its position and size, and the results in that order,
+ * neither sorted nor without duplicates.
+ */
+static xp3Value *
+evalSimpleMap(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *input = evalExpr(ev, node->first);
+    xp3Focus saved = ev->focus;
+    xp3SeqBuilder builder;
+    xp3Iter iter;
+    xp3Item item;
+    uint64_t size;
+    int found;
+
+    if (input == NULL)
+        return(NULL);
+    size = xp3ValueCount(input);
+    builderInit(ev, &builder);
+    xp3IterInit(&iter, input);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3Value *value;
+        xp3ErrCode err;
+
+        ev->focus.item = item;
+        ev->focus.present = 1;
+        ev->focus.position = iter.pos;
+        ev->focus.size = size;
+        value = evalExpr(ev, node->last);
+        ev->focus = saved;
+        xp3ItemUnref(item);
+        if (value == NULL)
+            goto error;
+        err = xp3SeqBuilderAddValue(&builder, value);
+        xp3ValueUnref(value);
+        if (err != XP3_ERR_OK) {
+            evalBuildError(ev, err, node);
+            goto error;
+        }
+    }
+    if (found < 0) {
+        evalNoMemory(ev);
+        goto error;
+    }
+    xp3ValueUnref(input);
+    return(builderFinish(ev, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    xp3ValueUnref(input);
+    return(NULL);
+}
+
+/*
+ * Function calls
+ */
+
+/* Arguments of most calls fit here, without an allocation */
+#define XP3_CALL_ARGS 8
+
+/* A call being evaluated, as the implementations see it (xp3func.h) */
+struct _xp3FuncCall {
+    xp3Eval *ev;
+    const xp3AstNode *node;
+};
+
+/* The name of a parameter type, for messages */
+static const char *
+paramTypeName(const xp3FuncType *type) {
+    switch (type->kind) {
+        case XP3_AST_ATOMIC_TYPE:
+            return((type->type == XP3_SCHEMA_NUMERIC) ? "numeric" :
+                   typeName((xp3TypeId) type->type));
+        case XP3_AST_KIND_TEST:
+            return((type->type == XP3_KIND_ELEMENT) ? "element()" :
+                   (type->type == XP3_KIND_DOCUMENT) ? "document-node()" :
+                   "node()");
+        case XP3_AST_FUNCTION_TEST:
+            return("function(*)");
+        case XP3_AST_MAP_TEST:
+            return("map(*)");
+        case XP3_AST_ARRAY_TEST:
+            return("array(*)");
+        default:
+            return("item()");
+    }
+}
+
+/* Whether a node kind matches the kind test of a parameter type */
+static int
+paramKindMatches(xp3NodeKind kind, int test) {
+    switch (test) {
+        case XP3_KIND_ANY:
+            return(1);
+        case XP3_KIND_DOCUMENT:
+            return(kind == XP3_NODE_DOCUMENT);
+        case XP3_KIND_ELEMENT:
+            return(kind == XP3_NODE_ELEMENT);
+        case XP3_KIND_ATTRIBUTE:
+            return(kind == XP3_NODE_ATTRIBUTE);
+        case XP3_KIND_TEXT:
+            return(kind == XP3_NODE_TEXT);
+        case XP3_KIND_COMMENT:
+            return(kind == XP3_NODE_COMMENT);
+        case XP3_KIND_PI:
+            return(kind == XP3_NODE_PI);
+        default:
+            return(0);
+    }
+}
+
+/* Whether an item matches the item type of a parameter type */
+static int
+paramItemMatches(xp3Item item, const xp3FuncType *type) {
+    switch (type->kind) {
+        case XP3_AST_ANY_ITEM_TYPE:
+            return(1);
+        case XP3_AST_ATOMIC_TYPE:
+            return((item.kind == XP3_ITEM_ATOMIC) &&
+                   atomicMatches(item.u.atomic, type->type));
+        case XP3_AST_KIND_TEST:
+            return((item.kind == XP3_ITEM_NODE) &&
+                   paramKindMatches(xp3NodeGetKind(item.u.node),
+                                    type->type));
+        case XP3_AST_FUNCTION_TEST:
+            /* Maps and arrays are functions */
+            return((item.kind == XP3_ITEM_FUNCTION) ||
+                   (item.kind == XP3_ITEM_MAP) ||
+                   (item.kind == XP3_ITEM_ARRAY));
+        case XP3_AST_MAP_TEST:
+            return(item.kind == XP3_ITEM_MAP);
+        case XP3_AST_ARRAY_TEST:
+            return(item.kind == XP3_ITEM_ARRAY);
+        default:
+            return(0);
+    }
+}
+
+/* Record an XPTY0004 for argument index (1-based) of a call */
+static void
+argumentError(xp3Eval *ev, const xp3AstNode *call, int index,
+              const xp3AstNode *arg, const char *problem,
+              const xp3FuncType *type) {
+    char name[XP3_NAME_BUF];
+
+    evalError(ev, XP3_ERR_XPTY0004, arg, "argument %d of %s#%d %s, where "
+              "%s%s%s is expected", index,
+              displayName(call, name, sizeof(name)),
+              (int) xp3AstChildCount(call), problem,
+              (type->kind == XP3_AST_ATOMIC_TYPE) ? "xs:" : "",
+              paramTypeName(type),
+              (type->occurrence == XP3_OCC_OPTIONAL) ? "?" :
+              (type->occurrence == XP3_OCC_ZERO_OR_MORE) ? "*" :
+              (type->occurrence == XP3_OCC_ONE_OR_MORE) ? "+" : "");
+}
+
+/*
+ * Convert an atomic value of an argument to the expected atomic type
+ * (XPath 3.1, 3.1.5.2): an untyped value is cast to it, to xs:double
+ * for xs:numeric, a number is promoted along xs:decimal, xs:float,
+ * xs:double, and xs:anyURI to xs:string (B.1). Takes over the
+ * reference to atomic. Returns the value, or NULL on error.
+ */
+static xp3Atomic *
+convertAtomic(xp3Eval *ev, xp3Atomic *atomic, const xp3FuncType *type,
+              const xp3AstNode *call, int index, const xp3AstNode *arg) {
+    xp3Representation rep = xp3TypeRepresentation(atomic->type);
+    int target = -1;
+    xp3Atomic *result;
+    char problem[XP3_NAME_BUF];
+
+    if (atomicMatches(atomic, type->type))
+        return(atomic);
+    if (atomic->type == XP3_TYPE_UNTYPED_ATOMIC) {
+        if (type->type == XP3_SCHEMA_NUMERIC)
+            return(castUntyped(ev, atomic, XP3_TYPE_DOUBLE, arg));
+        if (xp3TypeDerivesFrom((xp3TypeId) type->type, XP3_TYPE_QNAME) ||
+            xp3TypeDerivesFrom((xp3TypeId) type->type, XP3_TYPE_NOTATION)) {
+            evalError(ev, XP3_ERR_XPTY0117, arg, "an untyped value can't "
+                      "be converted to the namespace-sensitive xs:%s",
+                      typeName((xp3TypeId) type->type));
+            xp3AtomicUnref(atomic);
+            return(NULL);
+        }
+        return(castUntyped(ev, atomic, (xp3TypeId) type->type, arg));
+    }
+    if ((type->type == XP3_TYPE_DOUBLE) &&
+        ((rep == XP3_REP_DECIMAL) || (rep == XP3_REP_FLOAT)))
+        target = XP3_TYPE_DOUBLE;
+    else if ((type->type == XP3_TYPE_FLOAT) && (rep == XP3_REP_DECIMAL))
+        target = XP3_TYPE_FLOAT;
+    else if ((type->type == XP3_TYPE_STRING) &&
+             (atomic->type == XP3_TYPE_ANY_URI))
+        target = XP3_TYPE_STRING;
+    if (target < 0) {
+        snprintf(problem, sizeof(problem), "is an xs:%s",
+                 typeName(atomic->type));
+        argumentError(ev, call, index, arg, problem, type);
+        xp3AtomicUnref(atomic);
+        return(NULL);
+    }
+    if (xp3CastAtomic(atomic, (xp3TypeId) target, &result) != XP3_ERR_OK) {
+        evalNoMemory(ev);
+        result = NULL;
+    }
+    xp3AtomicUnref(atomic);
+    return(result);
+}
+
+/*
+ * Apply the function conversion rules (XPath 3.1, 3.1.5.2) to argument
+ * index (1-based) of a call: atomize it if an atomic type is expected,
+ * convert each value to that type, and check the result against the
+ * type and its occurrence [err:XPTY0004]. XPath 1.0 compatibility mode
+ * doesn't exist (doc/DESIGN.md 5.1), so the rules are the same at
+ * every level. Takes over the reference to value. Returns the
+ * converted value, or NULL on error.
+ */
+static xp3Value *
+convertArgument(xp3Eval *ev, xp3Value *value, const xp3FuncType *type,
+                const xp3AstNode *call, int index, const xp3AstNode *arg) {
+    uint64_t count;
+    xp3SeqBuilder builder;
+    xp3Iter iter;
+    xp3Item item;
+    int convert = 0;
+    int found;
+    char problem[XP3_NAME_BUF];
+
+    if (type->kind == XP3_AST_ATOMIC_TYPE) {
+        value = atomize(ev, value, arg);
+        if (value == NULL)
+            return(NULL);
+    }
+    count = xp3ValueCount(value);
+    if (((count == 0) && ((type->occurrence == XP3_OCC_ONE) ||
+                          (type->occurrence == XP3_OCC_ONE_OR_MORE))) ||
+        ((count > 1) && ((type->occurrence == XP3_OCC_ONE) ||
+                         (type->occurrence == XP3_OCC_OPTIONAL)))) {
+        if (count == 0)
+            snprintf(problem, sizeof(problem), "is the empty sequence");
+        else
+            snprintf(problem, sizeof(problem), "is a sequence of more than "
+                     "one item");
+        argumentError(ev, call, index, arg, problem, type);
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    if ((type->kind == XP3_AST_ANY_ITEM_TYPE) || (count == 0))
+        return(value);
+
+    /* Most arguments have the expected type already. A range holds
+     * integers only: its first item stands for all. */
+    xp3IterInit(&iter, value);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        int matches = paramItemMatches(item, type);
+
+        xp3ItemUnref(item);
+        if (!matches) {
+            convert = 1;
+            break;
+        }
+        if (value->shape == XP3_SEQ_RANGE)
+            break;
+        if (evalCount(ev, arg) < 0) {
+            xp3ValueUnref(value);
+            return(NULL);
+        }
+    }
+    if (found < 0) {
+        evalNoMemory(ev);
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    if (!convert)
+        return(value);
+    if (type->kind != XP3_AST_ATOMIC_TYPE) {
+        snprintf(problem, sizeof(problem), "has %s",
+                 (item.kind == XP3_ITEM_NODE) ? "a node of another kind" :
+                 (item.kind == XP3_ITEM_ATOMIC) ? "an atomic value" :
+                 "a function item");
+        argumentError(ev, call, index, arg, problem, type);
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+
+    builderInit(ev, &builder);
+    xp3IterInit(&iter, value);
+    while ((found = xp3IterNext(&iter, &item)) > 0) {
+        xp3Atomic *atomic;
+        xp3ErrCode err;
+
+        if (evalCount(ev, arg) < 0) {
+            xp3ItemUnref(item);
+            goto error;
+        }
+        /* Atomized: atomic values only */
+        atomic = convertAtomic(ev, item.u.atomic, type, call, index, arg);
+        if (atomic == NULL)
+            goto error;
+        err = xp3SeqBuilderAdd(&builder, xp3ItemFromAtomic(atomic));
+        if (err != XP3_ERR_OK) {
+            evalBuildError(ev, err, arg);
+            goto error;
+        }
+    }
+    if (found < 0) {
+        evalNoMemory(ev);
+        goto error;
+    }
+    xp3ValueUnref(value);
+    return(builderFinish(ev, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    xp3ValueUnref(value);
+    return(NULL);
+}
+
+/* Whether a call has an argument placeholder, as in f(?, 1) */
+static int
+hasPlaceholder(const xp3AstNode *node) {
+    const xp3AstNode *child;
+
+    for (child = node->first; child != NULL; child = child->next) {
+        if (child->kind == XP3_AST_ARG_PLACEHOLDER)
+            return(1);
+    }
+    return(0);
+}
+
+/*
+ * A static function call (XPath 3.1, 3.1.5), or an arrow to a named
+ * function (3.16), whose left side is the first argument: the
+ * arguments are evaluated in order and converted to the parameter
+ * types, then the implementation is called (3.1.5.1).
+ */
+static xp3Value *
+evalCall(xp3Eval *ev, const xp3AstNode *node) {
+    const xp3FuncInfo *info = node->func;
+    xp3Value *fixed[XP3_CALL_ARGS];
+    xp3Value **args = fixed;
+    const xp3AstNode *child;
+    xp3Value *result = NULL;
+    xp3FuncImpl impl;
+    xp3FuncCall call;
+    size_t arity = xp3AstChildCount(node);
+    int count = 0;
+    int i;
+
+    if (hasPlaceholder(node)) {
+        evalError(ev, XP3_ERR_UNSUPPORTED, node, "partial function "
+                  "application is not implemented yet");
+        return(NULL);
+    }
+    /* A constructor function as a function item, or => $f() */
+    if (info == NULL)
+        return(evalUnsupported(ev, node));
+    impl = xp3FuncImplementation(info);
+    if (impl == NULL)
+        return(evalUnsupported(ev, node));
+
+    if (arity > XP3_CALL_ARGS) {
+        if (arity > SIZE_MAX / sizeof(xp3Value *)) {
+            evalNoMemory(ev);
+            return(NULL);
+        }
+        args = xmlMalloc(arity * sizeof(xp3Value *));
+        if (args == NULL) {
+            evalNoMemory(ev);
+            return(NULL);
+        }
+    }
+    for (child = node->first; child != NULL; child = child->next) {
+        /* A variadic function's further arguments are like its last */
+        const xp3FuncType *type = &info->params[(count < info->arity) ?
+                                                count : info->arity - 1];
+        xp3Value *value = evalExpr(ev, child);
+
+        if (value != NULL)
+            value = convertArgument(ev, value, type, node, count + 1, child);
+        if (value == NULL)
+            goto done;
+        args[count++] = value;
+    }
+
+    call.ev = ev;
+    call.node = node;
+    result = impl(&call, args, count);
+    if ((result == NULL) && (ev->err == NULL))
+        evalNoMemory(ev);
+
+done:
+    for (i = 0; i < count; i++)
+        xp3ValueUnref(args[i]);
+    if (args != fixed)
+        xmlFree(args);
+    return(result);
+}
+
+/*
+ * The call interface of xp3func.h
+ */
+
+/* The name of the function called, for messages */
+static const char *
+callName(const xp3FuncCall *call, char *buf, size_t size) {
+    char name[XP3_NAME_BUF];
+
+    snprintf(buf, size, "%s#%d", displayName(call->node, name, sizeof(name)),
+             (int) xp3AstChildCount(call->node));
+    return(buf);
+}
+
+/**
+ * Get the focus of a call, for the functions that depend on it.
+ *
+ * @param call      the call
+ * @param item      set to the context item, borrowed; may be NULL
+ * @param position  set to the context position; may be NULL
+ * @param size      set to the context size; may be NULL
+ * @returns 0, or -1 after recording XPDY0002 if the focus is absent
+ */
+int
+xp3FuncFocus(xp3FuncCall *call, xp3Item *item, uint64_t *position,
+             uint64_t *size) {
+    const xp3Focus *focus = &call->ev->focus;
+    char name[XP3_NAME_BUF];
+
+    if (!focus->present) {
+        evalError(call->ev, XP3_ERR_XPDY0002, call->node, "%s needs the "
+                  "focus, and the context item is absent",
+                  callName(call, name, sizeof(name)));
+        return(-1);
+    }
+    if (item != NULL)
+        *item = focus->item;
+    if (position != NULL)
+        *position = focus->position;
+    if (size != NULL)
+        *size = focus->size;
+    return(0);
+}
+
+/**
+ * Record an error at the position of a call, unless one is recorded
+ * already. XP3_ERR_NO_MEMORY needs no message.
+ *
+ * @param call    the call
+ * @param code    the error code
+ * @param format  the message, as for printf()
+ * @param ...     its arguments
+ */
+void
+xp3FuncError(xp3FuncCall *call, xp3ErrCode code, const char *format, ...) {
+    va_list args;
+
+    va_start(args, format);
+    evalErrorV(call->ev, code, call->node, format, args);
+    va_end(args);
+}
+
+/**
+ * Record an error with a code of any namespace, as fn:error raises
+ * them, at the position of a call.
+ *
+ * @param call         the call
+ * @param uri          the namespace of the code, NULL for none
+ * @param localName    the local name of the code, or NULL for
+ *                     err:FOER0000
+ * @param description  the message, may be NULL
+ */
+void
+xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
+                 const xmlChar *localName, const xmlChar *description) {
+    xp3Eval *ev = call->ev;
+
+    if (ev->err != NULL)
+        return;
+    ev->err = xp3ErrorNewUser(uri, localName, description);
+    if (!ev->err->isStatic) {
+        ev->err->line = call->node->line;
+        ev->err->column = call->node->column;
+    }
+}
+
+/**
+ * Count steps of work done by a call, such as items copied, against
+ * the limit of the evaluation.
+ *
+ * @param call   the call
+ * @param steps  the number of steps
+ * @returns 0, or -1 after recording LIMIT
+ */
+int
+xp3FuncSteps(xp3FuncCall *call, uint64_t steps) {
+    return(evalSteps(call->ev, call->node, steps));
+}
+
+/**
+ * Start building a sequence with the limits of the evaluation.
+ *
+ * @param call     the call
+ * @param builder  the builder
+ */
+void
+xp3FuncBuilderInit(xp3FuncCall *call, xp3SeqBuilder *builder) {
+    builderInit(call->ev, builder);
+}
+
+/**
+ * Add an item to a sequence being built. Takes over the item's
+ * reference, also on failure.
+ *
+ * @param call     the call
+ * @param builder  the builder, from xp3FuncBuilderInit()
+ * @param item     the item
+ * @returns 0, or -1 after recording LIMIT or NO_MEMORY; the caller
+ *          then clears the builder
+ */
+int
+xp3FuncBuilderAdd(xp3FuncCall *call, xp3SeqBuilder *builder, xp3Item item) {
+    xp3ErrCode err = xp3SeqBuilderAdd(builder, item);
+
+    if (err == XP3_ERR_OK)
+        return(0);
+    evalBuildError(call->ev, err, call->node);
+    return(-1);
+}
+
+/**
+ * Finish a sequence being built.
+ *
+ * @param call     the call
+ * @param builder  the builder, empty afterwards
+ * @returns the sequence, or NULL after recording an error
+ */
+xp3Value *
+xp3FuncBuilderFinish(xp3FuncCall *call, xp3SeqBuilder *builder) {
+    return(builderFinish(call->ev, builder));
+}
+
+/**
+ * Make a sequence of one new atomic value, as a result.
+ *
+ * @param call    the call
+ * @param atomic  the value, whose reference is taken over; NULL for a
+ *                failed allocation
+ * @returns the sequence, or NULL after recording NO_MEMORY
+ */
+xp3Value *
+xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic) {
+    if (atomic == NULL) {
+        evalNoMemory(call->ev);
+        return(NULL);
+    }
+    return(evalSingle(call->ev, xp3ItemFromAtomic(atomic)));
+}
+
+/**
+ * Atomize a sequence (XPath 3.1, 2.4.2).
+ *
+ * @param call   the call
+ * @param value  the sequence, whose reference is taken over
+ * @returns the atomic values, or NULL after recording an error
+ */
+xp3Value *
+xp3FuncAtomize(xp3FuncCall *call, xp3Value *value) {
+    return(atomize(call->ev, value, call->node));
+}
+
 /* Binary operators other than and and or */
 static xp3Value *
 evalBinary(xp3Eval *ev, const xp3AstNode *node) {
@@ -2429,8 +3073,11 @@ evalBinary(xp3Eval *ev, const xp3AstNode *node) {
         case XP3_OP_INTERSECT:
         case XP3_OP_EXCEPT:
             return(evalSetOperation(ev, node));
+        case XP3_OP_CONCAT:
+            return(evalConcat(ev, node));
+        case XP3_OP_SIMPLE_MAP:
+            return(evalSimpleMap(ev, node));
         default:
-            /* || and ! come with Part 12 */
             return(evalUnsupported(ev, node));
     }
 }
@@ -2532,6 +3179,9 @@ evalNode(xp3Eval *ev, const xp3AstNode *node) {
             return(evalStep(ev, node));
         case XP3_AST_FILTER:
             return(evalFilter(ev, node));
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
+            return(evalCall(ev, node));
         default:
             return(evalUnsupported(ev, node));
     }
