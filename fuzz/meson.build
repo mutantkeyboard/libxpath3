@@ -15,6 +15,8 @@
 # https://github.com/bitcoin/bitcoin/blob/master/doc/fuzzing.md#macos-hints-for-libfuzzer
 fuzz_seed = files(
     'seed/arith20',
+    'seed/calls31',
+    'seed/calls_inject',
     'seed/err_lex',
     'seed/err_syntax',
     'seed/flwor31',
@@ -52,12 +54,15 @@ fuzz_eval_seed = files(
     'seed-eval/context_attr',
     'seed-eval/context_text',
     'seed-eval/flwor',
+    'seed-eval/functions',
+    'seed-eval/functions_inject',
     'seed-eval/inject',
     'seed-eval/inject_late',
     'seed-eval/level20',
     'seed-eval/paths',
     'seed-eval/pruning',
     'seed-eval/siblings',
+    'seed-eval/simple_map',
     'seed-eval/skipped_error',
 )
 

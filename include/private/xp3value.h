@@ -201,6 +201,9 @@ xp3ValueRef(xp3Value *value);
 xmlChar *
 xp3AtomicToString(const xp3Atomic *atomic);
 
+int
+xp3ValueIsAtomic(const xp3Value *value);
+
 xp3Value *
 xp3ValueMakeConstant(const xp3Value *value);
 

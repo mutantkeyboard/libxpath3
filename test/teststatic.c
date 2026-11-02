@@ -483,11 +483,13 @@ static const char largeExpr[] =
     "(xs:integer($q), ex:a/@xml:lang, b, err:c, xsi:d, fn:true(), "
     "math:pi(), map:size(map{}), array:size([]), $v, $ex:w, $v)";
 
-/* Folding with errors, a range, pruning and a rewritten path */
+/* Folding with errors, a range, pruning, a rewritten path and calls */
 static const char foldExpr[] =
     "for $i in 1 to 3 return $i * 2, if (0) then 1 div 0 else 1, "
     "//x[@id = 'a']/y, (1 to 5)[. > 3], $v and 0, if (1 to 1) then 2 "
-    "else 3, -(1.5e-2 + 4 idiv 2 mod 3) * (1, 2)[. castable as xs:double]";
+    "else 3, -(1.5e-2 + 4 idiv 2 mod 3) * (1, 2)[. castable as xs:double], "
+    "count((1, 2)) + 1, (1, 2) ! (. * 2), 'a' || 'b', reverse((1, 'x')), "
+    "subsequence(1 to 9, 3, 2), exactly-one(()), position()";
 
 /*
  * Compile with each allocation failing in turn: compiling must then
@@ -613,9 +615,44 @@ static const struct {
     { "for $x in $v return (for $y in 2 return $x + $y)",
       "(for (bind x (var v)) (for (bind y (constant integer:2)) "
       "(binary + (var x) (var y))))" },
-    { "count(1 + 1)",
-      "(call Q{http://www.w3.org/2005/xpath-functions}count "
-      "(constant integer:2))" },
+
+    /* Calls fold if the function is implemented and needs nothing from
+     * the context: not the focus-dependent, context-dependent,
+     * nondeterministic or higher-order ones */
+    { "count(1 + 1)", "(constant integer:1)" },
+    { "not(1 = 2), exists(())", "(constant boolean:true boolean:false)" },
+    { "(1, 2, 3) => subsequence(2)", "(constant integer:2 integer:3)" },
+    { "count($v)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}count (var v))" },
+    { "upper-case('a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}upper-case "
+      "(constant string:ab))" },
+    { "position()",
+      "(call Q{http://www.w3.org/2005/xpath-functions}position)" },
+    { "string()", "(call Q{http://www.w3.org/2005/xpath-functions}string)" },
+    { "error((), 'a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}error (empty) "
+      "(constant string:ab))" },
+    { "exactly-one(())",
+      "(call Q{http://www.w3.org/2005/xpath-functions}exactly-one "
+      "(empty))" },
+    { "subsequence(?, 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}subsequence "
+      "(placeholder) (constant integer:1))" },
+    { "(1, 2)[position() = last()]",
+      "(filter (constant integer:1 integer:2) (predicate (binary = "
+      "(call Q{http://www.w3.org/2005/xpath-functions}position) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}last))))" },
+
+    /* ! gives its right side a focus of its own */
+    { "(1, 2) ! (. + 1)", "(constant integer:2 integer:3)" },
+    /* A focus-dependent call is never folded, not even with an inner
+     * focus */
+    { "(1 to 3) ! position()",
+      "(binary ! (constant integer:1..3) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}position))" },
+    { ". ! 1", "(binary ! (context) (constant integer:1))" },
+    { "$v ! .", "(binary ! (var v) (context))" },
 
     /* Errors stay for evaluation to raise */
     { "1 div 0", "(binary div (constant integer:1) (constant integer:0))" },
@@ -679,6 +716,16 @@ static const struct {
       "(step child (name x) (predicate (path (step child (name y) "
       "(predicate (call Q{http://www.w3.org/2005/xpath-functions}last))"
       ")))))" },
+    /* So are predicates whose function returns a boolean or nodes */
+    { "//x[not(@id)]",
+      "(path root (step descendant sorted (name x) (predicate (call "
+      "Q{http://www.w3.org/2005/xpath-functions}not "
+      "(path (step attribute (name id)))))))" },
+    { "//x[count(y)]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (call "
+      "Q{http://www.w3.org/2005/xpath-functions}count "
+      "(path (step child (name y)))))))" },
     /* Other focus-dependent functions only read the context item */
     { "//x[name() = 'x']",
       "(path root (step descendant sorted (name x) (predicate (binary = "

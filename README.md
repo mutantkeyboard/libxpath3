@@ -96,7 +96,15 @@ The gate is compile-only mode: each expression is compiled with the namespaces a
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
 
-Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `cast`, `castable`, `instance of` and `treat` are evaluated, while function calls are not yet. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit, XPath 3.1 has 5,346 tests passed, 3 failed and 16,682 not judged. The failures are the known one above and two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1). CI runs this as a report, which doesn't fail the pipeline yet. It also evaluates every test a second time without constant folding and path rewrites (`qt3run -e -c`), and any test whose outcome differs fails the pipeline.
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `||`, the simple map `!`, arrows to named functions, `cast`, `castable`, `instance of` and `treat` are evaluated. Function calls apply the function conversion rules, and the first built-in functions are implemented: `true`, `false`, `not`, `boolean`, `exists`, `empty`, `count`, `sum`, `avg`, `min` and `max` (not yet on strings), `exactly-one`, `zero-or-one`, `one-or-more`, `string`, `data`, `number`, `abs`, `ceiling`, `floor`, `round`, `round-half-to-even`, the `math:` functions `pi`, `exp`, `exp10`, `log`, `log10`, `pow`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan` and `atan2`, `position`, `last`, `head`, `tail`, `reverse`, `subsequence`, `remove`, `insert-before` and `error`; the others raise `UNSUPPORTED` when called. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit:
+
+| Spec | Passed | Failed | Not judged |
+|---|---|---|---|
+| XPath 2.0 | 8,509 | 3 | 6,781 |
+| XPath 3.0 | 9,144 | 4 (1 known) | 10,225 |
+| XPath 3.1 | 9,305 | 3 (1 known) | 12,723 |
+
+The failures are the known one above, two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1), and at 2.0 and 3.0 `fn-error/K-ErrorFunc-4`: `fn:error(())` raises FOER0000 as F&O 3.1 defines it, while F&O 1.0 and 3.0 required a QName, so the test expects XPTY0004 there; the 3.1 signatures apply at every level (`doc/DESIGN.md` 6.3). CI runs this as a report, which doesn't fail the pipeline yet. It also evaluates every test a second time without constant folding and path rewrites (`qt3run -e -c`), and any test whose outcome differs fails the pipeline.
 
 To run it yourself, check out the test suite at the same commit and pass its directory to Meson. `meson test --suite qt3` then runs all three levels:
 
@@ -174,7 +182,7 @@ The code is C99, with no variable-length arrays and no compiler extensions.
 Install the tools and a current libxml2 with Homebrew:
 
 ```sh
-`brew install meson ninja libxml2 doxygen`
+brew install meson ninja libxml2 doxygen
 ```
 
 Then build and test:
@@ -265,6 +273,8 @@ ctest --test-dir build-cmake
 ## Contributing
 
 Development happens on GNOME GitLab. Issues and merge requests go to https://gitlab.gnome.org/mutantkeyboard/libxpath3.
+
+Merge requests target the `test` branch; `main` gets releases.
 
 The GitHub copy is a read-only mirror, so please open issues and merge requests on GNOME GitLab.
 

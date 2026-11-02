@@ -834,7 +834,8 @@ analyzeNode(xp3Analysis *st, xp3AstNode *node) {
  *
  * A subexpression is closed if it needs nothing from outside itself:
  * no focus (an inner focus, as in a predicate, doesn't count), no
- * variable bound outside it, and no function call. Each largest closed
+ * variable bound outside it, and no call of a function that depends on
+ * the context or isn't implemented (foldableCall()). Each largest closed
  * subexpression is evaluated once, here, and replaced by a CONSTANT
  * node. A fold that raises an error, or needs more than its budget, is
  * dropped and the subexpression kept, so dynamic errors are still
@@ -911,10 +912,27 @@ isFoldable(xp3AstKind kind) {
         case XP3_AST_CAST_AS:
         case XP3_AST_PATH:
         case XP3_AST_FILTER:
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
             return(1);
         default:
             return(0);
     }
+}
+
+/*
+ * Whether a call can be folded once its arguments are: the function
+ * is implemented, and is neither focus-dependent, context-dependent,
+ * nondeterministic nor higher-order (F&O 3.1, 1.7.4). An arrow to a
+ * function expression has no func.
+ */
+static int
+foldableCall(const xp3AstNode *node) {
+    return((node->func != NULL) &&
+           !(node->func->flags & (XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT |
+                                  XP3_FUNC_NONDETERMINISTIC |
+                                  XP3_FUNC_HIGHER_ORDER)) &&
+           (xp3FuncImplementation(node->func) != NULL));
 }
 
 /* Turn a node into a CONSTANT node holding a constant value */
@@ -958,17 +976,23 @@ keepConstant(xp3Analysis *st, xp3Value *constant) {
     return(0);
 }
 
-/* Replace a node by a value, made constant. If memory runs out, the
- * optimizer stops. */
-static void
+/* Replace a node by a value, made constant. A value with nodes or
+ * function items can't be a constant, and the node stays. If memory
+ * runs out, the optimizer stops. Returns whether the node was
+ * replaced. */
+static int
 replaceByValue(xp3Optimizer *opt, xp3AstNode *node, const xp3Value *value) {
-    xp3Value *constant = xp3ValueMakeConstant(value);
+    xp3Value *constant;
 
+    if (!xp3ValueIsAtomic(value))
+        return(0);
+    constant = xp3ValueMakeConstant(value);
     if ((constant == NULL) || (keepConstant(opt->st, constant) < 0)) {
         opt->noMemory = 1;
-        return;
+        return(0);
     }
     makeConstantNode(node, constant);
+    return(1);
 }
 
 /* The size of a value, the sum of its items' xp3AtomicSize(), counted
@@ -1018,10 +1042,14 @@ tryFold(xp3Optimizer *opt, xp3AstNode *node) {
             return;
         }
         if (err == XP3_ERR_OK) {
-            opt->bytes -= valueSize(value, opt->bytes);
-            replaceByValue(opt, node, value);
+            size_t size = valueSize(value, opt->bytes);
+            int replaced = replaceByValue(opt, node, value);
+
             xp3ValueUnref(value);
-            return;
+            if (replaced)
+                opt->bytes -= size;
+            if (replaced || opt->noMemory)
+                return;
         }
     }
     for (child = node->first; child != NULL; child = child->next)
@@ -1029,13 +1057,17 @@ tryFold(xp3Optimizer *opt, xp3AstNode *node) {
 }
 
 /* Whether the focus of a child is the focus of its parent: not for
- * the steps of a path after the first, nor for predicates */
+ * the steps of a path after the first, predicates, or the right side
+ * of ! */
 static int
 sharesFocus(const xp3AstNode *parent, const xp3AstNode *child) {
     switch (parent->kind) {
         case XP3_AST_PATH:
         case XP3_AST_FILTER:
             return(child == parent->first);
+        case XP3_AST_BINARY:
+            return((parent->op != XP3_OP_SIMPLE_MAP) ||
+                   (child == parent->first));
         case XP3_AST_STEP:
             return(0);
         default:
@@ -1071,17 +1103,14 @@ nodeInfo(const xp3Optimizer *opt, const xp3AstNode *node,
         case XP3_AST_PARAM:
             info->minBind = node->op;
             break;
-        case XP3_AST_BINARY:
-            /* || and ! come with Part 12 */
-            info->hasCall = (node->op == XP3_OP_CONCAT) ||
-                            (node->op == XP3_OP_SIMPLE_MAP);
-            break;
         case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
+            info->hasCall = !foldableCall(node);
+            break;
         case XP3_AST_ARG_PLACEHOLDER:
         case XP3_AST_DYNAMIC_CALL:
         case XP3_AST_NAMED_FUNCTION_REF:
         case XP3_AST_INLINE_FUNCTION:
-        case XP3_AST_ARROW:
         case XP3_AST_LOOKUP:
         case XP3_AST_UNARY_LOOKUP:
         case XP3_AST_MAP:
@@ -1263,6 +1292,13 @@ isBooleanOrNodes(const xp3AstNode *expr) {
         case XP3_AST_PATH:
             return((expr->last != NULL) &&
                    (expr->last->kind == XP3_AST_STEP));
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
+            /* By the result type of the signature, as fn:not() */
+            return((expr->func != NULL) &&
+                   (((expr->func->result.kind == XP3_AST_ATOMIC_TYPE) &&
+                     (expr->func->result.type == XP3_TYPE_BOOLEAN)) ||
+                    (expr->func->result.kind == XP3_AST_KIND_TEST)));
         case XP3_AST_CONSTANT: {
             xp3Item item;
             int ret = 0;
