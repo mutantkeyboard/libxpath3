@@ -330,8 +330,8 @@ testTypes(void) {
 
 /*
  * The implemented functions, and the properties constant folding reads
- * from them: the focus functions and fn:error must not be folded, the
- * others may.
+ * from them: the focus functions, those that depend on the default
+ * collation and fn:error must not be folded, the others may.
  */
 static void
 testImplementations(void) {
@@ -349,10 +349,40 @@ testImplementations(void) {
         { "round-half-to-even", 1, 0 }, { "round-half-to-even", 2, 0 },
         { "sum", 1, 0 }, { "sum", 2, 0 }, { "avg", 1, 0 },
         { "min", 1, XP3_FUNC_CONTEXT }, { "max", 1, XP3_FUNC_CONTEXT },
+        { "min", 2, XP3_FUNC_CONTEXT }, { "max", 2, XP3_FUNC_CONTEXT },
+        { "distinct-values", 1, XP3_FUNC_CONTEXT | XP3_FUNC_ORDER },
+        { "distinct-values", 2, XP3_FUNC_CONTEXT | XP3_FUNC_ORDER },
+        { "index-of", 2, XP3_FUNC_CONTEXT },
+        { "index-of", 3, XP3_FUNC_CONTEXT },
+        { "deep-equal", 2, XP3_FUNC_CONTEXT },
+        { "deep-equal", 3, XP3_FUNC_CONTEXT },
         { "head", 1, 0 }, { "tail", 1, 0 },
         { "reverse", 1, 0 }, { "subsequence", 2, 0 },
         { "subsequence", 3, 0 }, { "remove", 2, 0 },
         { "insert-before", 3, 0 },
+        { "codepoints-to-string", 1, 0 }, { "string-to-codepoints", 1, 0 },
+        { "codepoint-equal", 2, 0 }, { "concat", 2, XP3_FUNC_VARIADIC },
+        { "string-join", 1, 0 }, { "string-join", 2, 0 },
+        { "substring", 2, 0 }, { "substring", 3, 0 },
+        { "string-length", 1, 0 }, { "normalize-space", 1, 0 },
+        { "translate", 3, 0 }, { "tokenize", 1, 0 },
+        { "encode-for-uri", 1, 0 }, { "iri-to-uri", 1, 0 },
+        { "escape-html-uri", 1, 0 },
+        { "compare", 2, XP3_FUNC_CONTEXT }, { "compare", 3, XP3_FUNC_CONTEXT },
+        { "contains-token", 2, XP3_FUNC_CONTEXT },
+        { "contains-token", 3, XP3_FUNC_CONTEXT },
+        { "contains", 2, XP3_FUNC_CONTEXT },
+        { "contains", 3, XP3_FUNC_CONTEXT },
+        { "starts-with", 2, XP3_FUNC_CONTEXT },
+        { "starts-with", 3, XP3_FUNC_CONTEXT },
+        { "ends-with", 2, XP3_FUNC_CONTEXT },
+        { "ends-with", 3, XP3_FUNC_CONTEXT },
+        { "substring-before", 2, XP3_FUNC_CONTEXT },
+        { "substring-before", 3, XP3_FUNC_CONTEXT },
+        { "substring-after", 2, XP3_FUNC_CONTEXT },
+        { "substring-after", 3, XP3_FUNC_CONTEXT },
+        { "string-length", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "normalize-space", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
         { "string", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
         { "data", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
         { "number", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
@@ -408,6 +438,9 @@ testImplementations(void) {
     check(xp3FuncImplementation(lookup(FN, "upper-case", 1,
                                        XP3_XPATH_31)) == NULL,
           "fn:upper-case is not implemented yet");
+    check(xp3FuncImplementation(lookup(FN, "tokenize", 2,
+                                       XP3_XPATH_31)) == NULL,
+          "fn:tokenize#2 is not implemented yet");
 }
 
 int

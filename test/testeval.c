@@ -172,6 +172,11 @@ typedef struct {
     const char *expected;
 } xp3EvalCase;
 
+/* Collation URIs as XPath string literals; UCA is open for a query */
+#define HTML_ASCII "'http://www.w3.org/2005/xpath-functions/collation/" \
+                   "html-ascii-case-insensitive'"
+#define UCA "'http://www.w3.org/2013/collation/UCA"
+
 /* Evaluated with the element r as the context node */
 static const xp3EvalCase xp3Cases[] = {
     /* Literals and sequences */
@@ -912,6 +917,229 @@ static const xp3EvalCase xp3Cases[] = {
     { "number((1, 2))", "error:XPTY0004" },
     { "number(x)", "error:XPTY0004" },
 
+    /* Assembling and disassembling strings (5.2) */
+    { "codepoints-to-string((66, 65, 67, 72)), codepoints-to-string(()), "
+      "string-to-codepoints(codepoints-to-string((233, 2309, 65537, "
+      "1114111, 9))), codepoints-to-string(65 to 67)",
+      "string:BACH string: integer:233 integer:2309 integer:65537 "
+      "integer:1114111 integer:9 string:ABC" },
+    { "codepoints-to-string(0)", "error:FOCH0001" },
+    { "codepoints-to-string((65, 55296))", "error:FOCH0001" },
+    { "codepoints-to-string(65534)", "error:FOCH0001" },
+    { "codepoints-to-string(1114112)", "error:FOCH0001" },
+    { "codepoints-to-string(-1)", "error:FOCH0001" },
+    { "codepoints-to-string(-4294967231)", "error:FOCH0001" },
+    { "codepoints-to-string(99999999999999999999)", "error:FOCH0001" },
+    { "codepoints-to-string('a')", "error:XPTY0004" },
+    { "string-to-codepoints('Th\xc3\xa9r\xc3\xa8se'), "
+      "string-to-codepoints(''), string-to-codepoints(()), "
+      "string-to-codepoints(@a)",
+      "integer:84 integer:104 integer:233 integer:114 integer:232 "
+      "integer:115 integer:101 integer:49" },
+
+    /* Comparing strings (5.3) */
+    { "compare('abc', 'abc'), compare('abc', 'abd'), compare('b', 'abc'), "
+      "compare('', 'a'), compare((), 'a'), compare('a', ()), "
+      "compare(x[1], 'one'), compare(xs:anyURI('a'), 'a')",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:0 integer:0" },
+    { "compare('\xef\xbf\xbd', '\xf0\x90\x80\x80'), "
+      "compare('\xc3\xa9', 'z'), "
+      "compare('a', 'b', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "integer:-1 integer:1 integer:-1" },
+    { "compare((), 'a', 'collation/codepoint')", "error:FOCH0002" },
+    { "compare('a', 'a', 'http://example.com/collation')", "error:FOCH0002" },
+
+    /* UCA URIs fall back to the codepoint collation unless they say
+     * fallback=no (5.3.3) */
+    { "compare('b', 'a', " UCA "'), compare('a', 'B', " UCA "?'), "
+      "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+      "compare('a', 'b', " UCA "?lang=en;'), "
+      "compare('a', 'b', " UCA "?numeric=unknown;;keyword=x;version=')",
+      "integer:1 integer:1 integer:1 integer:-1 integer:-1" },
+    { "compare('a', 'b', " UCA "?fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=no;fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=maybe'), "
+      "compare('a', 'b', " UCA "?fallback=No'), "
+      "contains('aB', 'B', " UCA "?lang=de')",
+      "integer:-1 integer:-1 integer:-1 integer:-1 boolean:true" },
+    { "compare('a', 'b', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?fallback=yes;lang=en;fallback=no')",
+      "error:FOCH0002" },
+    { "compare((), 'a', " UCA "?strength=primary;fallback=no')",
+      "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang=en;=x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "/?lang=en')", "error:FOCH0002" },
+
+    /* The HTML ASCII case-insensitive collation (5.3.4) */
+    { "compare('a', 'A', " HTML_ASCII "), "
+      "compare('abc', 'ABD', " HTML_ASCII "), "
+      "compare('Z', 'a', " HTML_ASCII "), compare('[', 'a', " HTML_ASCII "), "
+      "compare('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "compare((), 'a', " HTML_ASCII ")",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:-1" },
+    { "contains('iNPut', 'pu', " HTML_ASCII "), "
+      "contains('iNPut', 'PUx', " HTML_ASCII "), "
+      "contains('aaAB', 'AAb', " HTML_ASCII "), "
+      "contains('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('Input', 'iN', " HTML_ASCII "), "
+      "starts-with('In', 'iNput', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Put', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Pat', " HTML_ASCII ")",
+      "boolean:true boolean:false boolean:true boolean:false boolean:true "
+      "boolean:false boolean:true boolean:false" },
+    { "substring-before('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xx', " HTML_ASCII "), "
+      "contains-token('red GREEN', 'green', " HTML_ASCII "), "
+      "contains-token('a\xc3\x81', 'A\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('a', 'A')",
+      "string:a string:Xc string: boolean:true boolean:false "
+      "boolean:false" },
+    { "codepoint-equal('abcd', 'abcd'), codepoint-equal('abcd', 'abcd '), "
+      "codepoint-equal('', ''), codepoint-equal('', ()), "
+      "codepoint-equal((), ())",
+      "boolean:true boolean:false boolean:true" },
+    { "contains-token('red green blue ', 'red'), "
+      "contains-token(('red', 'green', 'blue'), ' red '), "
+      "contains-token('red, green, blue', 'red'), contains-token((), 'a'), "
+      "contains-token('a b', ' '), contains-token('a b', 'a b'), "
+      "contains-token('a\tb', 'b'), contains-token(x, 'two')",
+      "boolean:true boolean:true boolean:false boolean:false "
+      "boolean:false boolean:false boolean:true boolean:true" },
+    { "contains-token('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true" },
+    { "contains-token('a', 'a', 'html-ascii-case-insensitive')",
+      "error:FOCH0002" },
+
+    /* Functions on string values (5.4) */
+    { "concat('un', 'grateful'), concat('a', (), 1, 2.5, true(), x[1], "
+      "xs:untypedAtomic('u')), concat(1e0, xs:float('INF'), "
+      "xs:hexBinary('0a')), concat((), ())",
+      "string:ungrateful string:a12.5trueoneu string:1INF0A string:" },
+    { "concat((1, 2), 'a')", "error:XPTY0004" },
+    { "concat('a')", "error:XPST0017" },
+    { "string-join(1 to 9), string-join((), 'x'), string-join(x, '-'), "
+      "string-join('a', '-'), string-join((1, 'b', 2.5), '')",
+      "string:123456789 string: string:one-two string:a string:1b2.5" },
+    { "string-join(1 to 5, ', ')", "string:1, 2, 3, 4, 5" },
+    { "string-join((1, 2), ())", "error:XPTY0004" },
+    { "substring('motor car', 6), substring('metadata', 4, 3), "
+      "substring('12345', 1.5, 2.6), substring('12345', 0, 3), "
+      "substring('12345', 5, -3), substring('12345', -3, 5)",
+      "string: car string:ada string:234 string:12 string: string:1" },
+    { "substring('12345', 0 div 0e0, 3), substring('12345', 1, 0 div 0e0), "
+      "substring((), 1, 3), substring('12345', -42, 1 div 0e0), "
+      "substring('12345', -1 div 0e0, 1 div 0e0), "
+      "substring('12345', 1 div 0e0), substring('12345', 0 div 0e0)",
+      "string: string: string: string:12345 string: string: string:" },
+    { "substring('12345', 2.5), substring('12345', -0.5, 2), "
+      "substring('12345', 0.49999999999999994e0, 1), "
+      "substring('12345', -1 div 0e0), substring('12345', 3, 1e300)",
+      "string:345 string:1 string: string:12345 string:345" },
+    { "string-to-codepoints(substring('a\xf0\x90\x80\x80" "b', 2, 1)), "
+      "substring(x[1], 2), substring(@a, 1)",
+      "integer:65536 string:ne string:1" },
+    { "substring('abc', 'a')", "error:XPTY0004" },
+    { "substring('abc', x[1])", "error:FORG0001" },
+    { "string-length('Harp'), string-length(()), string-length(''), "
+      "string-length(), string-length(x[2]), "
+      "string-length('a\xf0\x90\x80\x80\xc3\xa9')",
+      "integer:4 integer:0 integer:0 integer:10 integer:3 integer:3" },
+    { "string-length(1)", "error:XPTY0004" },
+    { "normalize-space('  a  b\t\n\rc  '), normalize-space(()), "
+      "normalize-space('   '), x ! normalize-space(), "
+      "string-length(normalize-space(' a\xc2\xa0" "b '))",
+      "string:a b c string: string: string:one string:two integer:3" },
+    { "translate('bar', 'abc', 'ABC'), translate('--aaa--', 'abc-', 'ABC'), "
+      "translate('abcdabc', 'abc', 'AB'), translate('abc', '', 'x'), "
+      "translate((), 'a', 'b'), translate('aba', 'aa', 'xy')",
+      "string:BAr string:AAA string:ABdAB string:abc string: string:xbx" },
+    { "string-to-codepoints(translate('abc', 'b', '\xf0\x90\x80\x80')), "
+      "translate('a\xf0\x90\x80\x80" "c', '\xf0\x90\x80\x80', 'b'), "
+      "translate('cba', 'abcabc', 'xyzuvw')",
+      "integer:97 integer:65536 integer:99 string:abc string:zyx" },
+
+    /* Substring matching (5.5) */
+    { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
+      "contains('', ()), contains((), ''), contains('abc', ''), "
+      "contains('', 'a'), contains('abababc', 'ababc'), "
+      "contains('aaab', 'aab'), contains('ab', 'abc')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:true "
+      "boolean:false boolean:true boolean:true boolean:false" },
+    { "starts-with('tattoo', 'tat'), starts-with('tattoo', 'att'), "
+      "starts-with((), ()), starts-with('a', ''), starts-with('', 'a'), "
+      "starts-with('a', 'ab')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "ends-with('tattoo', 'too'), ends-with('tattoo', 'atto'), "
+      "ends-with((), ()), ends-with('a', ''), ends-with('', 'a'), "
+      "ends-with('a', 'ba')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "substring-before('tattoo', 'attoo'), "
+      "substring-before('tattoo', 'tatto'), substring-before('abc', ''), "
+      "substring-before((), ()), substring-before('abc', 'x'), "
+      "substring-before('abcbc', 'bc')",
+      "string:t string: string: string: string: string:a" },
+    { "substring-after('tattoo', 'tat'), "
+      "substring-after('tattoo', 'tattoo'), substring-after('abc', ''), "
+      "substring-after((), ()), substring-after('abc', 'x'), "
+      "substring-after('abcbc', 'bc')",
+      "string:too string: string:abc string: string: string:bc" },
+    { "contains('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint'), "
+      "substring-after('ab', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true string:b" },
+    { "starts-with('a', 'a', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "ends-with('a', 'a', '')", "error:FOCH0002" },
+    { "substring-before('a', 'a', 'x')", "error:FOCH0002" },
+    { "contains('a', 'a', ())", "error:XPTY0004" },
+
+    /* Splitting strings (5.6.5) */
+    { "tokenize(' red green\tblue  '), tokenize(''), tokenize(()), "
+      "tokenize('   '), tokenize('a'), tokenize(x[2])",
+      "string:red string:green string:blue string:a string:two" },
+    { "tokenize('a b', ' ')", "error:UNSUPPORTED" },
+
+    /* Functions on URIs (6) */
+    { "encode-for-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean')",
+      "string:http%3A%2F%2Fwww.example.com%2F00%2FWeather%2FCA%2F"
+      "Los%2520Angeles%23ocean" },
+    { "concat('http://www.example.com/', encode-for-uri('~b\xc3\xa9"
+      "b\xc3\xa9')), encode-for-uri('100% organic'), encode-for-uri(()), "
+      "encode-for-uri('AZaz09-_.~'), encode-for-uri('\xf0\x90\x80\x80'), "
+      "encode-for-uri(' !*'), encode-for-uri(xs:anyURI('a b'))",
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 string:100%25%20organic "
+      "string: string:AZaz09-_.~ string:%F0%90%80%80 string:%20%21%2A "
+      "string:a%20b" },
+    { "encode-for-uri(1)", "error:XPTY0004" },
+    { "iri-to-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean'), "
+      "iri-to-uri('http://www.example.com/~b\xc3\xa9" "b\xc3\xa9'), "
+      "iri-to-uri('My Documents'), iri-to-uri('My%20Documents'), "
+      "iri-to-uri(())",
+      "string:http://www.example.com/00/Weather/CA/Los%20Angeles#ocean "
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 "
+      "string:My%20Documents string:My%20Documents string:" },
+    { "iri-to-uri('<>\"{}|\\^`'), "
+      "iri-to-uri(codepoints-to-string((9, 10, 13, 127))), "
+      "iri-to-uri('!#$&()*+,/:;=?@[]~%'), iri-to-uri(x[1])",
+      "string:%3C%3E%22%7B%7D%7C%5C%5E%60 string:%09%0A%0D%7F "
+      "string:!#$&()*+,/:;=?@[]~% string:one" },
+    { "escape-html-uri('http://www.example.com/00/Weather/CA/"
+      "Los Angeles#ocean')",
+      "string:http://www.example.com/00/Weather/CA/Los Angeles#ocean" },
+    { "escape-html-uri('~b\xc3\xa9'), escape-html-uri(()), "
+      "escape-html-uri(codepoints-to-string((9, 127, 32, 126))), "
+      "escape-html-uri('<%>\"')",
+      "string:~b%C3%A9 string: string:%09%7F ~ string:<%>\"" },
+
     /* Errors (3.1.1) */
     { "error()", "error:FOER0000" },
     { "error(())", "error:FOER0000" },
@@ -986,6 +1214,68 @@ static const xp3EvalCase xp3Cases[] = {
     { "insert-before((), 5, x), insert-before(x, 1, ())",
       "e:x#x1 e:x#x2 e:x#x1 e:x#x2" },
     { "insert-before((1, 2), (), 3)", "error:XPTY0004" },
+
+    /* Comparing values in sequences (14.2) */
+    { "distinct-values((1, 2.0, 3, 2, 1e0, xs:float(1))), "
+      "distinct-values(()), distinct-values(1 to 3), distinct-values(x)",
+      "integer:1 decimal:2 integer:3 integer:1 integer:2 integer:3 "
+      "untypedAtomic:one untypedAtomic:two" },
+    { "distinct-values(('a', xs:untypedAtomic('a'), xs:anyURI('a'), 'b', "
+      "'A')), distinct-values(('a', 'A', 'b'), " HTML_ASCII ")",
+      "string:a string:b string:A string:a string:b" },
+    { "distinct-values((xs:double('NaN'), xs:float('NaN'), 0e0, -0e0, "
+      "xs:float('-0'), 0)), distinct-values((true(), 1, 'true', false(), "
+      "true()))",
+      "double:NaN double:0 boolean:true integer:1 string:true "
+      "boolean:false" },
+    { "distinct-values((xs:hexBinary('0A'), xs:base64Binary('Cg=='), "
+      "xs:hexBinary('0a')))", "hexBinary:0A base64Binary:Cg==" },
+    /* eq is not transitive across numeric types; a decimal rounds to
+     * one float directly and to the one below through xs:double */
+    { "distinct-values((0.1, 0.1e0, xs:float(0.1))), "
+      "distinct-values((xs:float(0.1), 0.1e0, 0.1)), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "1.0000000596046447762579867379"
+      "88403547205962240695953369140625))), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "xs:double(1.00000005960464477625798673"
+      "7988403547205962240695953369140625)))), "
+      "distinct-values((1, 1.0, xs:byte(1), 10000000000000000000001, "
+      "1e22)) instance of xs:integer+",
+      "decimal:0.1 float:0.1 double:0.1 integer:1 integer:2 "
+      "boolean:true" },
+    /* Many distinct numbers that share their nearest float or double
+     * take linear time: quadratic, these took minutes */
+    { "count(distinct-values((1 to 100000) ! "
+      "(1e0 + . * 2.220446049250313e-16))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(1 + . div 1000000000000000000000000))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(. + 1000000000000000000000000000000000000000)))",
+      "integer:100000 integer:100000 integer:100000" },
+    { "distinct-values(1, 'x')", "error:FOCH0002" },
+    { "index-of((10, 20, 30, 30, 20, 10), 20), index-of((10, 20), 35), "
+      "index-of(('a', 'sport', 'and', 'a', 'pastime'), 'a')",
+      "integer:2 integer:5 integer:1 integer:4" },
+    { "index-of((1, 'a', 1.0, 1e0, xs:untypedAtomic('1')), 1), "
+      "index-of(xs:double('NaN'), xs:double('NaN')), index-of(x, 'two'), "
+      "index-of(1 to 5, 4), index-of(('a', 'A'), 'a', " HTML_ASCII ")",
+      "integer:1 integer:3 integer:4 integer:2 integer:4 integer:1 "
+      "integer:2" },
+    { "index-of((1, 2), (1, 2))", "error:XPTY0004" },
+    { "index-of((1, 2), 1, 'x')", "error:FOCH0002" },
+    { "deep-equal((1, 'a'), (1e0, xs:untypedAtomic('a'))), "
+      "deep-equal((), ()), deep-equal(1, ()), "
+      "deep-equal(xs:double('NaN'), xs:float('NaN')), deep-equal(1, '1'), "
+      "deep-equal(x, x), deep-equal(x[1], x[2]), deep-equal(x[1], 'one')",
+      "boolean:true boolean:true boolean:false boolean:true boolean:false "
+      "boolean:true boolean:false boolean:false" },
+    { "deep-equal(/, /), deep-equal(@a, @a), deep-equal(comment(), "
+      "comment()), deep-equal(x[1]/text(), x[1]/text()), "
+      "deep-equal('a', 'A', " HTML_ASCII "), deep-equal('a', 'A')",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true "
+      "boolean:false" },
+    { "deep-equal(1, 1, 'x')", "error:FOCH0002" },
 
     /* Cardinality and counting (14.3, 14.4.1) */
     { "exactly-one(1), zero-or-one(()), zero-or-one(x[1]), "
@@ -1067,8 +1357,18 @@ static const xp3EvalCase xp3Cases[] = {
     { "min((true(), 1))", "error:FORG0006" },
     { "max((xs:hexBinary('0A'), xs:base64Binary('AA==')))",
       "error:FORG0006" },
-    { "min(('a', 'b'))", "error:UNSUPPORTED" },
-    { "max((xs:anyURI('a'), 'b'))", "error:UNSUPPORTED" },
+    { "min(('b', 'a', 'c')), max(('b', 'a', 'c')), "
+      "min(('b', xs:anyURI('a'))), max((xs:anyURI('a'), xs:anyURI('b'))), "
+      "max((xs:token('z'), xs:anyURI('a'))), max(('a', xs:anyURI('b')))",
+      "string:a string:c string:a anyURI:b token:z string:b" },
+    { "max(('a', 'B')), max(('a', 'B'), " HTML_ASCII "), "
+      "min(('a', 'B'), " HTML_ASCII "), "
+      "max((xs:anyURI('a'), xs:anyURI('B')), " HTML_ASCII "), "
+      "min((1, 2), " HTML_ASCII ")",
+      "string:a string:B string:a anyURI:a integer:1" },
+    { "min(('a', xs:untypedAtomic('1')))", "error:FORG0006" },
+    { "max((xs:anyURI('a'), true()))", "error:FORG0006" },
+    { "max(('a', 'b'), 'x')", "error:FOCH0002" },
     { "min(xs:untypedAtomic('a'))", "error:FORG0001" },
     { "max(x)", "error:FORG0001" },
 
@@ -1471,6 +1771,12 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "string()", "error:XPDY0002");
     checkEval(NULL, NULL, "data()", "error:XPDY0002");
     checkEval(NULL, NULL, "number()", "error:XPDY0002");
+    checkEval(NULL, NULL, "string-length()", "error:XPDY0002");
+    checkEval(NULL, NULL, "normalize-space()", "error:XPDY0002");
+    checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
+              "integer:2 integer:3");
+    checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
+              "string:a string:b");
     checkEval(NULL, NULL, "(1, 2)[position() = 2]", "integer:2");
     checkEval(NULL, NULL, "(1, 2) ! string()", "string:1 string:2");
     checkEval(NULL, NULL, "('1', 'a') ! number()", "double:1 double:NaN");
@@ -1493,6 +1799,167 @@ testAggregateLevels(void) {
         checkEval(sctx, NULL, "max((true(), false()))", "boolean:true");
     }
     xp3FreeStaticContext(sctx);
+}
+
+/* fn:string-join#1 comes with XPath 3.0, fn:tokenize#1 and
+ * fn:contains-token with 3.1 */
+static void
+testStringLevels(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+
+    if ((sctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_20) < 0)) {
+        check(0, "static context at level 2.0");
+    } else {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "error:XPST0017");
+        checkEval(sctx, NULL, "string-join(('a', 'b'), '-')", "string:a-b");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+        checkEval(sctx, NULL, "contains-token('a b', 'a')",
+                  "error:XPST0017");
+    }
+    if ((sctx != NULL) &&
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) == 0)) {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "string:ab");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+    }
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * fn:deep-equal on nodes (F&O 3.1, 14.2.3): pairs that differ in one
+ * respect. A comment or processing instruction between two texts
+ * counts only by splitting them; attributes are a set.
+ */
+static const char xp3DeepDoc[] =
+    "<t>"
+    "<p><e a='1' b='2'>x<!--c-->y<f/></e></p>"
+    "<q><e b='2' a='1'>x<?pi?>y<f/></e></q>"
+    "<r><e a='1' b='2'>xy<f/></e></r>"
+    "<s><e a='1' b='3'>x<!--c-->y<f/></e></s>"
+    "<u><e a='1'>x<!--c-->y<f/></e></u>"
+    "<v xmlns:n='urn:n'><n:e a='1' b='2'>x<!--c-->y<f/></n:e></v>"
+    "<g xmlns:m='urn:n'><m:e a='1' b='2'>x<!--c-->y<f/></m:e></g>"
+    "<w><e a='1' b='2'>X<!--c-->Y<f/></e></w>"
+    "<k xmlns:n='urn:n'><e n:a='1'/></k><l><e a='1'/></l>"
+    "<m><e a1='1' a2='2' a3='3' a4='4' a5='5' a6='6' a7='7' a8='8' "
+    "a9='9'/></m>"
+    "<n><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='1'/></n>"
+    "<o><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='0'/></o>"
+    "<h><e a='1' b='2'>x<!--c-->y<f><i/></f></e></h>"
+    "</t>";
+
+static const xp3EvalCase xp3DeepCases[] = {
+    { "deep-equal(p/e, q/e), deep-equal(p/e, r/e), deep-equal(p/e, s/e), "
+      "deep-equal(p/e, u/e), deep-equal(p/e, v/*), deep-equal(v/*, g/*)",
+      "boolean:true boolean:false boolean:false boolean:false "
+      "boolean:false boolean:true" },
+    { "deep-equal(p/e, w/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+      "deep-equal(m/e, n/e), deep-equal(m/e, o/e), deep-equal(k/e, l/e), "
+      "deep-equal(p/e, h/e), deep-equal(h/e, p/e)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false boolean:false boolean:false" },
+    { "deep-equal(p, q), deep-equal(p/e/text(), q/e/text()), "
+      "deep-equal(p/e/comment(), s/e/comment()), "
+      "deep-equal(p/e/comment(), q/e/processing-instruction()), "
+      "deep-equal(p/e/@a, q/e/@a), deep-equal(p/e/@a, p/e/@b)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:true boolean:false" },
+    { "deep-equal((p/e, 1), (q/e, 1)), deep-equal((1, 2), 1), "
+      "deep-equal(p/e, 'x'), deep-equal(p/e/f, h/e/f/i)",
+      "boolean:true boolean:false boolean:false boolean:false" }
+};
+
+static void
+testDeepEqual(void) {
+    xmlDocPtr doc = parseDoc(xp3DeepDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep-equal test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3DeepCases) / sizeof(xp3DeepCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+            checkEval(plain, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+        }
+    }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/* A document of one chain of elements, the innermost with a text */
+static xmlDocPtr
+chainDoc(int depth, const char *leaf) {
+    xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
+    xmlNodePtr cur;
+    int i;
+
+    if (doc == NULL)
+        return(NULL);
+    cur = xmlNewDocNode(doc, NULL, BAD_CAST "a", NULL);
+    xmlDocSetRootElement(doc, cur);
+    for (i = 1; (cur != NULL) && (i < depth); i++)
+        cur = xmlNewChild(cur, NULL, BAD_CAST "a", NULL);
+    if ((cur == NULL) ||
+        (xmlNewChild(cur, NULL, BAD_CAST "b", BAD_CAST leaf) == NULL)) {
+        xmlFreeDoc(doc);
+        return(NULL);
+    }
+    return(doc);
+}
+
+/* fn:deep-equal walks trees without recursion, so depth needs no
+ * stack */
+static void
+testDeepTrees(void) {
+    xmlDocPtr doc = chainDoc(100000, "leaf");
+    xmlDocPtr same = chainDoc(100000, "leaf");
+    xmlDocPtr other = chainDoc(100000, "other");
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *bound[2] = { NULL, NULL };
+    xmlNodePtr root;
+
+    if ((doc == NULL) || (same == NULL) || (other == NULL) ||
+        (sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep trees set up");
+        goto done;
+    }
+    root = xmlDocGetRootElement(same);
+    bound[0] = xp3NewNodeSequence(&root, 1);
+    root = xmlDocGetRootElement(other);
+    bound[1] = xp3NewNodeSequence(&root, 1);
+    if ((bound[0] == NULL) || (bound[1] == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[0]) < 0)) {
+        check(0, "deep trees bound");
+        goto done;
+    }
+    checkEval(sctx, ctx, "deep-equal(., $v), deep-equal(/, $v/..)",
+              "boolean:true boolean:true");
+    if (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[1]) < 0)
+        check(0, "deep tree rebound");
+    else
+        checkEval(sctx, ctx, "deep-equal(., $v)", "boolean:false");
+
+done:
+    xp3FreeSequence(bound[0]);
+    xp3FreeSequence(bound[1]);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    xmlFreeDoc(doc);
+    xmlFreeDoc(same);
+    xmlFreeDoc(other);
 }
 
 /*
@@ -1585,15 +2052,22 @@ testTreeChange(void) {
 
 /* Text that libxml2 stored without checking it: a lead byte from 0xF8
  * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
- * bytes with lead byte 0xF0 are U+10000, a name character. */
+ * bytes with lead byte 0xF0 are U+10000, a name character. The string
+ * functions count each byte that is not UTF-8 as one character, U+FFFD,
+ * which the URI functions escape as such. */
 static void
 testInvalidUtf8(void) {
     static const struct {
         const char *text;
         const char *expected;
+        const char *codepoints;
+        const char *escaped;
     } cases[] = {
-        { "\xf8\x90\x80\x80", "boolean:false" },
-        { "\xf0\x90\x80\x80", "boolean:true" }
+        { "\xf8\x90\x80\x80", "boolean:false",
+          "integer:65533 integer:65533 integer:65533 integer:65533",
+          "string:%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD" },
+        { "\xf0\x90\x80\x80", "boolean:true", "integer:65536",
+          "string:%F0%90%80%80" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     size_t i;
@@ -1613,6 +2087,8 @@ testInvalidUtf8(void) {
         check(xp3SetContextNode(ctx, root) == 0, "context node set");
         checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
         checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
+        checkEval(NULL, ctx, "string-to-codepoints(.)", cases[i].codepoints);
+        checkEval(NULL, ctx, "encode-for-uri(.)", cases[i].escaped);
         xp3SetContextNode(ctx, NULL);
         xmlFreeDoc(doc);
     }
@@ -2632,6 +3108,52 @@ static const char *const xp3AllocAggregateExpected =
     "double:4.5 string:z integer:50000000005000000000 decimal:1.5 "
     "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
 
+/* The string and URI functions and the collations, with searches for
+ * strings longer than the table that fits on the stack */
+static const char *const xp3AllocStrings =
+    "(concat('a', 1, x[1]), string-join(1 to 3, '-'), "
+    "string-join((), 'x'), substring('12345', 2, 2), string-length(x[2]), "
+    "normalize-space(' a  b '), normalize-space(), "
+    "translate('abcabc', 'ab', 'B'), compare('a', 'b'), "
+    "codepoint-equal('a', 'a'), codepoints-to-string((65, 66)), "
+    "string-to-codepoints('ab'), contains-token(('a b', 'c'), ' c '), "
+    "tokenize(' a b '), substring-before('abc', 'b'), "
+    "substring-after('abc', 'b'), starts-with('abc', 'ab'), "
+    "ends-with('abc', 'bc'), contains(x[1], 'n'), "
+    "contains(string-join(for $i in 1 to 40 return 'ab'), "
+    "string-join(for $i in 1 to 35 return 'ab')), "
+    "contains(string-join(for $i in 1 to 40 return 'aB'), "
+    "string-join(for $i in 1 to 35 return 'Ab'), " HTML_ASCII "), "
+    "compare('A', 'a', " HTML_ASCII "), "
+    "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+    "encode-for-uri('a b\xc3\xa9'), iri-to-uri('a b'), "
+    "escape-html-uri('\xc3\xa9x'))";
+
+static const char *const xp3AllocStringsExpected =
+    "string:a1one string:1-2-3 string: string:23 integer:3 string:a b "
+    "string:onetwotail string:BcBc integer:-1 boolean:true string:AB "
+    "integer:97 integer:98 boolean:true string:a string:b string:a "
+    "string:c boolean:true boolean:true boolean:true boolean:true "
+    "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
+    "string:%C3%A9x";
+
+/* The functions that compare values in sequences, on xp3DeepDoc */
+static const char *const xp3AllocCompare =
+    "(distinct-values((1, 2.5, 2.5e0, 'a', 'A', xs:float(1), true())), "
+    "count(distinct-values(((1 to 20) ! (. * 1.5), 30, 30e0, "
+    "xs:float(30), 100000000000000000000))), "
+    "distinct-values(('a', 'A'), " HTML_ASCII "), "
+    "index-of((1, 'a', 1.0), 1), deep-equal(p/e, q/e), "
+    "deep-equal(m/e, n/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+    "min(('b', 'a')), max(('a', xs:anyURI('b'))), "
+    "max(('a', 'B'), " HTML_ASCII "))";
+
+static const char *const xp3AllocCompareExpected =
+    "integer:1 decimal:2.5 string:a string:A boolean:true integer:21 "
+    "string:a "
+    "integer:1 integer:3 boolean:true boolean:true boolean:true "
+    "string:a string:b string:B";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -2690,8 +3212,9 @@ done:
 }
 
 static void
-testAllocationFailures(const char *text, const char *expected) {
-    xmlDocPtr doc = parseDoc(xp3TestDoc);
+testAllocationFailuresIn(const char *xml, const char *text,
+                         const char *expected) {
+    xmlDocPtr doc = parseDoc(xml);
     char actual[2048];
     char code[64];
     xp3Sequence *result;
@@ -2739,6 +3262,11 @@ testAllocationFailures(const char *text, const char *expected) {
     check(i > 0 && i < 5000, "allocation failure points exercised");
     xp3TestAllocRestore();
     xmlFreeDoc(doc);
+}
+
+static void
+testAllocationFailures(const char *text, const char *expected) {
+    testAllocationFailuresIn(xp3TestDoc, text, expected);
 }
 
 /*
@@ -2796,6 +3324,9 @@ main(void) {
     testFocus();
     testFunctionFocus();
     testAggregateLevels();
+    testStringLevels();
+    testDeepEqual();
+    testDeepTrees();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -2813,6 +3344,9 @@ main(void) {
     testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
     testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
+    testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
+                             xp3AllocCompareExpected);
     testLocale();
 
     if (failures == 0)
