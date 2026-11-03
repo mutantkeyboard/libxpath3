@@ -318,6 +318,15 @@ xp3FnSubstringAfter(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnTokenize(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnEncodeForUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnIriToUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnEscapeHtmlUri(xp3FuncCall *call, xp3Value **args, int count);
+
 /* Implementations in xp3fnnumeric.c */
 xp3Value *
 xp3FnAbs(xp3FuncCall *call, xp3Value **args, int count);

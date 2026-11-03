@@ -1106,6 +1106,40 @@ static const xp3EvalCase xp3Cases[] = {
       "string:red string:green string:blue string:a string:two" },
     { "tokenize('a b', ' ')", "error:UNSUPPORTED" },
 
+    /* Functions on URIs (6) */
+    { "encode-for-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean')",
+      "string:http%3A%2F%2Fwww.example.com%2F00%2FWeather%2FCA%2F"
+      "Los%2520Angeles%23ocean" },
+    { "concat('http://www.example.com/', encode-for-uri('~b\xc3\xa9"
+      "b\xc3\xa9')), encode-for-uri('100% organic'), encode-for-uri(()), "
+      "encode-for-uri('AZaz09-_.~'), encode-for-uri('\xf0\x90\x80\x80'), "
+      "encode-for-uri(' !*'), encode-for-uri(xs:anyURI('a b'))",
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 string:100%25%20organic "
+      "string: string:AZaz09-_.~ string:%F0%90%80%80 string:%20%21%2A "
+      "string:a%20b" },
+    { "encode-for-uri(1)", "error:XPTY0004" },
+    { "iri-to-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean'), "
+      "iri-to-uri('http://www.example.com/~b\xc3\xa9" "b\xc3\xa9'), "
+      "iri-to-uri('My Documents'), iri-to-uri('My%20Documents'), "
+      "iri-to-uri(())",
+      "string:http://www.example.com/00/Weather/CA/Los%20Angeles#ocean "
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 "
+      "string:My%20Documents string:My%20Documents string:" },
+    { "iri-to-uri('<>\"{}|\\^`'), "
+      "iri-to-uri(codepoints-to-string((9, 10, 13, 127))), "
+      "iri-to-uri('!#$&()*+,/:;=?@[]~%'), iri-to-uri(x[1])",
+      "string:%3C%3E%22%7B%7D%7C%5C%5E%60 string:%09%0A%0D%7F "
+      "string:!#$&()*+,/:;=?@[]~% string:one" },
+    { "escape-html-uri('http://www.example.com/00/Weather/CA/"
+      "Los Angeles#ocean')",
+      "string:http://www.example.com/00/Weather/CA/Los Angeles#ocean" },
+    { "escape-html-uri('~b\xc3\xa9'), escape-html-uri(()), "
+      "escape-html-uri(codepoints-to-string((9, 127, 32, 126))), "
+      "escape-html-uri('<%>\"')",
+      "string:~b%C3%A9 string: string:%09%7F ~ string:<%>\"" },
+
     /* Errors (3.1.1) */
     { "error()", "error:FOER0000" },
     { "error(())", "error:FOER0000" },
@@ -1810,17 +1844,21 @@ testTreeChange(void) {
 /* Text that libxml2 stored without checking it: a lead byte from 0xF8
  * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
  * bytes with lead byte 0xF0 are U+10000, a name character. The string
- * functions count each byte that is not UTF-8 as one character. */
+ * functions count each byte that is not UTF-8 as one character, U+FFFD,
+ * which the URI functions escape as such. */
 static void
 testInvalidUtf8(void) {
     static const struct {
         const char *text;
         const char *expected;
         const char *codepoints;
+        const char *escaped;
     } cases[] = {
         { "\xf8\x90\x80\x80", "boolean:false",
-          "integer:65533 integer:65533 integer:65533 integer:65533" },
-        { "\xf0\x90\x80\x80", "boolean:true", "integer:65536" }
+          "integer:65533 integer:65533 integer:65533 integer:65533",
+          "string:%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD" },
+        { "\xf0\x90\x80\x80", "boolean:true", "integer:65536",
+          "string:%F0%90%80%80" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     size_t i;
@@ -1841,6 +1879,7 @@ testInvalidUtf8(void) {
         checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
         checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
         checkEval(NULL, ctx, "string-to-codepoints(.)", cases[i].codepoints);
+        checkEval(NULL, ctx, "encode-for-uri(.)", cases[i].escaped);
         xp3SetContextNode(ctx, NULL);
         xmlFreeDoc(doc);
     }
@@ -2860,8 +2899,8 @@ static const char *const xp3AllocAggregateExpected =
     "double:4.5 string:z integer:50000000005000000000 decimal:1.5 "
     "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
 
-/* The string functions and the collations, with searches for strings
- * longer than the table that fits on the stack */
+/* The string and URI functions and the collations, with searches for
+ * strings longer than the table that fits on the stack */
 static const char *const xp3AllocStrings =
     "(concat('a', 1, x[1]), string-join(1 to 3, '-'), "
     "string-join((), 'x'), substring('12345', 2, 2), string-length(x[2]), "
@@ -2877,14 +2916,17 @@ static const char *const xp3AllocStrings =
     "contains(string-join(for $i in 1 to 40 return 'aB'), "
     "string-join(for $i in 1 to 35 return 'Ab'), " HTML_ASCII "), "
     "compare('A', 'a', " HTML_ASCII "), "
-    "compare('a', 'B', " UCA "?lang=en;strength=primary'))";
+    "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+    "encode-for-uri('a b\xc3\xa9'), iri-to-uri('a b'), "
+    "escape-html-uri('\xc3\xa9x'))";
 
 static const char *const xp3AllocStringsExpected =
     "string:a1one string:1-2-3 string: string:23 integer:3 string:a b "
     "string:onetwotail string:BcBc integer:-1 boolean:true string:AB "
     "integer:97 integer:98 boolean:true string:a string:b string:a "
     "string:c boolean:true boolean:true boolean:true boolean:true "
-    "boolean:true integer:0 integer:1";
+    "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
+    "string:%C3%A9x";
 
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =

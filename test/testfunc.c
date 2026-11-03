@@ -359,6 +359,8 @@ testImplementations(void) {
         { "substring", 2, 0 }, { "substring", 3, 0 },
         { "string-length", 1, 0 }, { "normalize-space", 1, 0 },
         { "translate", 3, 0 }, { "tokenize", 1, 0 },
+        { "encode-for-uri", 1, 0 }, { "iri-to-uri", 1, 0 },
+        { "escape-html-uri", 1, 0 },
         { "compare", 2, XP3_FUNC_CONTEXT }, { "compare", 3, XP3_FUNC_CONTEXT },
         { "contains-token", 2, XP3_FUNC_CONTEXT },
         { "contains-token", 3, XP3_FUNC_CONTEXT },

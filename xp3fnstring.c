@@ -1,7 +1,7 @@
 /*
- * xp3fnstring.c: the functions on strings and the collations
+ * xp3fnstring.c: the functions on strings and URIs, and the collations
  *
- * Implementations of the string functions of F&O 3.1,
+ * Implementations of the string and URI functions of F&O 3.1,
  * https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/, bound
  * to their signatures in xp3func.c. The evaluator has applied the
  * function conversion rules to the arguments already, so an xs:string?
@@ -1192,4 +1192,134 @@ xp3FnTokenize(xp3FuncCall *call, xp3Value **args, int count) {
 error:
     xp3SeqBuilderClear(&builder);
     return(NULL);
+}
+
+/*
+ * Functions on URIs
+ */
+
+/* The characters below U+0080 that a URI function leaves as they are;
+ * it escapes all others */
+typedef enum {
+    XP3_URI_UNRESERVED,         /* fn:encode-for-uri */
+    XP3_URI_IRI,                /* fn:iri-to-uri */
+    XP3_URI_PRINTABLE           /* fn:escape-html-uri */
+} xp3UriKeep;
+
+static int
+uriKeeps(xp3UriKeep keep, int c) {
+    switch (keep) {
+        case XP3_URI_UNRESERVED:
+            /* The unreserved characters of RFC 3986, section 2.3 */
+            return(((c >= 'A') && (c <= 'Z')) ||
+                   ((c >= 'a') && (c <= 'z')) ||
+                   ((c >= '0') && (c <= '9')) || (c == '-') ||
+                   (c == '_') || (c == '.') || (c == '~'));
+        case XP3_URI_IRI:
+            /* Printable ASCII but space and the characters invalid in
+             * an IRI; "%" stays, so the function is idempotent */
+            return((c > 0x20) && (c < 0x7F) && (c != '<') && (c != '>') &&
+                   (c != '"') && (c != '{') && (c != '}') && (c != '|') &&
+                   (c != '\\') && (c != '^') && (c != '`'));
+        default:
+            return((c >= 0x20) && (c < 0x7F));
+    }
+}
+
+/*
+ * A string with every character a URI function doesn't keep replaced
+ * by %HH for each byte of its UTF-8 form, in uppercase hex. A byte
+ * that isn't UTF-8 is the character U+FFFD, so it becomes %EF%BF%BD.
+ * Runs of characters kept are copied at once.
+ */
+static xp3Value *
+escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
+          const char *name) {
+    static const char hex[] = "0123456789ABCDEF";
+    const xmlChar *str = argString(arg);
+    size_t len = strlen((const char *) str);
+    size_t run = 0;
+    size_t pos = 0;
+    xp3StrBuf buf;
+
+    bufInit(&buf, name);
+    while (pos < len) {
+        size_t start = pos;
+        int c = nextChar(str, len, &pos);
+        xmlChar bytes[4];
+        xmlChar escaped[12];
+        int count;
+        int i;
+
+        if ((c < 0x80) && uriKeeps(keep, c))
+            continue;
+        count = encodeChar(c, bytes);
+        for (i = 0; i < count; i++) {
+            escaped[3 * i] = '%';
+            escaped[3 * i + 1] = (xmlChar) hex[bytes[i] >> 4];
+            escaped[3 * i + 2] = (xmlChar) hex[bytes[i] & 0xF];
+        }
+        if ((bufAppend(call, &buf, str + run, start - run) < 0) ||
+            (bufAppend(call, &buf, escaped, (size_t) (3 * count)) < 0)) {
+            xmlFree(buf.data);
+            return(NULL);
+        }
+        run = pos;
+    }
+    if (bufAppend(call, &buf, str + run, len - run) < 0) {
+        xmlFree(buf.data);
+        return(NULL);
+    }
+    return(bufFinish(call, &buf));
+}
+
+/**
+ * fn:encode-for-uri#1 (F&O 3.1, 6.2): a string with every character
+ * but the unreserved ones of RFC 3986 percent-encoded, "%" too, for
+ * use in a path segment.
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnEncodeForUri(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(escapeUri(call, args[0], XP3_URI_UNRESERVED,
+                     "fn:encode-for-uri"));
+}
+
+/**
+ * fn:iri-to-uri#1 (F&O 3.1, 6.3): an IRI converted to a URI as RFC
+ * 3987, section 3.1 does, with the characters outside x21 to x7E and
+ * those invalid in an IRI, such as space and "<", percent-encoded. It
+ * doesn't check that the string is an IRI.
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnIriToUri(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(escapeUri(call, args[0], XP3_URI_IRI, "fn:iri-to-uri"));
+}
+
+/**
+ * fn:escape-html-uri#1 (F&O 3.1, 6.4): a string with every character
+ * outside printable ASCII, codepoints 32 to 126, percent-encoded, as
+ * HTML user agents treat URI attribute values.
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnEscapeHtmlUri(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(escapeUri(call, args[0], XP3_URI_PRINTABLE,
+                     "fn:escape-html-uri"));
 }
