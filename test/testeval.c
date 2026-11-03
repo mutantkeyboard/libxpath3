@@ -1215,6 +1215,68 @@ static const xp3EvalCase xp3Cases[] = {
       "e:x#x1 e:x#x2 e:x#x1 e:x#x2" },
     { "insert-before((1, 2), (), 3)", "error:XPTY0004" },
 
+    /* Comparing values in sequences (14.2) */
+    { "distinct-values((1, 2.0, 3, 2, 1e0, xs:float(1))), "
+      "distinct-values(()), distinct-values(1 to 3), distinct-values(x)",
+      "integer:1 decimal:2 integer:3 integer:1 integer:2 integer:3 "
+      "untypedAtomic:one untypedAtomic:two" },
+    { "distinct-values(('a', xs:untypedAtomic('a'), xs:anyURI('a'), 'b', "
+      "'A')), distinct-values(('a', 'A', 'b'), " HTML_ASCII ")",
+      "string:a string:b string:A string:a string:b" },
+    { "distinct-values((xs:double('NaN'), xs:float('NaN'), 0e0, -0e0, "
+      "xs:float('-0'), 0)), distinct-values((true(), 1, 'true', false(), "
+      "true()))",
+      "double:NaN double:0 boolean:true integer:1 string:true "
+      "boolean:false" },
+    { "distinct-values((xs:hexBinary('0A'), xs:base64Binary('Cg=='), "
+      "xs:hexBinary('0a')))", "hexBinary:0A base64Binary:Cg==" },
+    /* eq is not transitive across numeric types; a decimal rounds to
+     * one float directly and to the one below through xs:double */
+    { "distinct-values((0.1, 0.1e0, xs:float(0.1))), "
+      "distinct-values((xs:float(0.1), 0.1e0, 0.1)), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "1.0000000596046447762579867379"
+      "88403547205962240695953369140625))), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "xs:double(1.00000005960464477625798673"
+      "7988403547205962240695953369140625)))), "
+      "distinct-values((1, 1.0, xs:byte(1), 10000000000000000000001, "
+      "1e22)) instance of xs:integer+",
+      "decimal:0.1 float:0.1 double:0.1 integer:1 integer:2 "
+      "boolean:true" },
+    /* Many distinct numbers that share their nearest float or double
+     * take linear time: quadratic, these took minutes */
+    { "count(distinct-values((1 to 100000) ! "
+      "(1e0 + . * 2.220446049250313e-16))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(1 + . div 1000000000000000000000000))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(. + 1000000000000000000000000000000000000000)))",
+      "integer:100000 integer:100000 integer:100000" },
+    { "distinct-values(1, 'x')", "error:FOCH0002" },
+    { "index-of((10, 20, 30, 30, 20, 10), 20), index-of((10, 20), 35), "
+      "index-of(('a', 'sport', 'and', 'a', 'pastime'), 'a')",
+      "integer:2 integer:5 integer:1 integer:4" },
+    { "index-of((1, 'a', 1.0, 1e0, xs:untypedAtomic('1')), 1), "
+      "index-of(xs:double('NaN'), xs:double('NaN')), index-of(x, 'two'), "
+      "index-of(1 to 5, 4), index-of(('a', 'A'), 'a', " HTML_ASCII ")",
+      "integer:1 integer:3 integer:4 integer:2 integer:4 integer:1 "
+      "integer:2" },
+    { "index-of((1, 2), (1, 2))", "error:XPTY0004" },
+    { "index-of((1, 2), 1, 'x')", "error:FOCH0002" },
+    { "deep-equal((1, 'a'), (1e0, xs:untypedAtomic('a'))), "
+      "deep-equal((), ()), deep-equal(1, ()), "
+      "deep-equal(xs:double('NaN'), xs:float('NaN')), deep-equal(1, '1'), "
+      "deep-equal(x, x), deep-equal(x[1], x[2]), deep-equal(x[1], 'one')",
+      "boolean:true boolean:true boolean:false boolean:true boolean:false "
+      "boolean:true boolean:false boolean:false" },
+    { "deep-equal(/, /), deep-equal(@a, @a), deep-equal(comment(), "
+      "comment()), deep-equal(x[1]/text(), x[1]/text()), "
+      "deep-equal('a', 'A', " HTML_ASCII "), deep-equal('a', 'A')",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true "
+      "boolean:false" },
+    { "deep-equal(1, 1, 'x')", "error:FOCH0002" },
+
     /* Cardinality and counting (14.3, 14.4.1) */
     { "exactly-one(1), zero-or-one(()), zero-or-one(x[1]), "
       "one-or-more(1 to 2)",
@@ -1295,8 +1357,18 @@ static const xp3EvalCase xp3Cases[] = {
     { "min((true(), 1))", "error:FORG0006" },
     { "max((xs:hexBinary('0A'), xs:base64Binary('AA==')))",
       "error:FORG0006" },
-    { "min(('a', 'b'))", "error:UNSUPPORTED" },
-    { "max((xs:anyURI('a'), 'b'))", "error:UNSUPPORTED" },
+    { "min(('b', 'a', 'c')), max(('b', 'a', 'c')), "
+      "min(('b', xs:anyURI('a'))), max((xs:anyURI('a'), xs:anyURI('b'))), "
+      "max((xs:token('z'), xs:anyURI('a'))), max(('a', xs:anyURI('b')))",
+      "string:a string:c string:a anyURI:b token:z string:b" },
+    { "max(('a', 'B')), max(('a', 'B'), " HTML_ASCII "), "
+      "min(('a', 'B'), " HTML_ASCII "), "
+      "max((xs:anyURI('a'), xs:anyURI('B')), " HTML_ASCII "), "
+      "min((1, 2), " HTML_ASCII ")",
+      "string:a string:B string:a anyURI:a integer:1" },
+    { "min(('a', xs:untypedAtomic('1')))", "error:FORG0006" },
+    { "max((xs:anyURI('a'), true()))", "error:FORG0006" },
+    { "max(('a', 'b'), 'x')", "error:FOCH0002" },
     { "min(xs:untypedAtomic('a'))", "error:FORG0001" },
     { "max(x)", "error:FORG0001" },
 
@@ -1751,6 +1823,143 @@ testStringLevels(void) {
         checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
     }
     xp3FreeStaticContext(sctx);
+}
+
+/*
+ * fn:deep-equal on nodes (F&O 3.1, 14.2.3): pairs that differ in one
+ * respect. A comment or processing instruction between two texts
+ * counts only by splitting them; attributes are a set.
+ */
+static const char xp3DeepDoc[] =
+    "<t>"
+    "<p><e a='1' b='2'>x<!--c-->y<f/></e></p>"
+    "<q><e b='2' a='1'>x<?pi?>y<f/></e></q>"
+    "<r><e a='1' b='2'>xy<f/></e></r>"
+    "<s><e a='1' b='3'>x<!--c-->y<f/></e></s>"
+    "<u><e a='1'>x<!--c-->y<f/></e></u>"
+    "<v xmlns:n='urn:n'><n:e a='1' b='2'>x<!--c-->y<f/></n:e></v>"
+    "<g xmlns:m='urn:n'><m:e a='1' b='2'>x<!--c-->y<f/></m:e></g>"
+    "<w><e a='1' b='2'>X<!--c-->Y<f/></e></w>"
+    "<k xmlns:n='urn:n'><e n:a='1'/></k><l><e a='1'/></l>"
+    "<m><e a1='1' a2='2' a3='3' a4='4' a5='5' a6='6' a7='7' a8='8' "
+    "a9='9'/></m>"
+    "<n><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='1'/></n>"
+    "<o><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='0'/></o>"
+    "<h><e a='1' b='2'>x<!--c-->y<f><i/></f></e></h>"
+    "</t>";
+
+static const xp3EvalCase xp3DeepCases[] = {
+    { "deep-equal(p/e, q/e), deep-equal(p/e, r/e), deep-equal(p/e, s/e), "
+      "deep-equal(p/e, u/e), deep-equal(p/e, v/*), deep-equal(v/*, g/*)",
+      "boolean:true boolean:false boolean:false boolean:false "
+      "boolean:false boolean:true" },
+    { "deep-equal(p/e, w/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+      "deep-equal(m/e, n/e), deep-equal(m/e, o/e), deep-equal(k/e, l/e), "
+      "deep-equal(p/e, h/e), deep-equal(h/e, p/e)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false boolean:false boolean:false" },
+    { "deep-equal(p, q), deep-equal(p/e/text(), q/e/text()), "
+      "deep-equal(p/e/comment(), s/e/comment()), "
+      "deep-equal(p/e/comment(), q/e/processing-instruction()), "
+      "deep-equal(p/e/@a, q/e/@a), deep-equal(p/e/@a, p/e/@b)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:true boolean:false" },
+    { "deep-equal((p/e, 1), (q/e, 1)), deep-equal((1, 2), 1), "
+      "deep-equal(p/e, 'x'), deep-equal(p/e/f, h/e/f/i)",
+      "boolean:true boolean:false boolean:false boolean:false" }
+};
+
+static void
+testDeepEqual(void) {
+    xmlDocPtr doc = parseDoc(xp3DeepDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep-equal test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3DeepCases) / sizeof(xp3DeepCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+            checkEval(plain, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+        }
+    }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/* A document of one chain of elements, the innermost with a text */
+static xmlDocPtr
+chainDoc(int depth, const char *leaf) {
+    xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
+    xmlNodePtr cur;
+    int i;
+
+    if (doc == NULL)
+        return(NULL);
+    cur = xmlNewDocNode(doc, NULL, BAD_CAST "a", NULL);
+    xmlDocSetRootElement(doc, cur);
+    for (i = 1; (cur != NULL) && (i < depth); i++)
+        cur = xmlNewChild(cur, NULL, BAD_CAST "a", NULL);
+    if ((cur == NULL) ||
+        (xmlNewChild(cur, NULL, BAD_CAST "b", BAD_CAST leaf) == NULL)) {
+        xmlFreeDoc(doc);
+        return(NULL);
+    }
+    return(doc);
+}
+
+/* fn:deep-equal walks trees without recursion, so depth needs no
+ * stack */
+static void
+testDeepTrees(void) {
+    xmlDocPtr doc = chainDoc(100000, "leaf");
+    xmlDocPtr same = chainDoc(100000, "leaf");
+    xmlDocPtr other = chainDoc(100000, "other");
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *bound[2] = { NULL, NULL };
+    xmlNodePtr root;
+
+    if ((doc == NULL) || (same == NULL) || (other == NULL) ||
+        (sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep trees set up");
+        goto done;
+    }
+    root = xmlDocGetRootElement(same);
+    bound[0] = xp3NewNodeSequence(&root, 1);
+    root = xmlDocGetRootElement(other);
+    bound[1] = xp3NewNodeSequence(&root, 1);
+    if ((bound[0] == NULL) || (bound[1] == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[0]) < 0)) {
+        check(0, "deep trees bound");
+        goto done;
+    }
+    checkEval(sctx, ctx, "deep-equal(., $v), deep-equal(/, $v/..)",
+              "boolean:true boolean:true");
+    if (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[1]) < 0)
+        check(0, "deep tree rebound");
+    else
+        checkEval(sctx, ctx, "deep-equal(., $v)", "boolean:false");
+
+done:
+    xp3FreeSequence(bound[0]);
+    xp3FreeSequence(bound[1]);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    xmlFreeDoc(doc);
+    xmlFreeDoc(same);
+    xmlFreeDoc(other);
 }
 
 /*
@@ -2928,6 +3137,23 @@ static const char *const xp3AllocStringsExpected =
     "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
     "string:%C3%A9x";
 
+/* The functions that compare values in sequences, on xp3DeepDoc */
+static const char *const xp3AllocCompare =
+    "(distinct-values((1, 2.5, 2.5e0, 'a', 'A', xs:float(1), true())), "
+    "count(distinct-values(((1 to 20) ! (. * 1.5), 30, 30e0, "
+    "xs:float(30), 100000000000000000000))), "
+    "distinct-values(('a', 'A'), " HTML_ASCII "), "
+    "index-of((1, 'a', 1.0), 1), deep-equal(p/e, q/e), "
+    "deep-equal(m/e, n/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+    "min(('b', 'a')), max(('a', xs:anyURI('b'))), "
+    "max(('a', 'B'), " HTML_ASCII "))";
+
+static const char *const xp3AllocCompareExpected =
+    "integer:1 decimal:2.5 string:a string:A boolean:true integer:21 "
+    "string:a "
+    "integer:1 integer:3 boolean:true boolean:true boolean:true "
+    "string:a string:b string:B";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -2986,8 +3212,9 @@ done:
 }
 
 static void
-testAllocationFailures(const char *text, const char *expected) {
-    xmlDocPtr doc = parseDoc(xp3TestDoc);
+testAllocationFailuresIn(const char *xml, const char *text,
+                         const char *expected) {
+    xmlDocPtr doc = parseDoc(xml);
     char actual[2048];
     char code[64];
     xp3Sequence *result;
@@ -3035,6 +3262,11 @@ testAllocationFailures(const char *text, const char *expected) {
     check(i > 0 && i < 5000, "allocation failure points exercised");
     xp3TestAllocRestore();
     xmlFreeDoc(doc);
+}
+
+static void
+testAllocationFailures(const char *text, const char *expected) {
+    testAllocationFailuresIn(xp3TestDoc, text, expected);
 }
 
 /*
@@ -3093,6 +3325,8 @@ main(void) {
     testFunctionFocus();
     testAggregateLevels();
     testStringLevels();
+    testDeepEqual();
+    testDeepTrees();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -3111,6 +3345,8 @@ main(void) {
     testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
+                             xp3AllocCompareExpected);
     testLocale();
 
     if (failures == 0)

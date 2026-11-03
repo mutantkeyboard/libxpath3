@@ -255,6 +255,15 @@ xp3Value *
 xp3FnCount(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
+xp3FnDistinctValues(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnIndexOf(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDeepEqual(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
 xp3FnSum(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
