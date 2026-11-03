@@ -172,6 +172,11 @@ typedef struct {
     const char *expected;
 } xp3EvalCase;
 
+/* Collation URIs as XPath string literals; UCA is open for a query */
+#define HTML_ASCII "'http://www.w3.org/2005/xpath-functions/collation/" \
+                   "html-ascii-case-insensitive'"
+#define UCA "'http://www.w3.org/2013/collation/UCA"
+
 /* Evaluated with the element r as the context node */
 static const xp3EvalCase xp3Cases[] = {
     /* Literals and sequences */
@@ -912,6 +917,195 @@ static const xp3EvalCase xp3Cases[] = {
     { "number((1, 2))", "error:XPTY0004" },
     { "number(x)", "error:XPTY0004" },
 
+    /* Assembling and disassembling strings (5.2) */
+    { "codepoints-to-string((66, 65, 67, 72)), codepoints-to-string(()), "
+      "string-to-codepoints(codepoints-to-string((233, 2309, 65537, "
+      "1114111, 9))), codepoints-to-string(65 to 67)",
+      "string:BACH string: integer:233 integer:2309 integer:65537 "
+      "integer:1114111 integer:9 string:ABC" },
+    { "codepoints-to-string(0)", "error:FOCH0001" },
+    { "codepoints-to-string((65, 55296))", "error:FOCH0001" },
+    { "codepoints-to-string(65534)", "error:FOCH0001" },
+    { "codepoints-to-string(1114112)", "error:FOCH0001" },
+    { "codepoints-to-string(-1)", "error:FOCH0001" },
+    { "codepoints-to-string(-4294967231)", "error:FOCH0001" },
+    { "codepoints-to-string(99999999999999999999)", "error:FOCH0001" },
+    { "codepoints-to-string('a')", "error:XPTY0004" },
+    { "string-to-codepoints('Th\xc3\xa9r\xc3\xa8se'), "
+      "string-to-codepoints(''), string-to-codepoints(()), "
+      "string-to-codepoints(@a)",
+      "integer:84 integer:104 integer:233 integer:114 integer:232 "
+      "integer:115 integer:101 integer:49" },
+
+    /* Comparing strings (5.3) */
+    { "compare('abc', 'abc'), compare('abc', 'abd'), compare('b', 'abc'), "
+      "compare('', 'a'), compare((), 'a'), compare('a', ()), "
+      "compare(x[1], 'one'), compare(xs:anyURI('a'), 'a')",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:0 integer:0" },
+    { "compare('\xef\xbf\xbd', '\xf0\x90\x80\x80'), "
+      "compare('\xc3\xa9', 'z'), "
+      "compare('a', 'b', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "integer:-1 integer:1 integer:-1" },
+    { "compare((), 'a', 'collation/codepoint')", "error:FOCH0002" },
+    { "compare('a', 'a', 'http://example.com/collation')", "error:FOCH0002" },
+
+    /* UCA URIs fall back to the codepoint collation unless they say
+     * fallback=no (5.3.3) */
+    { "compare('b', 'a', " UCA "'), compare('a', 'B', " UCA "?'), "
+      "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+      "compare('a', 'b', " UCA "?lang=en;'), "
+      "compare('a', 'b', " UCA "?numeric=unknown;;keyword=x;version=')",
+      "integer:1 integer:1 integer:1 integer:-1 integer:-1" },
+    { "compare('a', 'b', " UCA "?fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=no;fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=maybe'), "
+      "compare('a', 'b', " UCA "?fallback=No'), "
+      "contains('aB', 'B', " UCA "?lang=de')",
+      "integer:-1 integer:-1 integer:-1 integer:-1 boolean:true" },
+    { "compare('a', 'b', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?fallback=yes;lang=en;fallback=no')",
+      "error:FOCH0002" },
+    { "compare((), 'a', " UCA "?strength=primary;fallback=no')",
+      "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang=en;=x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "/?lang=en')", "error:FOCH0002" },
+
+    /* The HTML ASCII case-insensitive collation (5.3.4) */
+    { "compare('a', 'A', " HTML_ASCII "), "
+      "compare('abc', 'ABD', " HTML_ASCII "), "
+      "compare('Z', 'a', " HTML_ASCII "), compare('[', 'a', " HTML_ASCII "), "
+      "compare('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "compare((), 'a', " HTML_ASCII ")",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:-1" },
+    { "contains('iNPut', 'pu', " HTML_ASCII "), "
+      "contains('iNPut', 'PUx', " HTML_ASCII "), "
+      "contains('aaAB', 'AAb', " HTML_ASCII "), "
+      "contains('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('Input', 'iN', " HTML_ASCII "), "
+      "starts-with('In', 'iNput', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Put', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Pat', " HTML_ASCII ")",
+      "boolean:true boolean:false boolean:true boolean:false boolean:true "
+      "boolean:false boolean:true boolean:false" },
+    { "substring-before('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xx', " HTML_ASCII "), "
+      "contains-token('red GREEN', 'green', " HTML_ASCII "), "
+      "contains-token('a\xc3\x81', 'A\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('a', 'A')",
+      "string:a string:Xc string: boolean:true boolean:false "
+      "boolean:false" },
+    { "codepoint-equal('abcd', 'abcd'), codepoint-equal('abcd', 'abcd '), "
+      "codepoint-equal('', ''), codepoint-equal('', ()), "
+      "codepoint-equal((), ())",
+      "boolean:true boolean:false boolean:true" },
+    { "contains-token('red green blue ', 'red'), "
+      "contains-token(('red', 'green', 'blue'), ' red '), "
+      "contains-token('red, green, blue', 'red'), contains-token((), 'a'), "
+      "contains-token('a b', ' '), contains-token('a b', 'a b'), "
+      "contains-token('a\tb', 'b'), contains-token(x, 'two')",
+      "boolean:true boolean:true boolean:false boolean:false "
+      "boolean:false boolean:false boolean:true boolean:true" },
+    { "contains-token('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true" },
+    { "contains-token('a', 'a', 'html-ascii-case-insensitive')",
+      "error:FOCH0002" },
+
+    /* Functions on string values (5.4) */
+    { "concat('un', 'grateful'), concat('a', (), 1, 2.5, true(), x[1], "
+      "xs:untypedAtomic('u')), concat(1e0, xs:float('INF'), "
+      "xs:hexBinary('0a')), concat((), ())",
+      "string:ungrateful string:a12.5trueoneu string:1INF0A string:" },
+    { "concat((1, 2), 'a')", "error:XPTY0004" },
+    { "concat('a')", "error:XPST0017" },
+    { "string-join(1 to 9), string-join((), 'x'), string-join(x, '-'), "
+      "string-join('a', '-'), string-join((1, 'b', 2.5), '')",
+      "string:123456789 string: string:one-two string:a string:1b2.5" },
+    { "string-join(1 to 5, ', ')", "string:1, 2, 3, 4, 5" },
+    { "string-join((1, 2), ())", "error:XPTY0004" },
+    { "substring('motor car', 6), substring('metadata', 4, 3), "
+      "substring('12345', 1.5, 2.6), substring('12345', 0, 3), "
+      "substring('12345', 5, -3), substring('12345', -3, 5)",
+      "string: car string:ada string:234 string:12 string: string:1" },
+    { "substring('12345', 0 div 0e0, 3), substring('12345', 1, 0 div 0e0), "
+      "substring((), 1, 3), substring('12345', -42, 1 div 0e0), "
+      "substring('12345', -1 div 0e0, 1 div 0e0), "
+      "substring('12345', 1 div 0e0), substring('12345', 0 div 0e0)",
+      "string: string: string: string:12345 string: string: string:" },
+    { "substring('12345', 2.5), substring('12345', -0.5, 2), "
+      "substring('12345', 0.49999999999999994e0, 1), "
+      "substring('12345', -1 div 0e0), substring('12345', 3, 1e300)",
+      "string:345 string:1 string: string:12345 string:345" },
+    { "string-to-codepoints(substring('a\xf0\x90\x80\x80" "b', 2, 1)), "
+      "substring(x[1], 2), substring(@a, 1)",
+      "integer:65536 string:ne string:1" },
+    { "substring('abc', 'a')", "error:XPTY0004" },
+    { "substring('abc', x[1])", "error:FORG0001" },
+    { "string-length('Harp'), string-length(()), string-length(''), "
+      "string-length(), string-length(x[2]), "
+      "string-length('a\xf0\x90\x80\x80\xc3\xa9')",
+      "integer:4 integer:0 integer:0 integer:10 integer:3 integer:3" },
+    { "string-length(1)", "error:XPTY0004" },
+    { "normalize-space('  a  b\t\n\rc  '), normalize-space(()), "
+      "normalize-space('   '), x ! normalize-space(), "
+      "string-length(normalize-space(' a\xc2\xa0" "b '))",
+      "string:a b c string: string: string:one string:two integer:3" },
+    { "translate('bar', 'abc', 'ABC'), translate('--aaa--', 'abc-', 'ABC'), "
+      "translate('abcdabc', 'abc', 'AB'), translate('abc', '', 'x'), "
+      "translate((), 'a', 'b'), translate('aba', 'aa', 'xy')",
+      "string:BAr string:AAA string:ABdAB string:abc string: string:xbx" },
+    { "string-to-codepoints(translate('abc', 'b', '\xf0\x90\x80\x80')), "
+      "translate('a\xf0\x90\x80\x80" "c', '\xf0\x90\x80\x80', 'b'), "
+      "translate('cba', 'abcabc', 'xyzuvw')",
+      "integer:97 integer:65536 integer:99 string:abc string:zyx" },
+
+    /* Substring matching (5.5) */
+    { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
+      "contains('', ()), contains((), ''), contains('abc', ''), "
+      "contains('', 'a'), contains('abababc', 'ababc'), "
+      "contains('aaab', 'aab'), contains('ab', 'abc')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:true "
+      "boolean:false boolean:true boolean:true boolean:false" },
+    { "starts-with('tattoo', 'tat'), starts-with('tattoo', 'att'), "
+      "starts-with((), ()), starts-with('a', ''), starts-with('', 'a'), "
+      "starts-with('a', 'ab')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "ends-with('tattoo', 'too'), ends-with('tattoo', 'atto'), "
+      "ends-with((), ()), ends-with('a', ''), ends-with('', 'a'), "
+      "ends-with('a', 'ba')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "substring-before('tattoo', 'attoo'), "
+      "substring-before('tattoo', 'tatto'), substring-before('abc', ''), "
+      "substring-before((), ()), substring-before('abc', 'x'), "
+      "substring-before('abcbc', 'bc')",
+      "string:t string: string: string: string: string:a" },
+    { "substring-after('tattoo', 'tat'), "
+      "substring-after('tattoo', 'tattoo'), substring-after('abc', ''), "
+      "substring-after((), ()), substring-after('abc', 'x'), "
+      "substring-after('abcbc', 'bc')",
+      "string:too string: string:abc string: string: string:bc" },
+    { "contains('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint'), "
+      "substring-after('ab', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true string:b" },
+    { "starts-with('a', 'a', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "ends-with('a', 'a', '')", "error:FOCH0002" },
+    { "substring-before('a', 'a', 'x')", "error:FOCH0002" },
+    { "contains('a', 'a', ())", "error:XPTY0004" },
+
+    /* Splitting strings (5.6.5) */
+    { "tokenize(' red green\tblue  '), tokenize(''), tokenize(()), "
+      "tokenize('   '), tokenize('a'), tokenize(x[2])",
+      "string:red string:green string:blue string:a string:two" },
+    { "tokenize('a b', ' ')", "error:UNSUPPORTED" },
+
     /* Errors (3.1.1) */
     { "error()", "error:FOER0000" },
     { "error(())", "error:FOER0000" },
@@ -1471,6 +1665,12 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "string()", "error:XPDY0002");
     checkEval(NULL, NULL, "data()", "error:XPDY0002");
     checkEval(NULL, NULL, "number()", "error:XPDY0002");
+    checkEval(NULL, NULL, "string-length()", "error:XPDY0002");
+    checkEval(NULL, NULL, "normalize-space()", "error:XPDY0002");
+    checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
+              "integer:2 integer:3");
+    checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
+              "string:a string:b");
     checkEval(NULL, NULL, "(1, 2)[position() = 2]", "integer:2");
     checkEval(NULL, NULL, "(1, 2) ! string()", "string:1 string:2");
     checkEval(NULL, NULL, "('1', 'a') ! number()", "double:1 double:NaN");
@@ -1491,6 +1691,30 @@ testAggregateLevels(void) {
                   "xs:hexBinary('0B')))", "error:FORG0006");
         checkEval(sctx, NULL, "max(xs:hexBinary('0A'))", "error:FORG0006");
         checkEval(sctx, NULL, "max((true(), false()))", "boolean:true");
+    }
+    xp3FreeStaticContext(sctx);
+}
+
+/* fn:string-join#1 comes with XPath 3.0, fn:tokenize#1 and
+ * fn:contains-token with 3.1 */
+static void
+testStringLevels(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+
+    if ((sctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_20) < 0)) {
+        check(0, "static context at level 2.0");
+    } else {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "error:XPST0017");
+        checkEval(sctx, NULL, "string-join(('a', 'b'), '-')", "string:a-b");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+        checkEval(sctx, NULL, "contains-token('a b', 'a')",
+                  "error:XPST0017");
+    }
+    if ((sctx != NULL) &&
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) == 0)) {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "string:ab");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
     }
     xp3FreeStaticContext(sctx);
 }
@@ -1585,15 +1809,18 @@ testTreeChange(void) {
 
 /* Text that libxml2 stored without checking it: a lead byte from 0xF8
  * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
- * bytes with lead byte 0xF0 are U+10000, a name character. */
+ * bytes with lead byte 0xF0 are U+10000, a name character. The string
+ * functions count each byte that is not UTF-8 as one character. */
 static void
 testInvalidUtf8(void) {
     static const struct {
         const char *text;
         const char *expected;
+        const char *codepoints;
     } cases[] = {
-        { "\xf8\x90\x80\x80", "boolean:false" },
-        { "\xf0\x90\x80\x80", "boolean:true" }
+        { "\xf8\x90\x80\x80", "boolean:false",
+          "integer:65533 integer:65533 integer:65533 integer:65533" },
+        { "\xf0\x90\x80\x80", "boolean:true", "integer:65536" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     size_t i;
@@ -1613,6 +1840,7 @@ testInvalidUtf8(void) {
         check(xp3SetContextNode(ctx, root) == 0, "context node set");
         checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
         checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
+        checkEval(NULL, ctx, "string-to-codepoints(.)", cases[i].codepoints);
         xp3SetContextNode(ctx, NULL);
         xmlFreeDoc(doc);
     }
@@ -2632,6 +2860,32 @@ static const char *const xp3AllocAggregateExpected =
     "double:4.5 string:z integer:50000000005000000000 decimal:1.5 "
     "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
 
+/* The string functions and the collations, with searches for strings
+ * longer than the table that fits on the stack */
+static const char *const xp3AllocStrings =
+    "(concat('a', 1, x[1]), string-join(1 to 3, '-'), "
+    "string-join((), 'x'), substring('12345', 2, 2), string-length(x[2]), "
+    "normalize-space(' a  b '), normalize-space(), "
+    "translate('abcabc', 'ab', 'B'), compare('a', 'b'), "
+    "codepoint-equal('a', 'a'), codepoints-to-string((65, 66)), "
+    "string-to-codepoints('ab'), contains-token(('a b', 'c'), ' c '), "
+    "tokenize(' a b '), substring-before('abc', 'b'), "
+    "substring-after('abc', 'b'), starts-with('abc', 'ab'), "
+    "ends-with('abc', 'bc'), contains(x[1], 'n'), "
+    "contains(string-join(for $i in 1 to 40 return 'ab'), "
+    "string-join(for $i in 1 to 35 return 'ab')), "
+    "contains(string-join(for $i in 1 to 40 return 'aB'), "
+    "string-join(for $i in 1 to 35 return 'Ab'), " HTML_ASCII "), "
+    "compare('A', 'a', " HTML_ASCII "), "
+    "compare('a', 'B', " UCA "?lang=en;strength=primary'))";
+
+static const char *const xp3AllocStringsExpected =
+    "string:a1one string:1-2-3 string: string:23 integer:3 string:a b "
+    "string:onetwotail string:BcBc integer:-1 boolean:true string:AB "
+    "integer:97 integer:98 boolean:true string:a string:b string:a "
+    "string:c boolean:true boolean:true boolean:true boolean:true "
+    "boolean:true integer:0 integer:1";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -2796,6 +3050,7 @@ main(void) {
     testFocus();
     testFunctionFocus();
     testAggregateLevels();
+    testStringLevels();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -2813,6 +3068,7 @@ main(void) {
     testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
     testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
+    testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
     testLocale();
 
     if (failures == 0)

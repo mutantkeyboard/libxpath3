@@ -159,6 +159,34 @@ xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic);
 xp3Value *
 xp3FuncAtomize(xp3FuncCall *call, xp3Value *value);
 
+/*
+ * Collations (F&O 3.1, 5.3), in xp3fnstring.c. The Unicode codepoint
+ * collation is the default. The URIs of the UCA family (5.3.3) are
+ * accepted with fallback to it, and the HTML ASCII case-insensitive
+ * collation (5.3.4) is supported; any other URI raises FOCH0002.
+ */
+#define XP3_COLLATION_URI_CODEPOINT \
+    "http://www.w3.org/2005/xpath-functions/collation/codepoint"
+#define XP3_COLLATION_URI_HTML_ASCII \
+    "http://www.w3.org/2005/xpath-functions/collation/" \
+    "html-ascii-case-insensitive"
+#define XP3_COLLATION_URI_UCA "http://www.w3.org/2013/collation/UCA"
+
+/* How a collation compares strings */
+typedef enum {
+    XP3_COLLATION_CODEPOINT = 0, /* codepoint order, also for UCA URIs */
+    XP3_COLLATION_HTML_ASCII    /* A to Z as a to z, then codepoint
+                                 * order */
+} xp3Collation;
+
+int
+xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
+                 xp3Collation *collation);
+
+int
+xp3CollationCompare(xp3Collation collation, const xmlChar *str1,
+                    const xmlChar *str2);
+
 /* Implementations in xp3fnseq.c */
 xp3Value *
 xp3FnTrue(xp3FuncCall *call, xp3Value **args, int count);
@@ -237,6 +265,58 @@ xp3FnMin(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnMax(xp3FuncCall *call, xp3Value **args, int count);
+
+/* Implementations in xp3fnstring.c */
+xp3Value *
+xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnStringToCodepoints(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCompare(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCodepointEqual(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnContainsToken(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnConcat(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnStringJoin(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSubstring(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnStringLength(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnContains(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnStartsWith(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnEndsWith(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSubstringBefore(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSubstringAfter(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnTokenize(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnumeric.c */
 xp3Value *
