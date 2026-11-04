@@ -2111,6 +2111,77 @@ testInvalidUtf8(void) {
 }
 
 /*
+ * Matching and comparing text that libxml2 stored without checking
+ * agree with counting it: a byte that isn't UTF-8 is U+FFFD, here
+ * \xef\xbf\xbd, and results keep the bytes as they are. @a is the euro
+ * sign, @b and @d bytes of it on their own, and @c holds one in the
+ * middle; the @x of the two e elements differ only in that.
+ */
+static void
+testInvalidUtf8Matching(void) {
+    static const xp3EvalCase cases[] = {
+        { "contains(@a, @b), contains(@a, @d), contains(@c, @b), "
+          "contains(@c, '\xef\xbf\xbd'), contains('\xef\xbf\xbd', @d)",
+          "boolean:false boolean:false boolean:true boolean:true "
+          "boolean:true" },
+        { "starts-with(@b, '\xef\xbf\xbd'), ends-with(@a, @d), "
+          "starts-with(@c, 'a\xef\xbf\xbd'), "
+          "ends-with(@c, '\xef\xbf\xbd" "b')",
+          "boolean:true boolean:false boolean:true boolean:true" },
+        { "substring-before(@a, @b), substring-after(@a, @b), "
+          "substring-before(@c, '\xef\xbf\xbd'), substring-after(@c, @d), "
+          "substring-before(@c, 'b'), substring-after(@c, 'a')",
+          "string: string: string:a string:b string:a\x82 string:\x82" "b" },
+        { "@b = '\xef\xbf\xbd', @b eq '\xef\xbf\xbd', @b = @d, "
+          "@b gt '\xe2\x82\xac', @b lt '\xf0\x90\x80\x80', @a = @b",
+          "boolean:true boolean:true boolean:true boolean:true "
+          "boolean:true boolean:false" },
+        { "compare(@b, '\xef\xbf\xbd'), compare(@b, '\xe2\x82\xac'), "
+          "compare(@a, @b), codepoint-equal(@b, '\xef\xbf\xbd'), "
+          "codepoint-equal(@c, 'a\xef\xbf\xbd" "b')",
+          "integer:0 integer:1 integer:-1 boolean:true boolean:true" },
+        { "distinct-values((@b, '\xef\xbf\xbd', @d)), "
+          "index-of(('\xef\xbf\xbd', @a, @d), @b), "
+          "contains-token(@b, ' \xef\xbf\xbd ')",
+          "untypedAtomic:\x82 integer:1 integer:3 boolean:true" },
+        { "deep-equal(data(@b), '\xef\xbf\xbd'), deep-equal(e[1], e[2]), "
+          "max((string(@b), '\xe2\x82\xac')), "
+          "min((string(@b), '\xe2\x82\xac')), "
+          "distinct-values((@b, 'B'), " HTML_ASCII ")",
+          "boolean:true boolean:true string:\x82 string:\xe2\x82\xac "
+          "untypedAtomic:\x82 string:B" },
+        /* Results copy the bytes as they are */
+        { "translate(@c, 'a', 'A'), normalize-space(@c), substring(@c, 2, 1), "
+          "string-length(@c)",
+          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" }
+    };
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlDocPtr doc = parseDoc("<r><e/><e/></r>");
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    size_t i;
+
+    if ((ctx == NULL) || (root == NULL) ||
+        (xmlNewProp(root, BAD_CAST "a", BAD_CAST "\xe2\x82\xac") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "b", BAD_CAST "\x82") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "c", BAD_CAST "a\x82" "b") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "d", BAD_CAST "\xac") == NULL) ||
+        (xmlNewProp(root->children, BAD_CAST "x",
+                    BAD_CAST "\x82") == NULL) ||
+        (xmlNewProp(root->last, BAD_CAST "x",
+                    BAD_CAST "\xef\xbf\xbd") == NULL) ||
+        (xp3SetContextNode(ctx, root) != 0)) {
+        check(0, "invalid UTF-8 matching set up");
+        goto done;
+    }
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        checkEval(NULL, ctx, cases[i].expr, cases[i].expected);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
  * Variables
  */
 
@@ -3397,6 +3468,7 @@ main(void) {
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
+    testInvalidUtf8Matching();
     testVariables();
     testLimits();
     testStringSteps();

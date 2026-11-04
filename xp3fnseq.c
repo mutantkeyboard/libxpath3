@@ -31,6 +31,7 @@
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
+#include "private/xp3chars.h"
 #include "private/xp3decimal.h"
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
@@ -917,12 +918,29 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
         return(-1);
     }
     if (isStringType(atomic->type)) {
-        size_t len = strlen((const char *) atomic->u.str);
+        const xmlChar *str = atomic->u.str;
+        size_t len = strlen((const char *) str);
+        xmlChar *copy = NULL;
 
         if (xp3FuncBytes(call, len) < 0)
             return(-1);
+        /* Equal strings compare bytes that aren't UTF-8 as U+FFFD, so
+         * they hash as it too */
+        if (!xp3IsValidUTF8(str, len)) {
+            copy = xp3ReplaceInvalidUTF8(str, len, &len);
+            if (copy == NULL) {
+                xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+                return(-1);
+            }
+            str = copy;
+            if (xp3FuncBytes(call, len) < 0) {
+                xmlFree(copy);
+                return(-1);
+            }
+        }
         *cls = XP3_HASH_STRING;
-        *key = hashBytes(basis, atomic->u.str, len, collation);
+        *key = hashBytes(basis, str, len, collation);
+        xmlFree(copy);
         return(0);
     }
     switch (xp3TypeRepresentation(atomic->type)) {
