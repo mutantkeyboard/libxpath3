@@ -26,6 +26,9 @@
  * fields). A constructor function call such as xs:integer($x) becomes
  * ($x cast as xs:integer?), which is how XPath 3.1, 3.14.4 defines it.
  *
+ * The signatures of extension functions are resolved with the same
+ * rules, once, when they are registered (xp3CompileSignature()).
+ *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
  *
@@ -1618,4 +1621,248 @@ xp3FreeExpr(xp3Expr *expr) {
     freeConstants(expr->constants, expr->constantCount);
     xp3AstFree(expr->ast);
     xmlFree(expr);
+}
+
+/*
+ * Signatures of extension functions
+ */
+
+/* The namespaces no extension function can be in (XQuery 3.1, 4.18) */
+static const char *const xp3ReservedNs[] = {
+    XP3_NS_XML,
+    XP3_NS_XS,
+    XP3_NS_XSI,
+    XP3_NS_FN,
+    XP3_NS_MATH,
+    XP3_NS_MAP,
+    XP3_NS_ARRAY,
+    XP3_NS_XQUERY
+};
+
+static int
+unsupportedType(xp3Analysis *st, const xp3AstNode *node, const char *what) {
+    return(staticError(st, XP3_ERR_UNSUPPORTED, node, "%s is not supported "
+                       "in function signatures yet", what));
+}
+
+/*
+ * The xp3FuncType of a parameter or result type: a SEQUENCE_TYPE or
+ * EMPTY_SEQUENCE_TYPE node, or NULL for none, which is item()*. An
+ * item type that xp3FuncType would keep only by its kind is rejected,
+ * as the conversion rules would check it loosely [err:UNSUPPORTED].
+ */
+static int
+signatureType(xp3Analysis *st, xp3AstNode *node, xp3FuncType *type) {
+    xp3AstNode *item;
+    const xp3AstNode *child;
+
+    type->type = 0;
+    type->occurrence = XP3_OCC_ONE;
+    if (node == NULL) {
+        type->kind = XP3_AST_ANY_ITEM_TYPE;
+        type->occurrence = XP3_OCC_ZERO_OR_MORE;
+        return(0);
+    }
+    if (node->kind == XP3_AST_EMPTY_SEQUENCE_TYPE) {
+        type->kind = XP3_AST_EMPTY_SEQUENCE_TYPE;
+        return(0);
+    }
+    item = node->first;
+    type->kind = item->kind;
+    type->occurrence = (xp3Occurrence) node->op;
+
+    switch (item->kind) {
+        case XP3_AST_ATOMIC_TYPE:
+            if (analyzeAtomicType(st, item) < 0)
+                return(-1);
+            if (item->op == XP3_SCHEMA_ERROR)
+                return(unsupportedType(st, item, "xs:error"));
+            type->type = item->op;
+            return(0);
+        case XP3_AST_KIND_TEST:
+            child = item->first;
+            switch (item->op) {
+                case XP3_KIND_ELEMENT:
+                case XP3_KIND_ATTRIBUTE:
+                    /* element(*) is element() */
+                    if ((child != NULL) &&
+                        ((child->op != XP3_NAMETEST_ANY) ||
+                         (child->next != NULL)))
+                        return(unsupportedType(st, item,
+                            (item->op == XP3_KIND_ELEMENT) ?
+                            "element() with a name or type" :
+                            "attribute() with a name or type"));
+                    break;
+                case XP3_KIND_SCHEMA_ELEMENT:
+                    return(unsupportedType(st, item, "schema-element()"));
+                case XP3_KIND_SCHEMA_ATTRIBUTE:
+                    return(unsupportedType(st, item, "schema-attribute()"));
+                case XP3_KIND_DOCUMENT:
+                    if (child != NULL)
+                        return(unsupportedType(st, item, "document-node() "
+                                               "with an element test"));
+                    break;
+                case XP3_KIND_PI:
+                    if (item->text != NULL)
+                        return(unsupportedType(st, item,
+                                               "processing-instruction() "
+                                               "with a name"));
+                    break;
+                default:
+                    break;
+            }
+            type->type = item->op;
+            return(0);
+        case XP3_AST_FUNCTION_TEST:
+            return((item->op != 0) ?
+                   unsupportedType(st, item, "a typed function test") : 0);
+        case XP3_AST_MAP_TEST:
+            return((item->op != 0) ?
+                   unsupportedType(st, item, "a typed map test") : 0);
+        case XP3_AST_ARRAY_TEST:
+            return((item->op != 0) ?
+                   unsupportedType(st, item, "a typed array test") : 0);
+        default:
+            return(0);
+    }
+}
+
+/*
+ * Check the name of a signature: in a namespace [err:XQST0060], not a
+ * reserved one [err:XQST0045], and with a new arity [err:XQST0034].
+ */
+static int
+signatureName(xp3Analysis *st, xp3AstNode *func, int arity) {
+    const xp3ExtFunction *other;
+    char name[XP3_NAME_BUF];
+    size_t i;
+
+    displayName(func, name, sizeof(name));
+    if (resolveName(st, func, XP3_DEFAULT_FUNCTION) < 0)
+        return(-1);
+    if (func->uri == NULL)
+        return(staticError(st, XP3_ERR_XQST0060, func, "the function %s is "
+                           "in no namespace", name));
+    for (i = 0; i < sizeof(xp3ReservedNs) / sizeof(xp3ReservedNs[0]); i++) {
+        if (xmlStrEqual(func->uri, BAD_CAST xp3ReservedNs[i]))
+            return(staticError(st, XP3_ERR_XQST0045, func, "the function %s "
+                               "is in the namespace %s, which is reserved",
+                               name, xp3ReservedNs[i]));
+    }
+    for (other = xp3StaticContextFunctions(st->ctx, func->uri, func->text);
+         other != NULL; other = other->next) {
+        if (other->info.arity == arity)
+            return(staticError(st, XP3_ERR_XQST0034, func, "the function "
+                               "%s#%d is registered already", name, arity));
+    }
+    return(0);
+}
+
+/**
+ * Make the entry of an extension function from its signature, for
+ * xp3RegisterFunction(): parse it, resolve its names against the
+ * static context, and turn its types into xp3FuncType data, as the
+ * generated table has them (doc/DESIGN.md 6.3). Errors are positioned
+ * in the signature.
+ *
+ * @param ctx        the static context
+ * @param signature  the signature, a NUL-terminated UTF-8 string
+ * @param error      where to store the error, or NULL
+ * @returns the entry, with impl, userData and next not set yet, to be
+ *          freed with xmlFree(), or NULL on error
+ */
+xp3ExtFunction *
+xp3CompileSignature(const xp3StaticContext *ctx, const xmlChar *signature,
+                    xp3Error **error) {
+    xp3Analysis st;
+    xp3ExtFunction *func = NULL;
+    xp3FuncType *params;
+    xp3AstNode *root;
+    xp3AstNode *child;
+    xp3AstNode *other;
+    xp3AstNode *result = NULL;
+    xmlChar *str;
+    size_t sigLen = strlen((const char *) signature);
+    size_t uriLen;
+    size_t nameLen;
+    char name[XP3_NAME_BUF];
+    int arity = 0;
+    int i;
+
+    if (error != NULL)
+        *error = NULL;
+    memset(&st, 0, sizeof(st));
+    st.ast = xp3ParseSignature(ctx, signature, sigLen, &st.err);
+    if (st.ast == NULL)
+        goto error;
+    st.ctx = ctx;
+    st.level = XP3_XPATH_31;
+    root = st.ast->root;
+
+    for (child = root->first; child != NULL; child = child->next) {
+        if (child->kind == XP3_AST_PARAM)
+            arity++;
+        else
+            result = child;
+    }
+    if (signatureName(&st, root, arity) < 0)
+        goto error;
+
+    /* One allocation: the entry, the parameter types, then the URI,
+     * the local name and the signature */
+    uriLen = strlen((const char *) root->uri);
+    nameLen = strlen((const char *) root->text);
+    func = xmlMalloc(sizeof(*func) + (size_t) arity * sizeof(xp3FuncType) +
+                     uriLen + nameLen + sigLen + 3);
+    if (func == NULL) {
+        staticNoMemory(&st);
+        goto error;
+    }
+    memset(func, 0, sizeof(*func));
+    params = (xp3FuncType *) (func + 1);
+
+    i = 0;
+    for (child = root->first; child != result; child = child->next) {
+        displayName(child, name, sizeof(name));
+        if (resolveName(&st, child, XP3_DEFAULT_NONE) < 0)
+            goto error;
+        for (other = root->first; other != child; other = other->next) {
+            if (sameName(other->uri, other->text, child->uri, child->text)) {
+                staticError(&st, XP3_ERR_XQST0039, child,
+                            "duplicate parameter $%s", name);
+                goto error;
+            }
+        }
+        if (signatureType(&st, child->first, &params[i++]) < 0)
+            goto error;
+    }
+    if (signatureType(&st, result, &func->info.result) < 0)
+        goto error;
+
+    str = (xmlChar *) (params + arity);
+    memcpy(str, root->uri, uriLen + 1);
+    func->uri = str;
+    str += uriLen + 1;
+    memcpy(str, root->text, nameLen + 1);
+    func->info.name = (const char *) str;
+    str += nameLen + 1;
+    memcpy(str, signature, sigLen + 1);
+    func->info.signature = (const char *) str;
+
+    func->info.arity = arity;
+    func->info.level = XP3_XPATH_20;
+    func->info.flags = XP3_FUNC_EXTENSION;
+    func->info.params = (arity > 0) ? params : NULL;
+
+    xp3AstFree(st.ast);
+    return(func);
+
+error:
+    xmlFree(func);
+    xp3AstFree(st.ast);
+    if (error != NULL)
+        *error = st.err;
+    else
+        xp3ErrorFree(st.err);
+    return(NULL);
 }

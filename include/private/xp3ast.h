@@ -84,7 +84,10 @@ typedef enum {
                                  * XP3_ARITY_OVERFLOW. After analysis,
                                  * func as for FUNCTION_CALL */
     XP3_AST_INLINE_FUNCTION,    /* children: PARAM..., optional
-                                 * SEQUENCE_TYPE (return type), body */
+                                 * SEQUENCE_TYPE (return type), body.
+                                 * As the root of a function signature
+                                 * (xp3ParseSignature()): name, and no
+                                 * body */
     XP3_AST_PARAM,              /* $name: name, optional child:
                                  * SEQUENCE_TYPE. After analysis, op:
                                  * the slot */

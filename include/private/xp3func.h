@@ -31,8 +31,9 @@ typedef enum {
 } xp3FuncNamespace;
 
 /*
- * Flags of a signature. Apart from XP3_FUNC_VARIADIC, they are the
- * function properties of F&O 3.1, 1.7.4. Constant folding needs them:
+ * Flags of a signature. Apart from XP3_FUNC_VARIADIC and
+ * XP3_FUNC_EXTENSION, they are the function properties of F&O 3.1,
+ * 1.7.4. Constant folding needs them:
  * a call can only be folded if none of the first four are set.
  * XP3_FUNC_ORDER does not prevent folding, because any one order is a
  * valid result; it tells the evaluator that the order of the result
@@ -46,6 +47,9 @@ typedef enum {
 #define XP3_FUNC_ORDER (1 << 5)     /* nondeterministic with respect to
                                      * ordering: fn:distinct-values,
                                      * fn:unordered, map:keys... */
+#define XP3_FUNC_EXTENSION (1 << 6) /* registered with
+                                     * xp3RegisterFunction(): the info
+                                     * of an xp3ExtFunction */
 
 /*
  * The type of a parameter or result, as a SequenceType of the parse
@@ -81,6 +85,24 @@ struct _xp3FuncInfo {
     const xp3FuncType *params;  /* arity of them, NULL for none; further
                                  * arguments of a variadic function have
                                  * the type of the last */
+};
+
+/*
+ * An extension function, made from its signature by
+ * xp3CompileSignature(). The info has XP3_FUNC_EXTENSION and level
+ * XP3_XPATH_20, as the function exists at every level; its ns is
+ * unused, the namespace is uri. The parameter types and the strings
+ * are in the same allocation as the entry, so xmlFree() frees it all.
+ */
+typedef struct _xp3ExtFunction xp3ExtFunction;
+
+struct _xp3ExtFunction {
+    xp3FuncInfo info;
+    const xmlChar *uri;
+    xp3FunctionImpl impl;
+    void *userData;
+    xp3ExtFunction *next;       /* in the static context, the next
+                                 * arity of the same name, or NULL */
 };
 
 const xp3FuncInfo *

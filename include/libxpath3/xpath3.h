@@ -184,6 +184,53 @@ typedef enum {
     XP3_XPATH_31 = 31
 } xp3LanguageLevel;
 
+/**
+ * The call of an extension function, passed to its implementation.
+ * Opaque, and valid only during that call.
+ */
+typedef struct _xp3FunctionCall xp3FunctionCall;
+
+/**
+ * The implementation of an extension function.
+ *
+ * It returns a new sequence, which the library owns from then on: one
+ * made with the xp3New*Sequence() functions, or an argument with a
+ * reference added by xp3SequenceRef(). The result is converted to the
+ * declared result type and checked like the arguments, so a wrong
+ * result raises XPTY0004 instead of reaching the evaluator.
+ *
+ * On error it returns NULL, after xp3FunctionError(); NULL without an
+ * error is taken as a failed allocation (NO_MEMORY), since that's why
+ * the xp3New*Sequence() functions return NULL.
+ *
+ * A compiled expression can be evaluated by several threads at once,
+ * so the implementation may run concurrently; it may evaluate other
+ * expressions, but not with the dynamic context of the call.
+ *
+ * @param call      the call, for errors and the evaluation's user data
+ * @param args      the arguments, converted to the declared parameter
+ *                  types by the function conversion rules (XPath 3.1,
+ *                  3.1.5.2); borrowed, valid during the call
+ * @param count     the number of arguments, the arity of the signature
+ * @param userData  the pointer given to xp3RegisterFunction()
+ * @returns the result, or NULL on error
+ */
+typedef xp3Sequence *(*xp3FunctionImpl)(xp3FunctionCall *call,
+                                        xp3Sequence **args, int count,
+                                        void *userData);
+
+/**
+ * Properties of an extension function (F&O 3.1, 1.7.4). Without
+ * flags, a function is taken to be nondeterministic and is called on
+ * each evaluation, also with constant arguments.
+ */
+typedef enum {
+    /** Same arguments give the same result, without side effects, so a
+     * call with constant arguments may be evaluated once, at compile
+     * time (constant folding). */
+    XP3_FUNCTION_DETERMINISTIC = 1 << 0
+} xp3FunctionFlags;
+
 /*
  * Version
  */
@@ -229,6 +276,17 @@ XP3PUBFUN int
 		    xp3DeclareVariable		(xp3StaticContext *ctx,
 						 const xmlChar *uri,
 						 const xmlChar *localName);
+
+/*
+ * Extension functions
+ */
+XP3PUBFUN int
+		    xp3RegisterFunction		(xp3StaticContext *ctx,
+						 const xmlChar *signature,
+						 int flags,
+						 xp3FunctionImpl impl,
+						 void *userData,
+						 xp3Error **error);
 
 /*
  * Compiling
