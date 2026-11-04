@@ -3226,7 +3226,8 @@ static const char *const xp3AllocFunctions =
     "one-or-more(x)[1], x ! position(), 'a' || 1, x => count(), "
     "(1 to 3)[position() = last()], subsequence(x, @a), string(), "
     "number(), count(1 to 10000000000), subsequence(1 to 9, 8), "
-    "remove($v, 1), reverse(1 to 2))";
+    "remove($v, 1), reverse(1 to 2), "
+    "count(-9223372036854775807 to 9223372036854775807))";
 
 static const char *const xp3AllocFunctionsExpected =
     "integer:2 boolean:false boolean:false boolean:true string:one "
@@ -3234,7 +3235,8 @@ static const char *const xp3AllocFunctionsExpected =
     "string:a integer:2 integer:1 integer:3 integer:1 string:b integer:2 "
     "integer:1 e:x#x1 integer:1 integer:2 string:a1 integer:2 integer:3 "
     "e:x#x1 e:x#x2 string:onetwotail double:NaN integer:10000000000 "
-    "integer:8 integer:9 e:x#x1 integer:2 integer:1";
+    "integer:8 integer:9 e:x#x1 integer:2 integer:1 "
+    "integer:18446744073709551615";
 
 /* The aggregate functions */
 static const char *const xp3AllocAggregate =
@@ -3247,9 +3249,11 @@ static const char *const xp3AllocAggregateExpected =
     "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
 
 /* The string and URI functions and the collations, with searches for
- * strings longer than the table that fits on the stack */
+ * strings longer than the table that fits on the stack, and a call
+ * with more arguments than fit on the stack */
 static const char *const xp3AllocStrings =
     "(concat('a', 1, x[1]), string-join(1 to 3, '-'), "
+    "concat(x[1], 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'), "
     "string-join((), 'x'), substring('12345', 2, 2), string-length(x[2]), "
     "normalize-space(' a  b '), normalize-space(), "
     "translate('abcabc', 'ab', 'B'), compare('a', 'b'), "
@@ -3268,7 +3272,8 @@ static const char *const xp3AllocStrings =
     "escape-html-uri('\xc3\xa9x'))";
 
 static const char *const xp3AllocStringsExpected =
-    "string:a1one string:1-2-3 string: string:23 integer:3 string:a b "
+    "string:a1one string:1-2-3 string:onebcdefghi string: string:23 "
+    "integer:3 string:a b "
     "string:onetwotail string:BcBc integer:-1 boolean:true string:AB "
     "integer:97 integer:98 boolean:true string:a string:b string:a "
     "string:c boolean:true boolean:true boolean:true boolean:true "
@@ -3349,6 +3354,21 @@ done:
     return(result);
 }
 
+/* The result described, or "error:CODE" if there is none */
+static void
+describeOutcome(const xp3Sequence *result, const char *code, char *out,
+                size_t size) {
+    if (result == NULL)
+        snprintf(out, size, "error:%s", code);
+    else
+        describe(result, out, size);
+}
+
+/*
+ * Evaluate with each allocation failing in turn. The expected outcome
+ * may be an error, "error:CODE", for an expression that raises one;
+ * a failed allocation must still end in NO_MEMORY, never that error.
+ */
 static void
 testAllocationFailuresIn(const char *xml, const char *text,
                          const char *expected) {
@@ -3361,9 +3381,8 @@ testAllocationFailuresIn(const char *xml, const char *text,
     if (doc == NULL)
         return;
     result = allocatingWork(doc, text, code, sizeof(code));
-    describe(result, actual, sizeof(actual));
-    check((result != NULL) && (strcmp(actual, expected) == 0),
-          "reference evaluation");
+    describeOutcome(result, code, actual, sizeof(actual));
+    check(strcmp(actual, expected) == 0, "reference evaluation");
     if (strcmp(actual, expected) != 0)
         fprintf(stderr, "  actual: %s (%s)\n", actual, code);
     xp3FreeSequence(result);
@@ -3383,9 +3402,9 @@ testAllocationFailuresIn(const char *xml, const char *text,
         injected = xp3TestAllocFailed();
         xp3TestAllocFailAt(-1);
 
-        describe(result, actual, sizeof(actual));
+        describeOutcome(result, code, actual, sizeof(actual));
         if (!injected) {
-            check((result != NULL) && (strcmp(actual, expected) == 0),
+            check(strcmp(actual, expected) == 0,
                   "evaluation complete after allocation failures");
             xp3FreeSequence(result);
             break;
@@ -3485,6 +3504,10 @@ main(void) {
     testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    /* The error fn:error raises is allocated too; when that fails, the
+     * evaluation fails with NO_MEMORY instead */
+    testAllocationFailures("error()", "error:FOER0000");
+    testAllocationFailures("error((), 'boom')", "error:FOER0000");
     testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
                              xp3AllocCompareExpected);
     testLocale();

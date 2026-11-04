@@ -636,6 +636,32 @@ static const struct {
     { "exactly-one(())",
       "(call Q{http://www.w3.org/2005/xpath-functions}exactly-one "
       "(empty))" },
+    /* Calls with a collation are context-dependent, through the
+     * default collation, so they stay calls also with constant
+     * arguments and the URI given */
+    { "contains('ab', 'a')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}contains "
+      "(constant string:ab) (constant string:a))" },
+    { "compare('a', 'b', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}compare "
+      "(constant string:a) (constant string:b) (constant "
+      "string:http://www.w3.org/2005/xpath-functions/collation/codepoint))" },
+    { "distinct-values((1, 1))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}distinct-values "
+      "(constant integer:1 integer:1))" },
+    { "index-of((1, 2), 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}index-of "
+      "(constant integer:1 integer:2) (constant integer:1))" },
+    { "deep-equal(1, 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}deep-equal "
+      "(constant integer:1) (constant integer:1))" },
+    { "min((1, 2))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}min "
+      "(constant integer:1 integer:2))" },
+    { "max(('a', 'b'))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}max "
+      "(constant string:a string:b))" },
     { "subsequence(?, 1)",
       "(call Q{http://www.w3.org/2005/xpath-functions}subsequence "
       "(placeholder) (constant integer:1))" },
@@ -668,6 +694,10 @@ static const struct {
       "(if (var v) (constant integer:2) (constant integer:3))" },
     { "if ((1, 2)) then $v else 2",
       "(if (constant integer:1 integer:2) (var v) (constant integer:2))" },
+    /* A branch not taken goes with its errors, also those a call
+     * raises */
+    { "if (false()) then error() else 1", "(constant integer:1)" },
+    { "if (true()) then 1 else exactly-one(())", "(constant integer:1)" },
     { "$v and 0", "(constant boolean:false)" },
     { "0 and $v", "(constant boolean:false)" },
     { "$v or 'x'", "(constant boolean:true)" },
