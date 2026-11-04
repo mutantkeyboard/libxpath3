@@ -975,6 +975,50 @@ testFoldSizes(void) {
     xmlFree(expr);
 }
 
+/*
+ * A fold whose string would pass the byte limit stops at the limit,
+ * before the string is built: here it would be 9 MB. Evaluating still
+ * gives the string.
+ */
+static void
+testFoldStringSize(void) {
+    char *call = repeatExpr("string-join(1 to 9000, '", "a", "", 1000, "')");
+    char *test = repeatExpr("string-join(1 to 9000, '", "a", "", 1000,
+                            "') ne ''");
+    xp3Expr *compiled = NULL;
+    size_t largest;
+
+    if ((call == NULL) || (test == NULL)) {
+        check(0, "string fold expressions allocated");
+        goto done;
+    }
+    if (!xp3TestAllocInstall()) {
+        printf("teststatic: string fold size test skipped: this libxml2 "
+               "ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    compiled = xp3Compile(NULL, BAD_CAST call, NULL);
+    largest = xp3TestAllocLargest();
+    xp3TestAllocRestore();
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_FUNCTION_CALL),
+          "a string of 9 MB is left");
+    check(largest < 1048576, "the fold stops at the byte limit");
+    xp3FreeExpr(compiled);
+
+    compiled = xp3Compile(NULL, BAD_CAST test, NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "a string that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+
+done:
+    xmlFree(call);
+    xmlFree(test);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -988,6 +1032,7 @@ main(void) {
     testOptimize();
     testFoldBudget();
     testFoldSizes();
+    testFoldStringSize();
     testAllocationFailures();
 
     if (failures == 0)

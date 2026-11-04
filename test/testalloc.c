@@ -34,6 +34,7 @@ static int failAt = -1;
 static int allocCount;
 static int failed;
 static int used;    /* set by any call: libxml2 uses this allocator */
+static size_t largest;
 
 /*
  * Whether this allocation fails. The counts stop once the failure is
@@ -56,6 +57,8 @@ static void *
 testMalloc(size_t size) {
     if (shouldFail())
         return(NULL);
+    if (size > largest)
+        largest = size;
     return(malloc(size));
 }
 
@@ -63,6 +66,8 @@ static void *
 testRealloc(void *ptr, size_t size) {
     if (shouldFail())
         return(NULL);
+    if (size > largest)
+        largest = size;
     return(realloc(ptr, size));
 }
 
@@ -84,6 +89,7 @@ xp3TestAllocInstall(void) {
     xmlMemGet(&oldFree, &oldMalloc, &oldRealloc, &oldStrdup);
     xmlMemSetup(free, testMalloc, testRealloc, testStrdup);
     failAt = -1;
+    largest = 0;
 
     /* Some builds of libxml2 ignore xmlMemSetup(). Check that an
      * allocation through xmlMalloc() actually reaches testMalloc(). */
@@ -109,6 +115,11 @@ xp3TestAllocFailAt(int n) {
 int
 xp3TestAllocFailed(void) {
     return(failed);
+}
+
+size_t
+xp3TestAllocLargest(void) {
+    return(largest);
 }
 
 #if defined(__GNUC__)

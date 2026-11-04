@@ -715,6 +715,16 @@ isNaNValue(const xp3Atomic *atomic) {
     }
 }
 
+/* Count the steps of comparing two values: a step per
+ * XP3_BYTES_PER_STEP bytes of strings, binary values or digits, as
+ * comparisons in expressions count them. Returns 0 or -1. */
+static int
+compareSteps(xp3FuncCall *call, const xp3Atomic *left,
+             const xp3Atomic *right) {
+    return(xp3FuncBytes(call, (uint64_t) xp3AtomicSize(left, SIZE_MAX) +
+                              xp3AtomicSize(right, SIZE_MAX)));
+}
+
 /*
  * Whether two atomic values are equal as F&O 3.1, 14.2 compares them:
  * with eq, strings under the collation, and values that eq can't
@@ -733,6 +743,8 @@ atomicsEqual(xp3FuncCall *call, const xp3Atomic *left,
                      "and durations is not implemented yet");
         return(-1);
     }
+    if (compareSteps(call, left, right) < 0)
+        return(-1);
     if (isStringType(left->type) && isStringType(right->type))
         return(xp3CollationCompare(collation, left->u.str,
                                    right->u.str) == 0);
@@ -905,8 +917,12 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
         return(-1);
     }
     if (isStringType(atomic->type)) {
+        size_t len = strlen((const char *) atomic->u.str);
+
+        if (xp3FuncBytes(call, len) < 0)
+            return(-1);
         *cls = XP3_HASH_STRING;
-        *key = hashString(basis, atomic->u.str, collation);
+        *key = hashBytes(basis, atomic->u.str, len, collation);
         return(0);
     }
     switch (xp3TypeRepresentation(atomic->type)) {
@@ -915,6 +931,8 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
             *key = (uint64_t) (atomic->u.boolean != 0);
             break;
         case XP3_REP_BINARY:
+            if (xp3FuncBytes(call, atomic->u.bin.len) < 0)
+                return(-1);
             *cls = (atomic->type == XP3_TYPE_HEX_BINARY) ?
                    XP3_HASH_HEX_BINARY : XP3_HASH_BASE64_BINARY;
             *key = hashBytes(basis, atomic->u.bin.data,
@@ -1333,19 +1351,20 @@ sameStringValue(xp3FuncCall *call, xmlNodePtr node1, xmlNodePtr node2,
                 xp3Collation collation) {
     xmlChar *value1 = NULL;
     xmlChar *value2 = NULL;
-    size_t length;
+    size_t length1 = 0;
+    size_t length2 = 0;
     xp3ErrCode err;
     int ret = -1;
 
-    err = xp3NodeStringValue(node1, &value1, &length);
+    err = xp3NodeStringValue(node1, &value1, &length1);
     if (err == XP3_ERR_OK)
-        err = xp3NodeStringValue(node2, &value2, &length);
+        err = xp3NodeStringValue(node2, &value2, &length2);
     if (err == XP3_ERR_LIMIT)
         xp3FuncError(call, err, "the string value of a node is longer "
                      "than 2 GB");
     else if (err != XP3_ERR_OK)
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
-    else
+    else if (xp3FuncBytes(call, (uint64_t) length1 + length2) == 0)
         ret = (xp3CollationCompare(collation, value1, value2) == 0);
     xmlFree(value1);
     xmlFree(value2);
@@ -2037,6 +2056,10 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
             strings |= XP3_HAS_STRING;
         } else if (atomic->type == XP3_TYPE_ANY_URI) {
             strings |= XP3_HAS_URI;
+        }
+        if (compareSteps(call, atomic, (best != NULL) ? best : atomic) < 0) {
+            xp3AtomicUnref(atomic);
+            goto error;
         }
         /* The first value is compared with itself, so that a single
          * value without an order, such as a QName, is an error too */

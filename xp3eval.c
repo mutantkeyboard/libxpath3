@@ -234,10 +234,6 @@ typedef struct {
     xp3Error *err;              /* the first error */
 } xp3Eval;
 
-/* Measuring the size of values while folding costs a step per this
- * many bytes, so it can't take longer than the steps allow */
-#define XP3_BYTES_PER_STEP 256
-
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node);
 
@@ -288,9 +284,10 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
 
 /*
  * Count steps of work: each expression evaluated, each node an axis
- * visits, each pair a general comparison tries and each item of an
- * expanded range. Past the limit, the evaluation fails with LIMIT.
- * Returns 0 or -1.
+ * visits, each pair a general comparison tries, each item of an
+ * expanded range, and each XP3_BYTES_PER_STEP bytes of strings that
+ * comparisons and functions read or make. Past the limit, the
+ * evaluation fails with LIMIT. Returns 0 or -1.
  */
 static int
 evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
@@ -1642,6 +1639,18 @@ compareError(xp3Eval *ev, xp3ErrCode err, const xp3AstNode *node,
         evalNoMemory(ev);
 }
 
+/* Count the steps of comparing two values: a step per
+ * XP3_BYTES_PER_STEP bytes of strings, binary values or digits, as the
+ * string functions count them. Returns 0 or -1. */
+static int
+compareSteps(xp3Eval *ev, const xp3AstNode *node, const xp3Atomic *left,
+             const xp3Atomic *right) {
+    uint64_t bytes = (uint64_t) xp3AtomicSize(left, SIZE_MAX) +
+                     xp3AtomicSize(right, SIZE_MAX);
+
+    return(evalSteps(ev, node, bytes / XP3_BYTES_PER_STEP));
+}
+
 /* eq, ne, lt, le, gt, ge (XPath 3.1, 3.7.1): untyped values compare as
  * strings */
 static xp3Value *
@@ -1662,6 +1671,11 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(left);
         xp3AtomicUnref(right);
         return(xp3ValueEmpty());
+    }
+    if (compareSteps(ev, node, left, right) < 0) {
+        xp3AtomicUnref(left);
+        xp3AtomicUnref(right);
+        return(NULL);
     }
     err = xp3CompareAtomics((xp3AstOp) node->op, left, right, ev->level,
                             &result);
@@ -1706,7 +1720,8 @@ comparePair(xp3Eval *ev, const xp3AstNode *node, xp3Atomic *left,
     if ((left != NULL) && (right->type == XP3_TYPE_UNTYPED_ATOMIC))
         right = castUntyped(ev, right, generalTarget(left->type),
                             node->last);
-    if ((left != NULL) && (right != NULL)) {
+    if ((left != NULL) && (right != NULL) &&
+        (compareSteps(ev, node, left, right) == 0)) {
         err = xp3CompareAtomics((xp3AstOp) node->op, left, right,
                                 ev->level, &result);
         if (err != XP3_ERR_OK) {
@@ -2446,7 +2461,12 @@ evalConcat(xp3Eval *ev, const xp3AstNode *node) {
     if (rightLen > INT32_MAX - leftLen) {
         evalError(ev, XP3_ERR_LIMIT, node, "the result of || would be "
                   "longer than 2 GB");
-    } else {
+    } else if ((ev->maxBytes > 0) && (leftLen + rightLen > ev->maxBytes)) {
+        /* Checked before it is built, as fn:concat does */
+        evalError(ev, XP3_ERR_LIMIT, node, "a value would have more than "
+                  "%lu bytes", (unsigned long) ev->maxBytes);
+    } else if (evalSteps(ev, node, (leftLen + rightLen) /
+                                   XP3_BYTES_PER_STEP) == 0) {
         str = xmlRealloc(left, leftLen + rightLen + 1);
         if (str != NULL) {
             left = str;
@@ -2961,6 +2981,42 @@ xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
 int
 xp3FuncSteps(xp3FuncCall *call, uint64_t steps) {
     return(evalSteps(call->ev, call->node, steps));
+}
+
+/**
+ * Count the steps of reading or making strings: one per
+ * XP3_BYTES_PER_STEP bytes, counted by totals, so that a short string
+ * costs nothing.
+ *
+ * @param call   the call
+ * @param bytes  the bytes read or made
+ * @returns 0, or -1 after recording LIMIT
+ */
+int
+xp3FuncBytes(xp3FuncCall *call, uint64_t bytes) {
+    return(evalSteps(call->ev, call->node, bytes / XP3_BYTES_PER_STEP));
+}
+
+/**
+ * Check, before building it, that a string of a call's result fits
+ * the byte limit of a fold, as sequences are checked item by item
+ * (evalCheckSize()). Without folding there is no such limit.
+ *
+ * @param call  the call
+ * @param len   the length of the string in bytes
+ * @returns 0, or -1 after recording LIMIT
+ */
+int
+xp3FuncStringFits(xp3FuncCall *call, size_t len) {
+    char name[XP3_NAME_BUF];
+
+    if ((call->ev->maxBytes == 0) || (len <= call->ev->maxBytes))
+        return(0);
+    evalError(call->ev, XP3_ERR_LIMIT, call->node, "the result of %s "
+              "would have more than %lu bytes",
+              callName(call, name, sizeof(name)),
+              (unsigned long) call->ev->maxBytes);
+    return(-1);
 }
 
 /**

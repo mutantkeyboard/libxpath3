@@ -116,9 +116,17 @@ xp3FuncAt(size_t index);
  * position, the step counter and the limits on sequences. Results with
  * more than one item are built with xp3FuncBuilderInit() and its
  * companions, so that limits and allocation failures behave as for
- * every other expression.
+ * every other expression. Work on strings counts a step per
+ * XP3_BYTES_PER_STEP bytes read or made (xp3FuncBytes()), and a
+ * string is checked against the byte limit of a fold before it is
+ * built (xp3FuncStringFits()).
  */
 typedef struct _xp3FuncCall xp3FuncCall;
+
+/* Reading or making this many bytes of strings, or measuring values
+ * while folding, costs a step, so that the step limit bounds the time
+ * spent on long strings while short ones cost next to nothing */
+#define XP3_BYTES_PER_STEP 256
 
 typedef xp3Value *(*xp3FuncImpl)(xp3FuncCall *call, xp3Value **args,
                                  int count);
@@ -140,6 +148,12 @@ xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
 
 int
 xp3FuncSteps(xp3FuncCall *call, uint64_t steps);
+
+int
+xp3FuncBytes(xp3FuncCall *call, uint64_t bytes);
+
+int
+xp3FuncStringFits(xp3FuncCall *call, size_t len);
 
 xp3LanguageLevel
 xp3FuncLevel(xp3FuncCall *call);

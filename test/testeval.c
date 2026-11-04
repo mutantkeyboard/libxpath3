@@ -1060,8 +1060,11 @@ static const xp3EvalCase xp3Cases[] = {
       "string:BAr string:AAA string:ABdAB string:abc string: string:xbx" },
     { "string-to-codepoints(translate('abc', 'b', '\xf0\x90\x80\x80')), "
       "translate('a\xf0\x90\x80\x80" "c', '\xf0\x90\x80\x80', 'b'), "
-      "translate('cba', 'abcabc', 'xyzuvw')",
-      "integer:97 integer:65536 integer:99 string:abc string:zyx" },
+      "translate('cba', 'abcabc', 'xyzuvw'), translate('abab', 'aba', 'x'), "
+      "translate('a\xe2\x82\xac', '\xe2\x82\xac\xe2\x82\xac" "a', "
+      "'\xf0\x90\x80\x80')",
+      "integer:97 integer:65536 integer:99 string:abc string:zyx "
+      "string:xx string:\xf0\x90\x80\x80" },
 
     /* Substring matching (5.5) */
     { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
@@ -2201,6 +2204,58 @@ testLimits(void) {
 done:
     xp3FreeDynamicContext(ctx);
     xmlFreeDoc(doc);
+}
+
+/*
+ * The string functions and comparisons count a step per 256 bytes
+ * they read or make, so a limit on operations bounds them: a string of
+ * 4 MB takes 16,384 steps to read.
+ */
+static void
+testStringSteps(void) {
+    static const size_t size = 4 * 1024 * 1024;
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlChar *str = xmlMalloc(size + 1);
+    xp3Sequence *seq = NULL;
+    size_t i;
+
+    if ((sctx == NULL) || (ctx == NULL) || (str == NULL)) {
+        check(0, "string step test set up");
+        goto done;
+    }
+    for (i = 0; i < size; i++)
+        str[i] = (xmlChar) (((i % 4) < 2) ? 'a' : ' ');
+    str[size] = 0;
+    seq = xp3NewStringSequence((const xmlChar **) &str, 1);
+    if ((seq == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "s") != 0) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "s", seq) != 0)) {
+        check(0, "string step variable bound");
+        goto done;
+    }
+
+    ctx->maxOperations = 100000;
+    checkEval(sctx, ctx, "string-length($s)", "integer:4194304");
+    ctx->maxOperations = 10000;
+    checkEval(sctx, ctx, "string-length('abc')", "integer:3");
+    checkEval(sctx, ctx, "string-length($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-space($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "contains($s, 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "translate($s, 'a', 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "compare($s, $s)", "error:LIMIT");
+    checkEval(sctx, ctx, "$s eq $s", "error:LIMIT");
+    checkEval(sctx, ctx, "$s = $s", "error:LIMIT");
+    checkEval(sctx, ctx, "count(distinct-values(($s, $s)))", "error:LIMIT");
+    checkEval(sctx, ctx, "concat($s, 'a') instance of xs:string",
+              "error:LIMIT");
+    checkEval(sctx, ctx, "($s || 'a') instance of xs:string", "error:LIMIT");
+
+done:
+    xp3FreeSequence(seq);
+    xmlFree(str);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
 }
 
 static int
@@ -3344,6 +3399,7 @@ main(void) {
     testInvalidUtf8();
     testVariables();
     testLimits();
+    testStringSteps();
     testBoolean();
     testErrorPositions();
     testSequences();
