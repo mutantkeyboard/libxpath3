@@ -102,7 +102,8 @@ struct _xp3ExtFunction {
     xp3FunctionImpl impl;
     void *userData;
     xp3ExtFunction *next;       /* in the static context, the next
-                                 * arity of the same name, or NULL */
+                                 * arity of the same name, or NULL; NULL
+                                 * in the copy an expression holds */
 };
 
 const xp3FuncInfo *

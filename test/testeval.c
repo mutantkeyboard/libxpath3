@@ -3434,6 +3434,581 @@ testAllocationFailures(const char *text, const char *expected) {
 }
 
 /*
+ * Extension functions
+ */
+
+#define EXT_NS "urn:example"
+
+/* A string result; NULL if it can't be made, as on allocation failure */
+static xp3Sequence *
+extString(const char *str) {
+    const xmlChar *strs[1];
+
+    strs[0] = BAD_CAST str;
+    return(xp3NewStringSequence(strs, 1));
+}
+
+/*
+ * The arguments as the implementation gets them, "type:value" for each
+ * item and " |" between arguments, as one xs:string
+ */
+static xp3Sequence *
+extArgs(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    char out[512];
+    size_t used = 0;
+    int i;
+
+    (void) call;
+    (void) userData;
+    out[0] = 0;
+    for (i = 0; i < count; i++) {
+        size_t j;
+
+        if (i > 0)
+            used = appendText(out, sizeof(out), used, "|");
+        for (j = 0; j < xp3SequenceLength(args[i]); j++) {
+            int type = xp3SequenceAtomicType(args[i], j);
+            xmlChar *value = xp3SequenceStringValue(args[i], j);
+            char item[128];
+
+            if (value == NULL)
+                return(NULL);
+            snprintf(item, sizeof(item), "%s:%s",
+                     (type >= 0) ?
+                     (const char *) xp3AtomicTypeName((xp3AtomicType) type) :
+                     "node", (const char *) value);
+            xmlFree(value);
+            used = appendText(out, sizeof(out), used, item);
+        }
+    }
+    return(extString(out));
+}
+
+/* A result chosen by the argument, for checking declared result types;
+ * the user data is a node to return */
+static xp3Sequence *
+extResult(xp3FunctionCall *call, xp3Sequence **args, int count,
+          void *userData) {
+    xmlChar *kind = xp3SequenceStringValue(args[0], 0);
+    xp3Sequence *result = NULL;
+    xmlNodePtr node = userData;
+    int64_t integers[2] = { 1, 2 };
+    double dbl = 1.5;
+
+    (void) call;
+    (void) count;
+    if (kind == NULL)
+        return(NULL);
+    if (xmlStrEqual(kind, BAD_CAST "integer"))
+        result = xp3NewIntegerSequence(integers, 1);
+    else if (xmlStrEqual(kind, BAD_CAST "integers"))
+        result = xp3NewIntegerSequence(integers, 2);
+    else if (xmlStrEqual(kind, BAD_CAST "double"))
+        result = xp3NewDoubleSequence(&dbl, 1);
+    else if (xmlStrEqual(kind, BAD_CAST "string"))
+        result = extString("a");
+    else if (xmlStrEqual(kind, BAD_CAST "empty"))
+        result = xp3NewIntegerSequence(NULL, 0);
+    else if (xmlStrEqual(kind, BAD_CAST "node"))
+        result = xp3NewNodeSequence(&node, 1);
+    xmlFree(kind);
+    return(result);
+}
+
+/* Errors raised the ways an implementation can */
+static xp3Sequence *
+extFail(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    xmlChar *how = xp3SequenceStringValue(args[0], 0);
+    xp3Sequence *result = NULL;
+
+    (void) count;
+    (void) userData;
+    if (how == NULL)
+        return(NULL);
+    if (xmlStrEqual(how, BAD_CAST "standard")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FORG0001", BAD_CAST "bad");
+    } else if (xmlStrEqual(how, BAD_CAST "user")) {
+        xp3FunctionError(call, BAD_CAST "urn:errors", BAD_CAST "oops",
+                         NULL);
+    } else if (xmlStrEqual(how, BAD_CAST "default")) {
+        xp3FunctionError(call, NULL, NULL, BAD_CAST "default code");
+    } else if (xmlStrEqual(how, BAD_CAST "twice")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FOAR0001", BAD_CAST "first");
+        xp3FunctionError(call, NULL, BAD_CAST "FOAR0002", BAD_CAST "second");
+    } else if (xmlStrEqual(how, BAD_CAST "and-value")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FORG0001", NULL);
+        result = extString("ignored");
+    }
+    /* "null": NULL without an error */
+    xmlFree(how);
+    return(result);
+}
+
+/* The user data of the registration and of the evaluation, as
+ * "registration:evaluation" */
+static xp3Sequence *
+extUserData(xp3FunctionCall *call, xp3Sequence **args, int count,
+            void *userData) {
+    const char *data = xp3FunctionUserData(call);
+    char out[128];
+
+    (void) args;
+    (void) count;
+    snprintf(out, sizeof(out), "%s:%s", (const char *) userData,
+             (data != NULL) ? data : "none");
+    return(extString(out));
+}
+
+/* The registration's user data, a string */
+static xp3Sequence *
+extLabel(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    (void) call;
+    (void) args;
+    (void) count;
+    return(extString(userData));
+}
+
+/* Twice the argument, counting the calls in the user data */
+static xp3Sequence *
+extTwice(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    int64_t value;
+
+    (void) call;
+    (void) count;
+    (*(int *) userData)++;
+    if (xp3SequenceInteger(args[0], 0, &value) != 0)
+        return(NULL);
+    value *= 2;
+    return(xp3NewIntegerSequence(&value, 1));
+}
+
+/* Five integers */
+static xp3Sequence *
+extFive(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    static const int64_t values[] = { 1, 2, 3, 4, 5 };
+
+    (void) call;
+    (void) args;
+    (void) count;
+    (void) userData;
+    return(xp3NewIntegerSequence(values, 5));
+}
+
+/* The functions most tests use, with the prefix ex */
+static xp3StaticContext *
+extContext(xmlNodePtr node, int *counter) {
+    static const struct {
+        const char *signature;
+        int flags;
+        xp3FunctionImpl impl;
+        int data;               /* 0 none, 1 node, 2 counter, 3 label */
+        const char *label;
+    } functions[] = {
+        { "ex:args($a as xs:double?, $b as xs:string*, $c as xs:integer) "
+          "as xs:string", 0, extArgs, 0, NULL },
+        { "ex:empty-arg($a as empty-sequence()) as xs:string", 0, extArgs,
+          0, NULL },
+        { "ex:integer($kind as xs:string) as xs:integer", 0, extResult, 1,
+          NULL },
+        { "ex:double($kind as xs:string) as xs:double", 0, extResult, 1,
+          NULL },
+        { "ex:string($kind as xs:string) as xs:string", 0, extResult, 1,
+          NULL },
+        { "ex:node($kind as xs:string) as node()", 0, extResult, 1, NULL },
+        { "ex:nothing($kind as xs:string) as empty-sequence()", 0,
+          extResult, 1, NULL },
+        { "ex:any($kind as xs:string)", 0, extResult, 1, NULL },
+        { "ex:fail($how as xs:string)", 0, extFail, 0, NULL },
+        { "ex:user-data() as xs:string", 0, extUserData, 3, "registered" },
+        { "ex:f() as xs:string", 0, extLabel, 3, "zero" },
+        { "ex:f($a) as xs:string", 0, extLabel, 3, "one" },
+        { "ex:det($a as xs:integer) as xs:integer",
+          XP3_FUNCTION_DETERMINISTIC, extTwice, 2, NULL },
+        { "ex:nondet($a as xs:integer) as xs:integer", 0, extTwice, 2,
+          NULL },
+        { "ex:five() as xs:integer+", 0, extFive, 0, NULL }
+    };
+    xp3StaticContext *ctx = xp3NewStaticContext();
+    size_t i;
+
+    if ((ctx == NULL) ||
+        (xp3DeclareNamespace(ctx, BAD_CAST "ex", BAD_CAST EXT_NS) < 0)) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    for (i = 0; i < sizeof(functions) / sizeof(functions[0]); i++) {
+        void *data = (functions[i].data == 1) ? (void *) node :
+                     (functions[i].data == 2) ? (void *) counter :
+                     (functions[i].data == 3) ? (void *) functions[i].label :
+                     NULL;
+
+        if (xp3RegisterFunction(ctx, BAD_CAST functions[i].signature,
+                                functions[i].flags, functions[i].impl, data,
+                                NULL) < 0) {
+            xp3FreeStaticContext(ctx);
+            return(NULL);
+        }
+    }
+    return(ctx);
+}
+
+static const struct {
+    const char *expr;
+    const char *expected;
+} extensionCases[] = {
+    /* Arguments are converted: atomized, untyped values cast, numbers
+     * promoted, xs:anyURI to xs:string */
+    { "ex:args(1, 'a', 3)", "string:double:1 | string:a | integer:3" },
+    { "ex:args(2.5, ('a', 'b'), 3)",
+      "string:double:2.5 | string:a string:b | integer:3" },
+    { "ex:args(@a, xs:anyURI('urn:u'), x[1]/@id = 'x1')",
+      "error:XPTY0004" },
+    { "ex:args(@a, xs:anyURI('urn:u'), 3)",
+      "string:double:1 | string:urn:u | integer:3" },
+    { "ex:args(xs:untypedAtomic('4'), x[1], xs:untypedAtomic('5'))",
+      "string:double:4 | string:one | integer:5" },
+    { "ex:args((), (), xs:byte(7))", "string:| | byte:7" },
+    { "ex:args(xs:untypedAtomic('x'), (), 3)", "error:FORG0001" },
+    { "ex:args('1', (), 3)", "error:XPTY0004" },
+    { "ex:args((1, 2), (), 3)", "error:XPTY0004" },
+    { "ex:args((), (), ())", "error:XPTY0004" },
+    { "ex:args((), (), (1, 2))", "error:XPTY0004" },
+    { "ex:args((), (), 1.5)", "error:XPTY0004" },
+    { "ex:empty-arg(())", "string:" },
+    { "ex:empty-arg(1)", "error:XPTY0004" },
+
+    /* The result is converted and checked the same way */
+    { "ex:integer('integer')", "integer:1" },
+    { "ex:integer('integers')", "error:XPTY0004" },
+    { "ex:integer('empty')", "error:XPTY0004" },
+    { "ex:integer('string')", "error:XPTY0004" },
+    { "ex:integer('double')", "error:XPTY0004" },
+    { "ex:double('integer')", "double:1" },
+    { "ex:string('node')", "string:one" },
+    { "ex:node('node')", "e:x#x1" },
+    { "ex:node('string')", "error:XPTY0004" },
+    { "ex:nothing('empty')", "" },
+    { "ex:nothing('integer')", "error:XPTY0004" },
+    { "ex:any('integers'), ex:any('node')",
+      "integer:1 integer:2 e:x#x1" },
+
+    /* Errors from the implementation; NULL without one is a failed
+     * allocation */
+    { "ex:fail('standard')", "error:FORG0001" },
+    { "ex:fail('user')", "error:oops" },
+    { "ex:fail('default')", "error:FOER0000" },
+    { "ex:fail('twice')", "error:FOAR0001" },
+    { "ex:fail('and-value')", "error:FORG0001" },
+    { "ex:fail('null')", "error:NO_MEMORY" },
+
+    /* Arities, arrows, and references as for built-in functions */
+    { "ex:f(), ex:f(1), 2 => ex:f()", "string:zero string:one string:one" },
+    { "ex:f(1, 2)", "error:XPST0017" },
+    { "ex:f#1", "error:UNSUPPORTED" },
+    { "ex:f#1(1)", "error:UNSUPPORTED" },
+    { "ex:f(?)", "error:UNSUPPORTED" },
+    { "ex:nondet(2) + ex:det(3)", "integer:10" }
+};
+
+static void
+testExtensionFunctions(void) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx;
+    int counter = 0;
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "extension function test set up");
+        goto done;
+    }
+    sctx = extContext(xmlDocGetRootElement(doc)->children, &counter);
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        goto done;
+    }
+    for (i = 0; i < sizeof(extensionCases) / sizeof(extensionCases[0]); i++)
+        checkEval(sctx, ctx, extensionCases[i].expr,
+                  extensionCases[i].expected);
+
+    /* Extension functions exist at every level */
+    xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_20);
+    checkEval(sctx, ctx, "ex:f(1), ex:det(1)", "string:one integer:2");
+    xp3FreeStaticContext(sctx);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/* An error from an implementation, with its code, namespace, message
+ * and position */
+static void
+checkExtensionError(const xp3StaticContext *sctx, const char *expr,
+                    const char *code, const char *ns, const char *message,
+                    int column) {
+    xp3Expr *compiled = xp3Compile(sctx, BAD_CAST expr, NULL);
+    xp3Error *err = NULL;
+
+    check((compiled != NULL) && (xp3Evaluate(compiled, NULL, &err) == NULL) &&
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST code) &&
+          xmlStrEqual(xp3ErrorNamespace(err), BAD_CAST ns) &&
+          (((message == NULL) && (xp3ErrorMessage(err) == NULL)) ||
+           xmlStrEqual(xp3ErrorMessage(err), BAD_CAST message)) &&
+          (xp3ErrorLine(err) == 1) && (xp3ErrorColumn(err) == column), expr);
+    xp3ErrorFree(err);
+    xp3FreeExpr(compiled);
+}
+
+static void
+testExtensionErrors(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL);
+
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        return;
+    }
+    checkExtensionError(sctx, "1 + ex:fail('standard')", "FORG0001",
+                        XP3_ERR_NS, "bad", 5);
+    checkExtensionError(sctx, "ex:fail('user')", "oops", "urn:errors", NULL,
+                        1);
+    checkExtensionError(sctx, "ex:fail('default')", "FOER0000", XP3_ERR_NS,
+                        "default code", 1);
+    checkExtensionError(sctx, "(1, ex:fail('twice'))", "FOAR0001",
+                        XP3_ERR_NS, "first", 5);
+    checkExtensionError(sctx, "ex:integer('string')", "XPTY0004",
+                        XP3_ERR_NS, "the result of ex:integer#1 is an "
+                        "xs:string, where xs:integer is expected", 1);
+    xp3FreeStaticContext(sctx);
+}
+
+static void
+testExtensionUserData(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    char handler[] = "handler";
+
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "user data test set up");
+        goto done;
+    }
+    checkEval(sctx, NULL, "ex:user-data()", "string:registered:none");
+    checkEval(sctx, ctx, "ex:user-data()", "string:registered:none");
+    check(xp3SetDynamicContextUserData(ctx, handler) == 0,
+          "user data set on a dynamic context");
+    checkEval(sctx, ctx, "ex:user-data()", "string:registered:handler");
+    check(xp3SetDynamicContextUserData(NULL, handler) < 0,
+          "user data on a NULL context");
+    check(xp3FunctionUserData(NULL) == NULL, "user data of a NULL call");
+    xp3FunctionError(NULL, NULL, NULL, NULL);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * A deterministic function with constant arguments is called once,
+ * while compiling; a nondeterministic one on every evaluation
+ */
+static void
+testExtensionFolding(void) {
+    xp3StaticContext *sctx;
+    xp3Expr *det;
+    xp3Expr *nondet;
+    xp3Expr *variable;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *value;
+    char actual[64];
+    int counter = 0;
+    int64_t two = 2;
+    int i;
+
+    sctx = extContext(NULL, &counter);
+    value = xp3NewIntegerSequence(&two, 1);
+    if ((sctx == NULL) || (ctx == NULL) || (value == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", value) < 0)) {
+        check(0, "folding test set up");
+        xp3FreeStaticContext(sctx);
+        xp3FreeDynamicContext(ctx);
+        xp3FreeSequence(value);
+        return;
+    }
+    det = xp3Compile(sctx, BAD_CAST "ex:det(2)", NULL);
+    check(counter == 1, "a deterministic call is evaluated when compiling");
+    nondet = xp3Compile(sctx, BAD_CAST "ex:nondet(2)", NULL);
+    variable = xp3Compile(sctx, BAD_CAST "ex:det($v)", NULL);
+    check(counter == 1, "a nondeterministic call is not");
+    xp3FreeStaticContext(sctx);
+
+    for (i = 0; i < 3; i++) {
+        xp3Sequence *results[3];
+        int j;
+
+        results[0] = xp3Evaluate(det, ctx, NULL);
+        results[1] = xp3Evaluate(nondet, ctx, NULL);
+        results[2] = xp3Evaluate(variable, ctx, NULL);
+        for (j = 0; j < 3; j++) {
+            describe(results[j], actual, sizeof(actual));
+            check(strcmp(actual, "integer:4") == 0,
+                  "extension calls evaluate to their value");
+            xp3FreeSequence(results[j]);
+        }
+    }
+    check(counter == 7, "the unfolded calls are evaluated each time");
+
+    xp3FreeExpr(det);
+    xp3FreeExpr(nondet);
+    xp3FreeExpr(variable);
+    xp3FreeSequence(value);
+    xp3FreeDynamicContext(ctx);
+}
+
+/* The static context may be freed before evaluating: the expression
+ * owns copies of the functions it calls */
+static void
+testExtensionAfterFree(void) {
+    int counter = 0;
+    xp3StaticContext *sctx = extContext(NULL, &counter);
+    xp3Expr *expr;
+    xp3Sequence *result;
+    char actual[128];
+
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        return;
+    }
+    expr = xp3Compile(sctx, BAD_CAST "ex:f(), ex:args(1, 'a', 3), "
+                      "ex:nondet(4)", NULL);
+    xp3FreeStaticContext(sctx);
+    result = xp3Evaluate(expr, NULL, NULL);
+    describe(result, actual, sizeof(actual));
+    check(strcmp(actual, "string:zero string:double:1 | string:a | "
+                 "integer:3 integer:8") == 0,
+          "an expression calls its extension functions after the static "
+          "context is freed");
+    xp3FreeSequence(result);
+    xp3FreeExpr(expr);
+}
+
+/* The result of an implementation counts against the sequence limit */
+static void
+testExtensionLimits(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "limit test set up");
+        goto done;
+    }
+    checkEval(sctx, ctx, "count(ex:five())", "integer:5");
+    xp3SetMaxSequenceLength(ctx, 4);
+    checkEval(sctx, ctx, "count(ex:five())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Register, compile and evaluate with each allocation failing in turn,
+ * as testAllocationFailuresIn() does: the arguments are converted, the
+ * implementations allocate their results, the results are converted,
+ * and the errors they raise are allocated too.
+ */
+static const char *const xp3AllocExtension =
+    "(ex:args(@a, ('a', x[1]), xs:byte(3)), ex:double('integer'), "
+    "ex:string('node'), ex:det(2), ex:nondet(3), 2 => ex:f())";
+
+static const char *const xp3AllocExtensionExpected =
+    "string:double:1 | string:a string:one | byte:3 double:1 string:one "
+    "integer:4 integer:6 string:one";
+
+static xp3Sequence *
+extensionWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    xp3StaticContext *sctx;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *result = NULL;
+    xp3Expr *expr = NULL;
+    xp3Error *err = NULL;
+    int counter = 0;
+
+    snprintf(code, size, "setup");
+    sctx = extContext(root->children, &counter);
+    if ((sctx == NULL) || (ctx == NULL) || (xp3SetContextNode(ctx, root) < 0))
+        goto done;
+    expr = xp3Compile(sctx, BAD_CAST text, &err);
+    if (expr != NULL)
+        result = xp3Evaluate(expr, ctx, &err);
+    snprintf(code, size, "%s", (err != NULL) ?
+             (const char *) xp3ErrorCode(err) : "");
+
+done:
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    return(result);
+}
+
+static void
+testExtensionAllocationFailures(const char *text, const char *expected) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3Sequence *result;
+    char actual[1024];
+    char code[64];
+    int i;
+
+    if (doc == NULL)
+        return;
+    result = extensionWork(doc, text, code, sizeof(code));
+    describeOutcome(result, code, actual, sizeof(actual));
+    check(strcmp(actual, expected) == 0, text);
+    if (strcmp(actual, expected) != 0)
+        fprintf(stderr, "  actual: %s\n", actual);
+    xp3FreeSequence(result);
+
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: extension allocation-failure tests skipped: this "
+               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        xmlFreeDoc(doc);
+        return;
+    }
+    for (i = 0; i < 5000; i++) {
+        int injected;
+
+        xp3TestAllocFailAt(i);
+        result = extensionWork(doc, text, code, sizeof(code));
+        injected = xp3TestAllocFailed();
+        xp3TestAllocFailAt(-1);
+
+        describeOutcome(result, code, actual, sizeof(actual));
+        if (!injected) {
+            check(strcmp(actual, expected) == 0,
+                  "extension calls complete after allocation failures");
+            xp3FreeSequence(result);
+            break;
+        }
+        check(result == NULL, "a failed allocation fails the extension call");
+        check((strcmp(code, "NO_MEMORY") == 0) ||
+              (strcmp(code, "setup") == 0),
+              "a failed allocation in an extension call reports NO_MEMORY");
+        xp3FreeSequence(result);
+    }
+    check(i > 0 && i < 5000, "extension allocation failure points exercised");
+    xp3TestAllocRestore();
+    xmlFreeDoc(doc);
+}
+/*
  * Numbers longer than the buffer for parsing them with a decimal comma:
  * a decimal promoted to a double, a cast to xs:float and a double
  * literal. Their last digit decides the rounding.
@@ -3517,6 +4092,16 @@ main(void) {
     testAllocationFailures("error((), 'boom')", "error:FOER0000");
     testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
                              xp3AllocCompareExpected);
+    testExtensionFunctions();
+    testExtensionErrors();
+    testExtensionUserData();
+    testExtensionFolding();
+    testExtensionAfterFree();
+    testExtensionLimits();
+    testExtensionAllocationFailures(xp3AllocExtension,
+                                    xp3AllocExtensionExpected);
+    testExtensionAllocationFailures("ex:fail('user')", "error:oops");
+    testExtensionAllocationFailures("ex:integer('string')", "error:XPTY0004");
     testLocale();
 
     if (failures == 0)

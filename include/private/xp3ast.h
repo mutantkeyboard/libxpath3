@@ -76,8 +76,10 @@ typedef enum {
     /* Functions */
     XP3_AST_FUNCTION_CALL,      /* name, children: arguments. After
                                  * analysis, func: the built-in function,
-                                 * or NULL for a constructor function,
-                                 * whose target type is then in op */
+                                 * the expression's copy of an extension
+                                 * function, or NULL for a constructor
+                                 * function, whose target type is then
+                                 * in op */
     XP3_AST_ARG_PLACEHOLDER,    /* ? as an argument */
     XP3_AST_DYNAMIC_CALL,       /* postfix (args): children: arguments */
     XP3_AST_NAMED_FUNCTION_REF, /* name#arity: name, op: arity or

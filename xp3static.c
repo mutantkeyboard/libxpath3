@@ -13,8 +13,9 @@
  *   binding gets a slot number, so evaluation can keep variables in an
  *   array instead of looking them up by name.
  * - function calls and named function references, against the built-in
- *   functions of the language level (xp3func.c) and the constructor
- *   functions [err:XPST0017]
+ *   functions of the language level (xp3func.c), the constructor
+ *   functions and the extension functions of the static context
+ *   [err:XPST0017]
  * - type names in sequence types [err:XPST0051], in cast and castable
  *   [err:XQST0052, err:XPST0080] and in element and attribute tests
  *   [err:XPST0008]
@@ -58,6 +59,10 @@
 /* URIs copied into the tree that are remembered, see staticUri() */
 #define XP3_URI_CACHE 8
 
+/* Extension functions copied into the tree that are remembered, see
+ * staticExtension() */
+#define XP3_FUNC_CACHE 8
+
 /* Which default namespace an unprefixed name gets */
 typedef enum {
     XP3_DEFAULT_NONE = 0,       /* variables, attributes */
@@ -98,6 +103,11 @@ typedef struct {
         const xmlChar *copy;        /* its copy in the tree */
     } uris[XP3_URI_CACHE];
     int uriCount;
+    struct {
+        const xp3ExtFunction *from; /* in the static context */
+        const xp3ExtFunction *copy; /* in the tree */
+    } funcs[XP3_FUNC_CACHE];
+    int funcCount;
 } xp3Analysis;
 
 /* The built-in schema types that are not atomic, see xp3SchemaType */
@@ -669,6 +679,71 @@ rewriteConstructor(xp3Analysis *st, xp3AstNode *node, int type) {
     return(0);
 }
 
+/*
+ * The extension function of a name and arity in the static context,
+ * or NULL
+ */
+static const xp3ExtFunction *
+lookupExtension(const xp3Analysis *st, const xmlChar *uri,
+                const xmlChar *localName, int arity) {
+    const xp3ExtFunction *func;
+
+    for (func = xp3StaticContextFunctions(st->ctx, uri, localName);
+         func != NULL; func = func->next) {
+        if (func->info.arity == arity)
+            return(func);
+    }
+    return(NULL);
+}
+
+/*
+ * A copy in the tree of an extension function from the static context,
+ * so that node->func never points into the context (D13). Each entry
+ * is copied once per expression, as long as the cache has room, as
+ * URIs are (staticUri()).
+ */
+static const xp3FuncInfo *
+staticExtension(xp3Analysis *st, const xp3ExtFunction *from) {
+    xp3ExtFunction *copy;
+    xp3FuncType *params = NULL;
+    const char *signature = from->info.signature;
+    int i;
+
+    for (i = 0; i < st->funcCount; i++) {
+        if (st->funcs[i].from == from)
+            return(&st->funcs[i].copy->info);
+    }
+    copy = xp3AstAlloc(st->ast, sizeof(*copy));
+    if (copy == NULL)
+        return(NULL);
+    *copy = *from;
+    copy->next = NULL;
+    if (from->info.arity > 0) {
+        params = xp3AstAlloc(st->ast, (size_t) from->info.arity *
+                                      sizeof(xp3FuncType));
+        if (params == NULL)
+            return(NULL);
+        memcpy(params, from->info.params,
+               (size_t) from->info.arity * sizeof(xp3FuncType));
+    }
+    copy->info.params = params;
+    copy->uri = xp3AstStrndup(st->ast, from->uri,
+                              strlen((const char *) from->uri));
+    copy->info.name = (const char *) xp3AstStrndup(st->ast,
+        BAD_CAST from->info.name, strlen(from->info.name));
+    copy->info.signature = (const char *) xp3AstStrndup(st->ast,
+        BAD_CAST signature, strlen(signature));
+    if ((copy->uri == NULL) || (copy->info.name == NULL) ||
+        (copy->info.signature == NULL))
+        return(NULL);
+    if (st->funcCount < XP3_FUNC_CACHE) {
+        st->funcs[st->funcCount].from = from;
+        st->funcs[st->funcCount].copy = copy;
+        st->funcCount++;
+    }
+    return(&copy->info);
+}
+
 /* Whether a call has an argument placeholder, making it a partial
  * function application. */
 static int
@@ -684,10 +759,12 @@ hasPlaceholder(const xp3AstNode *node) {
 
 /*
  * Resolve the function of a FUNCTION_CALL, NAMED_FUNCTION_REF or
- * ARROW with a name [err:XPST0017].
+ * ARROW with a name [err:XPST0017]: a built-in function, then an
+ * extension function, which exists at every level.
  */
 static int
 resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
+    const xp3ExtFunction *ext;
     const xp3FuncInfo *info;
     char name[XP3_NAME_BUF];
     int type;
@@ -699,6 +776,11 @@ resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
     if (info != NULL) {
         node->func = info;
         return(0);
+    }
+    ext = lookupExtension(st, node->uri, node->text, arity);
+    if (ext != NULL) {
+        node->func = staticExtension(st, ext);
+        return((node->func == NULL) ? staticNoMemory(st) : 0);
     }
 
     type = schemaType(st, node);
@@ -716,7 +798,8 @@ resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
     if (type >= 0)
         return(staticError(st, XP3_ERR_XPST0017, node,
                            "%s has no constructor function", name));
-    if (xp3FuncNameExists(node->uri, node->text, st->level))
+    if (xp3FuncNameExists(node->uri, node->text, st->level) ||
+        (xp3StaticContextFunctions(st->ctx, node->uri, node->text) != NULL))
         return(staticError(st, XP3_ERR_XPST0017, node,
                            "function %s does not take %d argument%s",
                            name, arity, (arity == 1) ? "" : "s"));
@@ -926,8 +1009,9 @@ isFoldable(xp3AstKind kind) {
 /*
  * Whether a call can be folded once its arguments are: the function
  * is implemented, and is neither focus-dependent, context-dependent,
- * nondeterministic nor higher-order (F&O 3.1, 1.7.4). An arrow to a
- * function expression has no func.
+ * nondeterministic nor higher-order (F&O 3.1, 1.7.4). An extension
+ * function is nondeterministic unless registered as deterministic. An
+ * arrow to a function expression has no func.
  */
 static int
 foldableCall(const xp3AstNode *node) {
@@ -935,7 +1019,8 @@ foldableCall(const xp3AstNode *node) {
            !(node->func->flags & (XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT |
                                   XP3_FUNC_NONDETERMINISTIC |
                                   XP3_FUNC_HIGHER_ORDER)) &&
-           (xp3FuncImplementation(node->func) != NULL));
+           ((node->func->flags & XP3_FUNC_EXTENSION) ||
+            (xp3FuncImplementation(node->func) != NULL)));
 }
 
 /* Turn a node into a CONSTANT node holding a constant value */
@@ -1337,7 +1422,8 @@ readsPosition(const xp3AstNode *expr) {
     if (((expr->kind == XP3_AST_FUNCTION_CALL) ||
          (expr->kind == XP3_AST_ARROW) ||
          (expr->kind == XP3_AST_NAMED_FUNCTION_REF)) &&
-        (expr->func != NULL) && (expr->func->ns == XP3_FUNC_NS_FN) &&
+        (expr->func != NULL) && !(expr->func->flags & XP3_FUNC_EXTENSION) &&
+        (expr->func->ns == XP3_FUNC_NS_FN) &&
         ((strcmp(expr->func->name, "position") == 0) ||
          (strcmp(expr->func->name, "last") == 0) ||
          (strcmp(expr->func->name, "function-lookup") == 0)))

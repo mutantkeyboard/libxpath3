@@ -1055,6 +1055,218 @@ done:
     xmlFree(test);
 }
 
+/*
+ * Extension functions
+ */
+
+#define EX_FN "Q{urn:example}"
+
+/* Registration only; compiling never calls a nondeterministic function */
+static xp3Sequence *
+extTwice(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    int64_t value;
+
+    (void) call;
+    (void) count;
+    (void) userData;
+    if (xp3SequenceInteger(args[0], 0, &value) != 0)
+        return(NULL);
+    value *= 2;
+    return(xp3NewIntegerSequence(&value, 1));
+}
+
+/* An error, so a fold of it is dropped */
+static xp3Sequence *
+extFail(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    (void) args;
+    (void) count;
+    (void) userData;
+    xp3FunctionError(call, NULL, BAD_CAST "FORG0001", NULL);
+    return(NULL);
+}
+
+/* The optimizing context, with ex:det, ex:nondet, ex:fail and ex:f#0
+ * and #1 registered */
+static xp3StaticContext *
+extensionContext(xp3LanguageLevel level) {
+    xp3StaticContext *ctx = xp3NewStaticContext();
+
+    if ((ctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(ctx, level) < 0) ||
+        (xp3DeclareNamespace(ctx, BAD_CAST "ex",
+                             BAD_CAST "urn:example") < 0) ||
+        (xp3DeclareVariable(ctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:det($a as xs:integer) as "
+                             "xs:integer", XP3_FUNCTION_DETERMINISTIC,
+                             extTwice, NULL, NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:nondet($a as xs:integer) as "
+                             "xs:integer", 0, extTwice, NULL, NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:fail($a)",
+                             XP3_FUNCTION_DETERMINISTIC, extFail, NULL,
+                             NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:f()", 0, extTwice, NULL,
+                             NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:f($a)", 0, extTwice, NULL,
+                             NULL) < 0)) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    return(ctx);
+}
+
+static const struct {
+    const char *expr;
+    const char *tree;
+} extensionCases[] = {
+    /* A deterministic call with constant arguments folds like a
+     * built-in one; a nondeterministic one never does */
+    { "ex:det(1 + 1)", "(constant integer:4)" },
+    { "ex:det(2) + 1", "(constant integer:5)" },
+    { "ex:nondet(2)", "(call " EX_FN "nondet (constant integer:2))" },
+    { "ex:det(ex:nondet(2))",
+      "(call " EX_FN "det (call " EX_FN "nondet (constant integer:2)))" },
+    { "ex:det($v)", "(call " EX_FN "det (var v))" },
+    /* A fold that raises an error is dropped, as for built-ins */
+    { "ex:fail(1)", "(call " EX_FN "fail (constant integer:1))" },
+    /* Arities, arrows and references */
+    { "ex:f(), ex:f(1)",
+      "(sequence (call " EX_FN "f) (call " EX_FN "f (constant integer:1)))" },
+    { "2 => ex:det()", "(constant integer:4)" },
+    { "ex:f#1", "(function-ref " EX_FN "f#1)" }
+};
+
+static const struct {
+    const char *expr;
+    const char *message;
+} extensionMessages[] = {
+    { "ex:f(1, 2)", "function ex:f does not take 2 arguments" },
+    { "ex:det#0", "function ex:det does not take 0 arguments" },
+    { "ex:g()", "unknown function ex:g#0" },
+    { "ex:f#99999999999999999999",
+      "function ex:f does not take that many arguments" }
+};
+
+static void
+testExtensionFunctions(void) {
+    xp3StaticContext *ctx = extensionContext(XP3_XPATH_31);
+    const xp3ExtFunction *registered;
+    xp3Error *err = NULL;
+    xp3Expr *compiled;
+    size_t i;
+
+    if (ctx == NULL) {
+        check(0, "extension context created");
+        return;
+    }
+    for (i = 0; i < sizeof(extensionCases) / sizeof(extensionCases[0]); i++) {
+        xmlChar *tree = compileToString(ctx, extensionCases[i].expr, &err);
+
+        if ((tree == NULL) ||
+            !xmlStrEqual(tree, BAD_CAST extensionCases[i].tree)) {
+            fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
+                    extensionCases[i].expr, extensionCases[i].tree,
+                    (tree != NULL) ? (const char *) tree :
+                    (const char *) xp3ErrorCode(err));
+            failures++;
+        }
+        xmlFree(tree);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+
+    /* The expression holds a copy of the entry, once per function */
+    registered = xp3StaticContextFunctions(ctx, BAD_CAST "urn:example",
+                                           BAD_CAST "nondet");
+    compiled = xp3Compile(ctx, BAD_CAST "ex:nondet(1), ex:nondet(2)", NULL);
+    if ((compiled == NULL) || (registered == NULL)) {
+        check(0, "extension calls compiled");
+    } else {
+        const xp3FuncInfo *first = compiled->ast->root->first->func;
+        const xp3FuncInfo *second = compiled->ast->root->last->func;
+
+        check((first != NULL) && (first != &registered->info) &&
+              (first->flags & XP3_FUNC_EXTENSION) &&
+              (((const xp3ExtFunction *) first)->impl == extTwice) &&
+              (((const xp3ExtFunction *) first)->next == NULL),
+              "a call refers to the expression's copy of the function");
+        check(first == second, "each function is copied once");
+    }
+    xp3FreeExpr(compiled);
+
+    /* XPST0017 knows the arities of extension names */
+    for (i = 0; i < sizeof(extensionMessages) / sizeof(extensionMessages[0]);
+         i++) {
+        compiled = xp3Compile(ctx, BAD_CAST extensionMessages[i].expr, &err);
+        check((compiled == NULL) &&
+              xmlStrEqual(xp3ErrorCode(err), BAD_CAST "XPST0017") &&
+              xmlStrEqual(xp3ErrorMessage(err),
+                          BAD_CAST extensionMessages[i].message),
+              extensionMessages[i].message);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+    xp3FreeStaticContext(ctx);
+
+    /* Extension functions exist at every level */
+    ctx = extensionContext(XP3_XPATH_20);
+    compiled = xp3Compile(ctx, BAD_CAST "ex:nondet(1), ex:f()", NULL);
+    check(compiled != NULL, "extension functions exist in XPath 2.0");
+    xp3FreeExpr(compiled);
+    xp3FreeStaticContext(ctx);
+}
+
+/* Compiling calls of extension functions, with each allocation failing
+ * in turn: copying the entries, and folding */
+static void
+testExtensionAllocationFailures(void) {
+    xp3StaticContext *ctx = extensionContext(XP3_XPATH_31);
+    const char *text = "ex:nondet($v), ex:det(3), ex:f(), ex:nondet(1)";
+    const char *expected = "(sequence (call " EX_FN "nondet (var v)) "
+                           "(constant integer:6) (call " EX_FN "f) "
+                           "(call " EX_FN "nondet (constant integer:1)))";
+    int i;
+
+    if (ctx == NULL) {
+        check(0, "extension context created");
+        return;
+    }
+    if (!xp3TestAllocInstall()) {
+        printf("teststatic: extension allocation-failure tests skipped\n");
+        xp3TestAllocRestore();
+        xp3FreeStaticContext(ctx);
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        xp3Error *err = NULL;
+        xp3Expr *compiled;
+        xmlChar *tree;
+
+        xp3TestAllocFailAt(i);
+        compiled = xp3Compile(ctx, BAD_CAST text, &err);
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            tree = (compiled != NULL) ?
+                   xp3AstToString(compiled->ast->root) : NULL;
+            check((tree != NULL) && xmlStrEqual(tree, BAD_CAST expected),
+                  "extension calls compiled after allocation failures");
+            xmlFree(tree);
+            xp3FreeExpr(compiled);
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        check((compiled == NULL) && (err != NULL) &&
+              (strcmp((const char *) xp3ErrorCode(err), "NO_MEMORY") == 0),
+              "a failed allocation compiling extension calls is NO_MEMORY");
+        xp3ErrorFree(err);
+        xp3FreeExpr(compiled);
+    }
+    check((i > 0) && (i < 1000), "extension compile failure points");
+    xp3TestAllocRestore();
+    xp3FreeStaticContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -1070,6 +1282,8 @@ main(void) {
     testFoldSizes();
     testFoldStringSize();
     testAllocationFailures();
+    testExtensionFunctions();
+    testExtensionAllocationFailures();
 
     if (failures == 0)
         printf("teststatic: OK\n");

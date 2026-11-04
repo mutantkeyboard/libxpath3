@@ -287,6 +287,13 @@ XP3PUBFUN int
 						 xp3FunctionImpl impl,
 						 void *userData,
 						 xp3Error **error);
+XP3PUBFUN void
+		    xp3FunctionError		(xp3FunctionCall *call,
+						 const xmlChar *uri,
+						 const xmlChar *localName,
+						 const xmlChar *message);
+XP3PUBFUN void *
+		    xp3FunctionUserData		(xp3FunctionCall *call);
 
 /*
  * Compiling
@@ -316,6 +323,9 @@ XP3PUBFUN int
 XP3PUBFUN int
 		    xp3SetMaxSequenceLength	(xp3DynamicContext *ctx,
 						 size_t max);
+XP3PUBFUN int
+		    xp3SetDynamicContextUserData(xp3DynamicContext *ctx,
+						 void *userData);
 
 /*
  * Evaluating

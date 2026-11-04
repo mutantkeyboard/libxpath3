@@ -44,6 +44,7 @@ struct _xp3DynamicContext {
     size_t maxSequenceLength;
     uint64_t maxOperations;     /* internal, for the fuzzers: steps an
                                  * evaluation may take, 0 for no limit */
+    void *userData;             /* for extension functions, never freed */
 };
 
 xp3ErrCode
