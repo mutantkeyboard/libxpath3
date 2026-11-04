@@ -145,9 +145,10 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_MIN_2] = xp3FnMin,
     [XP3_FN_MAX_1] = xp3FnMax,
     [XP3_FN_MAX_2] = xp3FnMax,
-    /* The focus (15) */
+    /* Context functions (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
-    [XP3_FN_LAST_0] = xp3FnLast
+    [XP3_FN_LAST_0] = xp3FnLast,
+    [XP3_FN_DEFAULT_COLLATION_0] = xp3FnDefaultCollation
 };
 
 /* Indexed by xp3FuncNamespace */

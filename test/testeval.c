@@ -1394,6 +1394,12 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1 to 5)[position() > 3], *[last() - 1]",
       "integer:4 integer:5 e:x#x2" },
     { "x/position(), x/last()", "integer:1 integer:2 integer:2 integer:2" },
+    /* The default collation (15.7) is the one calls without a
+     * collation argument use */
+    { "default-collation(), compare('a', 'b', default-collation()), "
+      "compare('a', 'B', default-collation())",
+      "string:http://www.w3.org/2005/xpath-functions/collation/codepoint "
+      "integer:-1 integer:1" },
 
     /* String concatenation (XPath 3.1, 3.6) */
     { "'a' || 'b', () || 'b', 1 || 2.5, x[1] || x[2], 1e0 || ''",
@@ -3269,7 +3275,7 @@ static const char *const xp3AllocStrings =
     "compare('A', 'a', " HTML_ASCII "), "
     "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
     "encode-for-uri('a b\xc3\xa9'), iri-to-uri('a b'), "
-    "escape-html-uri('\xc3\xa9x'))";
+    "escape-html-uri('\xc3\xa9x'), default-collation())";
 
 static const char *const xp3AllocStringsExpected =
     "string:a1one string:1-2-3 string:onebcdefghi string: string:23 "
@@ -3278,7 +3284,8 @@ static const char *const xp3AllocStringsExpected =
     "integer:97 integer:98 boolean:true string:a string:b string:a "
     "string:c boolean:true boolean:true boolean:true boolean:true "
     "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
-    "string:%C3%A9x";
+    "string:%C3%A9x "
+    "string:http://www.w3.org/2005/xpath-functions/collation/codepoint";
 
 /* The functions that compare values in sequences, on xp3DeepDoc */
 static const char *const xp3AllocCompare =

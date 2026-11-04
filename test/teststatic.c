@@ -647,6 +647,12 @@ static const struct {
       "(call Q{http://www.w3.org/2005/xpath-functions}compare "
       "(constant string:a) (constant string:b) (constant "
       "string:http://www.w3.org/2005/xpath-functions/collation/codepoint))" },
+    { "default-collation()",
+      "(call Q{http://www.w3.org/2005/xpath-functions}default-collation)" },
+    { "compare('a', 'b', default-collation())",
+      "(call Q{http://www.w3.org/2005/xpath-functions}compare "
+      "(constant string:a) (constant string:b) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}default-collation))" },
     { "distinct-values((1, 1))",
       "(call Q{http://www.w3.org/2005/xpath-functions}distinct-values "
       "(constant integer:1 integer:1))" },

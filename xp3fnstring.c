@@ -57,6 +57,11 @@
 /* Searches for strings up to this long keep their table on the stack */
 #define XP3_SEARCH_STACK 64
 
+/* The default collation of the static context, which has no setter
+ * yet: calls without a collation argument resolve it, and
+ * fn:default-collation() returns it, so that a setter changes both */
+#define XP3_DEFAULT_COLLATION XP3_COLLATION_URI_CODEPOINT
+
 /*
  * Helpers
  */
@@ -417,8 +422,8 @@ ucaRejection(const xmlChar *rest) {
 
 /**
  * Resolve the collation of a call (F&O 3.1, 5.3.5): the collation
- * argument, or the default collation, the Unicode codepoint collation,
- * if there is none. A relative URI would be resolved against the
+ * argument, or the default collation (XP3_DEFAULT_COLLATION) if there
+ * is none. A relative URI would be resolved against the
  * static base URI, which is absent, so it raises FOCH0002 as any URI
  * that isn't supported does.
  *
@@ -436,9 +441,7 @@ xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
     const xmlChar *name;
 
     *collation = XP3_COLLATION_CODEPOINT;
-    if (uri == NULL)
-        return(0);
-    name = argString(uri);
+    name = (uri != NULL) ? argString(uri) : BAD_CAST XP3_DEFAULT_COLLATION;
     if (xmlStrEqual(name, BAD_CAST XP3_COLLATION_URI_CODEPOINT))
         return(0);
     if (xmlStrEqual(name, BAD_CAST XP3_COLLATION_URI_HTML_ASCII)) {
@@ -483,6 +486,23 @@ callCollation(xp3FuncCall *call, xp3Value **args, int count, int arity,
               xp3Collation *collation) {
     return(xp3FuncCollation(call, (count > arity) ? args[arity] : NULL,
                             collation));
+}
+
+/**
+ * fn:default-collation#0 (F&O 3.1, 15.7): the default collation of the
+ * static context, the one calls without a collation argument use.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnDefaultCollation(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) args;
+    (void) count;
+    return(newString(call, BAD_CAST XP3_DEFAULT_COLLATION,
+                     sizeof(XP3_DEFAULT_COLLATION) - 1));
 }
 
 /*

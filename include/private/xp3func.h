@@ -291,6 +291,9 @@ xp3FnMax(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnstring.c */
 xp3Value *
+xp3FnDefaultCollation(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
 xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
