@@ -1253,6 +1253,18 @@ static const xp3EvalCase xp3Cases[] = {
       "count(distinct-values((1 to 100000) ! "
       "(. + 1000000000000000000000000000000000000000)))",
       "integer:100000 integer:100000 integer:100000" },
+    /* The hash seed differs between calls, the result doesn't: the
+     * first of each value, in input order */
+    { "let $s := (1 to 5000) ! ('v' || .), "
+      "$u := (1 to 5000) ! ('V' || .), "
+      "$n := (1 to 5000) ! (. + 0.5) return "
+      "(deep-equal(distinct-values(($s, reverse($s), $u, $s)), ($s, $u)), "
+      "deep-equal(distinct-values(($s, $u), " HTML_ASCII "), $s), "
+      "deep-equal(distinct-values(($n, $n ! xs:double(.), "
+      "(1 to 5000) ! xs:float(.), 1 to 5000)), "
+      "($n, (1 to 5000) ! xs:float(.))), "
+      "deep-equal(distinct-values(($s, $s)), distinct-values(($s, $s))))",
+      "boolean:true boolean:true boolean:true boolean:true" },
     { "distinct-values(1, 'x')", "error:FOCH0002" },
     { "index-of((10, 20, 30, 30, 20, 10), 20), index-of((10, 20), 35), "
       "index-of(('a', 'sport', 'and', 'a', 'pastime'), 'a')",
