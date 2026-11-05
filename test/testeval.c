@@ -2283,6 +2283,73 @@ done:
     xmlFreeDoc(doc);
 }
 
+/* An evaluation with $n bound to an integer */
+static void
+checkLoop(const xp3StaticContext *sctx, xp3DynamicContext *ctx, int64_t n,
+          const char *expected) {
+    xp3Sequence *value = xp3NewIntegerSequence(&n, 1);
+
+    check((value != NULL) &&
+          (xp3BindVariable(ctx, NULL, BAD_CAST "n", value) == 0),
+          "$n bound");
+    xp3FreeSequence(value);
+    checkEval(sctx, ctx, "count(for $i in 1 to $n, $j in 1 to $n return $i)",
+              expected);
+}
+
+/*
+ * The limit on steps at run time. With $n = 100 the loop below takes
+ * 10,305 steps, so 15,000 fit one evaluation but not two.
+ */
+static void
+testStepLimit(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *expr = NULL;
+    xp3Error *err = NULL;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "n") < 0)) {
+        check(0, "step limit test set up");
+        goto done;
+    }
+    check(xp3SetMaxSteps(NULL, 5) == -1, "no context");
+
+    /* No limit by default, and with 0 */
+    checkLoop(sctx, ctx, 200, "integer:40000");
+    check(xp3SetMaxSteps(ctx, 15000) == 0, "limit set");
+    checkLoop(sctx, ctx, 200, "error:LIMIT");
+    checkLoop(sctx, ctx, 1000000, "error:LIMIT");
+    check(xp3SetMaxSteps(ctx, 0) == 0, "limit removed");
+    checkLoop(sctx, ctx, 200, "integer:40000");
+
+    /* The count starts again with each evaluation */
+    xp3SetMaxSteps(ctx, 15000);
+    checkLoop(sctx, ctx, 100, "integer:10000");
+    expr = xp3Compile(sctx, BAD_CAST "count(for $i in 1 to $n, $j in 1 to "
+                      "$n return $i) eq 10000", NULL);
+    for (i = 0; i < 5; i++)
+        check(xp3EvaluateBoolean(expr, ctx, NULL) == 1,
+              "each evaluation has the whole limit");
+
+    /* The message names the limit */
+    checkLoop(sctx, ctx, 200, "error:LIMIT");
+    xp3FreeExpr(expr);
+    expr = xp3Compile(sctx, BAD_CAST "count(for $i in 1 to $n, $j in 1 to "
+                      "$n return $i)", NULL);
+    check((expr != NULL) && (xp3Evaluate(expr, ctx, &err) == NULL) &&
+          xmlStrEqual(xp3ErrorMessage(err), BAD_CAST
+                      "the evaluation needs more than 15000 steps"),
+          "the message of the step limit");
+    xp3ErrorFree(err);
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
 /*
  * The string functions and comparisons count a step per 256 bytes
  * they read or make, so a limit on operations bounds them: a string of
@@ -2312,9 +2379,9 @@ testStringSteps(void) {
         goto done;
     }
 
-    ctx->maxOperations = 100000;
+    xp3SetMaxSteps(ctx, 100000);
     checkEval(sctx, ctx, "string-length($s)", "integer:4194304");
-    ctx->maxOperations = 10000;
+    xp3SetMaxSteps(ctx, 10000);
     checkEval(sctx, ctx, "string-length('abc')", "integer:3");
     checkEval(sctx, ctx, "string-length($s)", "error:LIMIT");
     checkEval(sctx, ctx, "normalize-space($s)", "error:LIMIT");
@@ -3784,9 +3851,52 @@ extKeep(xp3FunctionCall *call, xp3Sequence **args, int count,
     return(xp3NewIntegerSequence(NULL, 0));
 }
 
-/* The functions most tests use, with the prefix ex */
+/* The integers 1 to the argument, made in C */
+static xp3Sequence *
+extRange(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    xp3Sequence *result;
+    int64_t *values;
+    int64_t n;
+    int64_t i;
+
+    (void) call;
+    (void) count;
+    (void) userData;
+    if ((xp3SequenceInteger(args[0], 0, &n) != 0) || (n < 0) ||
+        (n > 100000))
+        return(NULL);
+    values = xmlMalloc(((size_t) n + 1) * sizeof(*values));
+    if (values == NULL)
+        return(NULL);
+    for (i = 0; i < n; i++)
+        values[i] = i + 1;
+    result = xp3NewIntegerSequence(values, (size_t) n);
+    xmlFree(values);
+    return(result);
+}
+
+/* Whether the signature names one of the local names, a NULL-terminated
+ * list; NULL is all of them */
+static int
+extSelected(const char *signature, const char *const *names) {
+    size_t len;
+
+    if (names == NULL)
+        return(1);
+    for (; *names != NULL; names++) {
+        len = strlen(*names);
+        if ((strncmp(signature + 3, *names, len) == 0) &&
+            (signature[3 + len] == '('))
+            return(1);
+    }
+    return(0);
+}
+
+/* The functions most tests use, with the prefix ex: all of them, or
+ * only the ones in names */
 static xp3StaticContext *
-extContext(xmlNodePtr node, int *counter) {
+extContext(xmlNodePtr node, int *counter, const char *const *names) {
     static const struct {
         const char *signature;
         int flags;
@@ -3823,7 +3933,10 @@ extContext(xmlNodePtr node, int *counter) {
         { "ex:untyped-integer($s as xs:string) as xs:integer", 0, extAtomic,
           3, "untypedAtomic" },
         { "ex:same($a)", 0, extSame, 0, NULL },
-        { "ex:keep($a) as empty-sequence()", 0, extKeep, 0, NULL }
+        { "ex:keep($a) as empty-sequence()", 0, extKeep, 0, NULL },
+        { "ex:range($n as xs:integer)", 0, extRange, 0, NULL },
+        { "ex:range-integers($n as xs:integer) as xs:integer*", 0, extRange,
+          0, NULL }
     };
     xp3StaticContext *ctx = xp3NewStaticContext();
     size_t i;
@@ -3839,6 +3952,8 @@ extContext(xmlNodePtr node, int *counter) {
                      (functions[i].data == 3) ? (void *) functions[i].label :
                      NULL;
 
+        if (!extSelected(functions[i].signature, names))
+            continue;
         if (xp3RegisterFunction(ctx, BAD_CAST functions[i].signature,
                                 functions[i].flags, functions[i].impl, data,
                                 NULL) < 0) {
@@ -3933,7 +4048,7 @@ testExtensionFunctions(void) {
         check(0, "extension function test set up");
         goto done;
     }
-    sctx = extContext(xmlDocGetRootElement(doc)->children, &counter);
+    sctx = extContext(xmlDocGetRootElement(doc)->children, &counter, NULL);
     if (sctx == NULL) {
         check(0, "extension functions registered");
         goto done;
@@ -3973,7 +4088,7 @@ checkExtensionError(const xp3StaticContext *sctx, const char *expr,
 
 static void
 testExtensionErrors(void) {
-    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
 
     if (sctx == NULL) {
         check(0, "extension functions registered");
@@ -3995,7 +4110,7 @@ testExtensionErrors(void) {
 
 static void
 testExtensionUserData(void) {
-    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     char handler[] = "handler";
 
@@ -4035,7 +4150,7 @@ testExtensionFolding(void) {
     int64_t two = 2;
     int i;
 
-    sctx = extContext(NULL, &counter);
+    sctx = extContext(NULL, &counter, NULL);
     value = xp3NewIntegerSequence(&two, 1);
     if ((sctx == NULL) || (ctx == NULL) || (value == NULL) ||
         (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
@@ -4081,7 +4196,7 @@ testExtensionFolding(void) {
 static void
 testExtensionAfterFree(void) {
     int counter = 0;
-    xp3StaticContext *sctx = extContext(NULL, &counter);
+    xp3StaticContext *sctx = extContext(NULL, &counter, NULL);
     xp3Expr *expr;
     xp3Sequence *result;
     char actual[128];
@@ -4106,7 +4221,7 @@ testExtensionAfterFree(void) {
 /* The result of an implementation counts against the sequence limit */
 static void
 testExtensionLimits(void) {
-    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
     xp3DynamicContext *ctx = xp3NewDynamicContext();
 
     if ((sctx == NULL) || (ctx == NULL)) {
@@ -4114,6 +4229,15 @@ testExtensionLimits(void) {
         goto done;
     }
     checkEval(sctx, ctx, "count(ex:five())", "integer:5");
+
+    /* Steps count the conversion of the result, an item at a time, not
+     * the C code that made it */
+    xp3SetMaxSteps(ctx, 1000);
+    checkEval(sctx, ctx, "count(ex:range(5000))", "integer:5000");
+    checkEval(sctx, ctx, "count(ex:range-integers(500))", "integer:500");
+    checkEval(sctx, ctx, "count(ex:range-integers(5000))", "error:LIMIT");
+    xp3SetMaxSteps(ctx, 0);
+
     xp3SetMaxSequenceLength(ctx, 4);
     checkEval(sctx, ctx, "count(ex:five())", "error:LIMIT");
 
@@ -4128,7 +4252,7 @@ done:
  */
 static void
 testExtensionKeep(void) {
-    xp3StaticContext *sctx = extContext(NULL, NULL);
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     xp3Sequence *bound = NULL;
     xp3Sequence *result;
@@ -4258,8 +4382,19 @@ static const char *const xp3AllocExtensionExpected =
     "integer:4 integer:6 string:one decimal:2.5 integer:7 integer:1 "
     "string:a";
 
+static const char *const xp3AllocExtensionNames[] = {
+    "args", "double", "string", "det", "nondet", "f", "decimal",
+    "untyped-integer", "same", NULL
+};
+
+static const char *const xp3FailNames[] = { "fail", NULL };
+static const char *const xp3IntegerNames[] = { "integer", NULL };
+
+/* The work with only the functions in names registered, so the loop
+ * spends its time on the calls */
 static xp3Sequence *
-extensionWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
+extensionWork(xmlDocPtr doc, const char *const *names, const char *text,
+              char *code, size_t size) {
     xmlNodePtr root = xmlDocGetRootElement(doc);
     xp3StaticContext *sctx;
     xp3DynamicContext *ctx = xp3NewDynamicContext();
@@ -4269,7 +4404,7 @@ extensionWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     int counter = 0;
 
     snprintf(code, size, "setup");
-    sctx = extContext(root->children, &counter);
+    sctx = extContext(root->children, &counter, names);
     if ((sctx == NULL) || (ctx == NULL) || (xp3SetContextNode(ctx, root) < 0))
         goto done;
     expr = xp3Compile(sctx, BAD_CAST text, &err);
@@ -4287,7 +4422,8 @@ done:
 }
 
 static void
-testExtensionAllocationFailures(const char *text, const char *expected) {
+testExtensionAllocationFailures(const char *const *names, const char *text,
+                                const char *expected) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3Sequence *result;
     char actual[1024];
@@ -4296,7 +4432,7 @@ testExtensionAllocationFailures(const char *text, const char *expected) {
 
     if (doc == NULL)
         return;
-    result = extensionWork(doc, text, code, sizeof(code));
+    result = extensionWork(doc, names, text, code, sizeof(code));
     describeOutcome(result, code, actual, sizeof(actual));
     check(strcmp(actual, expected) == 0, text);
     if (strcmp(actual, expected) != 0)
@@ -4314,7 +4450,7 @@ testExtensionAllocationFailures(const char *text, const char *expected) {
         int injected;
 
         xp3TestAllocFailAt(i);
-        result = extensionWork(doc, text, code, sizeof(code));
+        result = extensionWork(doc, names, text, code, sizeof(code));
         injected = xp3TestAllocFailed();
         xp3TestAllocFailAt(-1);
 
@@ -4399,6 +4535,7 @@ main(void) {
     testInvalidUtf8Matching();
     testVariables();
     testLimits();
+    testStepLimit();
     testStringSteps();
     testBoolean();
     testErrorPositions();
@@ -4428,10 +4565,12 @@ main(void) {
     testExtensionLimits();
     testExtensionKeep();
     testSequenceRefAllocationFailures();
-    testExtensionAllocationFailures(xp3AllocExtension,
+    testExtensionAllocationFailures(xp3AllocExtensionNames, xp3AllocExtension,
                                     xp3AllocExtensionExpected);
-    testExtensionAllocationFailures("ex:fail('user')", "error:oops");
-    testExtensionAllocationFailures("ex:integer('string')", "error:XPTY0004");
+    testExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
+                                    "error:oops");
+    testExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
+                                    "error:XPTY0004");
     testLocale();
 
     if (failures == 0)

@@ -210,6 +210,31 @@ xp3SetMaxSequenceLength(xp3DynamicContext *ctx, size_t max) {
 }
 
 /**
+ * Limit the steps of work one evaluation may take: each expression
+ * evaluated, each node an axis visits, each pair of values a general
+ * comparison tries, each item of an expanded range, and each 256 bytes
+ * of strings that comparisons and functions read or make. Past the
+ * limit, the evaluation fails with the error LIMIT. The count starts
+ * again with each evaluation. The default is 0, no limit, as for
+ * libxml2's XPath operation limit, so an expression takes as long as
+ * its input makes it; expressions from untrusted sources need a limit.
+ * Parts of an expression that compiling evaluated already take no
+ * steps, and the C code of an extension function isn't counted, only
+ * the conversion of its arguments and result.
+ *
+ * @param ctx  the context
+ * @param max  the most steps, or 0 for no limit
+ * @returns 0, or -1 if ctx is NULL
+ */
+int
+xp3SetMaxSteps(xp3DynamicContext *ctx, uint64_t max) {
+    if (ctx == NULL)
+        return(-1);
+    ctx->maxOperations = max;
+    return(0);
+}
+
+/**
  * Set per-evaluation data for extension functions, which they read
  * with xp3FunctionUserData(): for example the handler object of a
  * binding, when an expression compiled once is evaluated with
@@ -314,7 +339,7 @@ evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
     ev->operations += steps;
     if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
         evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
-                  "%lu steps", (unsigned long) ev->maxOperations);
+                  "%llu steps", (unsigned long long) ev->maxOperations);
         return(-1);
     }
     return(0);

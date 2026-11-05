@@ -325,6 +325,9 @@ XP3PUBFUN int
 		    xp3SetMaxSequenceLength	(xp3DynamicContext *ctx,
 						 size_t max);
 XP3PUBFUN int
+		    xp3SetMaxSteps		(xp3DynamicContext *ctx,
+						 uint64_t max);
+XP3PUBFUN int
 		    xp3SetDynamicContextUserData(xp3DynamicContext *ctx,
 						 void *userData);
 
