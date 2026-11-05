@@ -376,6 +376,19 @@ xp3FnIriToUri(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnEscapeHtmlUri(xp3FuncCall *call, xp3Value **args, int count);
 
+/* Implementations in xp3fnnode.c */
+xp3Value *
+xp3FnNodeName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLocalName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNamespaceUri(xp3FuncCall *call, xp3Value **args, int count);
+
 /* Implementations in xp3fnnumeric.c */
 xp3Value *
 xp3FnAbs(xp3FuncCall *call, xp3Value **args, int count);

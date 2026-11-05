@@ -1794,6 +1794,10 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "number()", "error:XPDY0002");
     checkEval(NULL, NULL, "string-length()", "error:XPDY0002");
     checkEval(NULL, NULL, "normalize-space()", "error:XPDY0002");
+    checkEval(NULL, NULL, "name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "local-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "namespace-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "node-name()", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -1912,6 +1916,102 @@ testDeepEqual(void) {
                       xp3DeepCases[i].expected);
         }
     }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The names of nodes (F&O 3.1, 2.1 and 13.1 to 13.3): elements with a
+ * prefix, in a default namespace and in none, attributes with and
+ * without a prefix, and the nodes without a name. The second element
+ * has the namespace of the first under another prefix.
+ */
+static const char xp3NameDoc[] =
+    "<r xmlns:p='urn:p' p:a='1' b='2'>"
+    "<p:e/><q:e xmlns:q='urn:p'/><e/>"
+    "<d xmlns='urn:d'><f/></d>"
+    "text<!--c--><?t v?>"
+    "</r>";
+
+static const xp3EvalCase xp3NameCases[] = {
+    { "name(*[1]), local-name(*[1]), namespace-uri(*[1]), node-name(*[1])",
+      "string:p:e string:e anyURI:urn:p QName:p:e" },
+    { "node-name(*[1]) eq node-name(*[2]), "
+      "node-name(*[1]) eq node-name(*[3]), name(*[2])",
+      "boolean:true boolean:false string:q:e" },
+    { "name(*[4]), local-name(*[4]), namespace-uri(*[4]), node-name(*[4]), "
+      "name(*[4]/*), namespace-uri(*[4]/*)",
+      "string:d string:d anyURI:urn:d QName:d string:f anyURI:urn:d" },
+    { "name(*[3]), local-name(*[3]), namespace-uri(*[3]), node-name(*[3])",
+      "string:e string:e anyURI: QName:e" },
+    { "name(@*[1]), local-name(@*[1]), namespace-uri(@*[1]), "
+      "node-name(@*[1]), name(@*[2]), local-name(@*[2]), "
+      "namespace-uri(@*[2]), node-name(@*[2])",
+      "string:p:a string:a anyURI:urn:p QName:p:a string:b string:b "
+      "anyURI: QName:b" },
+    { "name(processing-instruction()), "
+      "local-name(processing-instruction()), "
+      "namespace-uri(processing-instruction()), "
+      "node-name(processing-instruction())",
+      "string:t string:t anyURI: QName:t" },
+    { "(/, text(), comment()) ! (name(.), local-name(.), namespace-uri(.), "
+      "count(node-name(.)))",
+      "string: string: anyURI: integer:0 string: string: anyURI: integer:0 "
+      "string: string: anyURI: integer:0" },
+    { "name(()), local-name(()), namespace-uri(()), node-name(())",
+      "string: string: anyURI:" },
+    { "namespace-uri(*[1]) instance of xs:anyURI, "
+      "node-name(*[1]) instance of xs:QName, name(*[1]) instance of xs:string",
+      "boolean:true boolean:true boolean:true" },
+
+    /* The context item for the forms without an argument */
+    { "name(), local-name(), namespace-uri(), node-name()",
+      "string:r string:r anyURI: QName:r" },
+    { "(*, @*, processing-instruction()) ! name()",
+      "string:p:e string:q:e string:e string:d string:p:a string:b "
+      "string:t" },
+    { "(*[1], @*[1], *[3]) ! namespace-uri(), (*[4], text()) ! local-name(), "
+      "(*[1], comment(), processing-instruction()) ! node-name()",
+      "anyURI:urn:p anyURI:urn:p anyURI: string:d string: QName:p:e "
+      "QName:t" },
+    { "/ ! name(), / ! local-name(), / ! namespace-uri(), / ! node-name()",
+      "string: string: anyURI:" },
+    { "1 ! name()", "error:XPTY0004" },
+    { "'a' ! local-name()", "error:XPTY0004" },
+    { "1 ! namespace-uri()", "error:XPTY0004" },
+    { "1 ! node-name()", "error:XPTY0004" },
+    { "name(1)", "error:XPTY0004" },
+    { "local-name(*)", "error:XPTY0004" }
+};
+
+static void
+testNodeNames(void) {
+    xmlDocPtr doc = parseDoc(xp3NameDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "node name test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3NameCases) / sizeof(xp3NameCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+            checkEval(plain, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+        }
+        /* fn:node-name#0 comes with XPath 3.0 */
+        checkEval(level20, ctx, "node-name()", "error:XPST0017");
+        checkEval(level20, ctx, "node-name(.)", "QName:r");
+    }
+    xp3FreeStaticContext(level20);
     xp3FreeStaticContext(plain);
     xp3FreeDynamicContext(ctx);
     xmlFreeDoc(doc);
@@ -3505,6 +3605,16 @@ static const char *const xp3AllocCompareExpected =
     "integer:1 integer:3 boolean:true boolean:true boolean:true "
     "string:a string:b string:B";
 
+/* The names of nodes, on xp3NameDoc */
+static const char *const xp3AllocNames =
+    "(name(*[1]), local-name(@*[1]), namespace-uri(*[4]), node-name(*[1]), "
+    "node-name(processing-instruction()), name(), node-name(), "
+    "name(text()), namespace-uri(()))";
+
+static const char *const xp3AllocNamesExpected =
+    "string:p:e string:a anyURI:urn:d QName:p:e QName:t string:r QName:r "
+    "string: anyURI:";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -4528,6 +4638,7 @@ main(void) {
     testAggregateLevels();
     testStringLevels();
     testDeepEqual();
+    testNodeNames();
     testDeepTrees();
     testUserErrors();
     testTreeChange();
@@ -4557,6 +4668,8 @@ main(void) {
     testAllocationFailures("error((), 'boom')", "error:FOER0000");
     testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
                              xp3AllocCompareExpected);
+    testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
+                             xp3AllocNamesExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();

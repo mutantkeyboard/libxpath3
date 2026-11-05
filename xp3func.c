@@ -46,6 +46,8 @@
 /* The implementations, by signature; NULL for not implemented yet */
 static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     /* Accessors (F&O 3.1, 2) */
+    [XP3_FN_NODE_NAME_0] = xp3FnNodeName,
+    [XP3_FN_NODE_NAME_1] = xp3FnNodeName,
     [XP3_FN_STRING_0] = xp3FnString,
     [XP3_FN_STRING_1] = xp3FnString,
     [XP3_FN_DATA_0] = xp3FnData,
@@ -118,6 +120,13 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_FALSE_0] = xp3FnFalse,
     [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
     [XP3_FN_NOT_1] = xp3FnNot,
+    /* Functions on nodes (13) */
+    [XP3_FN_NAME_0] = xp3FnName,
+    [XP3_FN_NAME_1] = xp3FnName,
+    [XP3_FN_LOCAL_NAME_0] = xp3FnLocalName,
+    [XP3_FN_LOCAL_NAME_1] = xp3FnLocalName,
+    [XP3_FN_NAMESPACE_URI_0] = xp3FnNamespaceUri,
+    [XP3_FN_NAMESPACE_URI_1] = xp3FnNamespaceUri,
     /* Sequences (14) */
     [XP3_FN_EMPTY_1] = xp3FnEmpty,
     [XP3_FN_EXISTS_1] = xp3FnExists,
