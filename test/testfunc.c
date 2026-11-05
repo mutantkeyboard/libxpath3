@@ -388,6 +388,7 @@ testImplementations(void) {
         { "number", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
         { "position", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
         { "last", 0, XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT },
+        { "default-collation", 0, XP3_FUNC_CONTEXT },
         { "error", 0, XP3_FUNC_NONDETERMINISTIC },
         { "error", 1, XP3_FUNC_NONDETERMINISTIC },
         { "error", 2, XP3_FUNC_NONDETERMINISTIC },

@@ -31,8 +31,9 @@ typedef enum {
 } xp3FuncNamespace;
 
 /*
- * Flags of a signature. Apart from XP3_FUNC_VARIADIC, they are the
- * function properties of F&O 3.1, 1.7.4. Constant folding needs them:
+ * Flags of a signature. Apart from XP3_FUNC_VARIADIC and
+ * XP3_FUNC_EXTENSION, they are the function properties of F&O 3.1,
+ * 1.7.4. Constant folding needs them:
  * a call can only be folded if none of the first four are set.
  * XP3_FUNC_ORDER does not prevent folding, because any one order is a
  * valid result; it tells the evaluator that the order of the result
@@ -46,6 +47,9 @@ typedef enum {
 #define XP3_FUNC_ORDER (1 << 5)     /* nondeterministic with respect to
                                      * ordering: fn:distinct-values,
                                      * fn:unordered, map:keys... */
+#define XP3_FUNC_EXTENSION (1 << 6) /* registered with
+                                     * xp3RegisterFunction(): the info
+                                     * of an xp3ExtFunction */
 
 /*
  * The type of a parameter or result, as a SequenceType of the parse
@@ -83,6 +87,25 @@ struct _xp3FuncInfo {
                                  * the type of the last */
 };
 
+/*
+ * An extension function, made from its signature by
+ * xp3CompileSignature(). The info has XP3_FUNC_EXTENSION and level
+ * XP3_XPATH_20, as the function exists at every level; its ns is
+ * unused, the namespace is uri. The parameter types and the strings
+ * are in the same allocation as the entry, so xmlFree() frees it all.
+ */
+typedef struct _xp3ExtFunction xp3ExtFunction;
+
+struct _xp3ExtFunction {
+    xp3FuncInfo info;
+    const xmlChar *uri;
+    xp3FunctionImpl impl;
+    void *userData;
+    xp3ExtFunction *next;       /* in the static context, the next
+                                 * arity of the same name, or NULL; NULL
+                                 * in the copy an expression holds */
+};
+
 const xp3FuncInfo *
 xp3FuncLookup(const xmlChar *uri, const xmlChar *localName, int arity,
               xp3LanguageLevel level);
@@ -116,9 +139,17 @@ xp3FuncAt(size_t index);
  * position, the step counter and the limits on sequences. Results with
  * more than one item are built with xp3FuncBuilderInit() and its
  * companions, so that limits and allocation failures behave as for
- * every other expression.
+ * every other expression. Work on strings counts a step per
+ * XP3_BYTES_PER_STEP bytes read or made (xp3FuncBytes()), and a
+ * string is checked against the byte limit of a fold before it is
+ * built (xp3FuncStringFits()).
  */
 typedef struct _xp3FuncCall xp3FuncCall;
+
+/* Reading or making this many bytes of strings, or measuring values
+ * while folding, costs a step, so that the step limit bounds the time
+ * spent on long strings while short ones cost next to nothing */
+#define XP3_BYTES_PER_STEP 256
 
 typedef xp3Value *(*xp3FuncImpl)(xp3FuncCall *call, xp3Value **args,
                                  int count);
@@ -140,6 +171,12 @@ xp3FuncUserError(xp3FuncCall *call, const xmlChar *uri,
 
 int
 xp3FuncSteps(xp3FuncCall *call, uint64_t steps);
+
+int
+xp3FuncBytes(xp3FuncCall *call, uint64_t bytes);
+
+int
+xp3FuncStringFits(xp3FuncCall *call, size_t len);
 
 xp3LanguageLevel
 xp3FuncLevel(xp3FuncCall *call);
@@ -276,6 +313,9 @@ xp3Value *
 xp3FnMax(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnstring.c */
+xp3Value *
+xp3FnDefaultCollation(xp3FuncCall *call, xp3Value **args, int count);
+
 xp3Value *
 xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count);
 

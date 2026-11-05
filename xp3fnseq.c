@@ -26,10 +26,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
+#include "private/xp3chars.h"
 #include "private/xp3decimal.h"
 #include "private/xp3double.h"
 #include "private/xp3eval.h"
@@ -714,6 +716,16 @@ isNaNValue(const xp3Atomic *atomic) {
     }
 }
 
+/* Count the steps of comparing two values: a step per
+ * XP3_BYTES_PER_STEP bytes of strings, binary values or digits, as
+ * comparisons in expressions count them. Returns 0 or -1. */
+static int
+compareSteps(xp3FuncCall *call, const xp3Atomic *left,
+             const xp3Atomic *right) {
+    return(xp3FuncBytes(call, (uint64_t) xp3AtomicSize(left, SIZE_MAX) +
+                              xp3AtomicSize(right, SIZE_MAX)));
+}
+
 /*
  * Whether two atomic values are equal as F&O 3.1, 14.2 compares them:
  * with eq, strings under the collation, and values that eq can't
@@ -732,6 +744,8 @@ atomicsEqual(xp3FuncCall *call, const xp3Atomic *left,
                      "and durations is not implemented yet");
         return(-1);
     }
+    if (compareSteps(call, left, right) < 0)
+        return(-1);
     if (isStringType(left->type) && isStringType(right->type))
         return(xp3CollationCompare(collation, left->u.str,
                                    right->u.str) == 0);
@@ -778,6 +792,12 @@ callCollation(xp3FuncCall *call, xp3Value **args, int count, int arity,
  * know whether a kept number is equal to it, with eq's own answer, so
  * the result is the same as comparing it with each kept value in turn,
  * also where eq is not transitive.
+ *
+ * Every hash starts from a seed drawn for each call, and the bucket of
+ * a key mixes it in again, so values crafted from the document to
+ * share a bucket don't share one in the next call: otherwise each
+ * lookup could walk a chain of all values kept (hash flooding). The
+ * result doesn't depend on the bucket layout, so it stays the same.
  */
 
 /* Kinds of entries; entries of different kinds never match */
@@ -817,6 +837,7 @@ typedef struct {
     size_t cap;
     size_t *heads;
     size_t mask;
+    uint64_t seed;
 } xp3HashTable;
 
 /* A number as eq promotes it */
@@ -845,6 +866,34 @@ hashBytes(uint64_t hash, const unsigned char *data, size_t len,
 
 #define XP3_FNV_BASIS 0xCBF29CE484222325ULL
 
+/* The finaliser of splitmix64 */
+static uint64_t
+mix64(uint64_t x) {
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    x ^= x >> 31;
+    return(x);
+}
+
+/*
+ * A seed for a table: the time, the processor time and addresses of
+ * the call, the stack and the heap, which address space layout
+ * randomisation varies. Not secret enough for cryptography, but enough
+ * that the document can't predict it. No state is shared, so threads
+ * need no lock.
+ */
+static uint64_t
+hashSeed(const xp3FuncCall *call, const xp3HashTable *table) {
+    uint64_t seed = mix64((uint64_t) time(NULL));
+
+    seed = mix64(seed ^ (uint64_t) clock());
+    seed = mix64(seed ^ (uint64_t) (uintptr_t) call);
+    seed = mix64(seed ^ (uint64_t) (uintptr_t) table);
+    return(mix64(seed ^ (uint64_t) (uintptr_t) table->heads));
+}
+
 static uint64_t
 hashString(uint64_t hash, const xmlChar *str, xp3Collation collation) {
     return(hashBytes(hash, str, strlen((const char *) str), collation));
@@ -857,8 +906,10 @@ hashString(uint64_t hash, const xmlChar *str, xp3Collation collation) {
  * -1 after recording an error.
  */
 static int
-hashKey(xp3FuncCall *call, const xp3Atomic *atomic, xp3Collation collation,
-        xp3HashClass *cls, uint64_t *key) {
+hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
+        xp3Collation collation, xp3HashClass *cls, uint64_t *key) {
+    uint64_t basis = XP3_FNV_BASIS ^ table->seed;
+
     *cls = XP3_HASH_NONE;
     *key = 0;
     if (isTemporal(atomic->type)) {
@@ -867,8 +918,29 @@ hashKey(xp3FuncCall *call, const xp3Atomic *atomic, xp3Collation collation,
         return(-1);
     }
     if (isStringType(atomic->type)) {
+        const xmlChar *str = atomic->u.str;
+        size_t len = strlen((const char *) str);
+        xmlChar *copy = NULL;
+
+        if (xp3FuncBytes(call, len) < 0)
+            return(-1);
+        /* Equal strings compare bytes that aren't UTF-8 as U+FFFD, so
+         * they hash as it too */
+        if (!xp3IsValidUTF8(str, len)) {
+            copy = xp3ReplaceInvalidUTF8(str, len, &len);
+            if (copy == NULL) {
+                xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+                return(-1);
+            }
+            str = copy;
+            if (xp3FuncBytes(call, len) < 0) {
+                xmlFree(copy);
+                return(-1);
+            }
+        }
         *cls = XP3_HASH_STRING;
-        *key = hashString(XP3_FNV_BASIS, atomic->u.str, collation);
+        *key = hashBytes(basis, str, len, collation);
+        xmlFree(copy);
         return(0);
     }
     switch (xp3TypeRepresentation(atomic->type)) {
@@ -877,9 +949,11 @@ hashKey(xp3FuncCall *call, const xp3Atomic *atomic, xp3Collation collation,
             *key = (uint64_t) (atomic->u.boolean != 0);
             break;
         case XP3_REP_BINARY:
+            if (xp3FuncBytes(call, atomic->u.bin.len) < 0)
+                return(-1);
             *cls = (atomic->type == XP3_TYPE_HEX_BINARY) ?
                    XP3_HASH_HEX_BINARY : XP3_HASH_BASE64_BINARY;
-            *key = hashBytes(XP3_FNV_BASIS, atomic->u.bin.data,
+            *key = hashBytes(basis, atomic->u.bin.data,
                              atomic->u.bin.len, XP3_COLLATION_CODEPOINT);
             break;
         case XP3_REP_QNAME:
@@ -887,7 +961,7 @@ hashKey(xp3FuncCall *call, const xp3Atomic *atomic, xp3Collation collation,
             if (atomic->type != XP3_TYPE_QNAME)
                 break;
             *cls = XP3_HASH_QNAME;
-            *key = hashString(XP3_FNV_BASIS,
+            *key = hashString(basis,
                               (atomic->u.qname.uri != NULL) ?
                               atomic->u.qname.uri : BAD_CAST "",
                               XP3_COLLATION_CODEPOINT);
@@ -910,8 +984,8 @@ hashKey(xp3FuncCall *call, const xp3Atomic *atomic, xp3Collation collation,
  * and skip the string. Returns 0, or -1 after recording NO_MEMORY.
  */
 static int
-numberKeys(xp3FuncCall *call, const xp3Atomic *atomic,
-           xp3NumberKeys *keys) {
+numberKeys(xp3FuncCall *call, const xp3HashTable *table,
+           const xp3Atomic *atomic, xp3NumberKeys *keys) {
     xmlChar *str;
     int64_t whole;
     float single;
@@ -942,7 +1016,7 @@ numberKeys(xp3FuncCall *call, const xp3Atomic *atomic,
         (xp3DoubleParse((const char *) str, &keys->asDouble) == 0) &&
         (xp3FloatParse((const char *) str, &single) == 0)) {
         keys->asFloat = single;
-        keys->exact = hashString(XP3_FNV_BASIS, str,
+        keys->exact = hashString(XP3_FNV_BASIS ^ table->seed, str,
                                  XP3_COLLATION_CODEPOINT);
         ret = 0;
     }
@@ -968,14 +1042,9 @@ doubleKey(double value) {
 /* The bucket of a key */
 static size_t
 hashBucket(const xp3HashTable *table, xp3HashClass cls, uint64_t key) {
-    uint64_t x = key ^ ((uint64_t) cls * 0x9E3779B97F4A7C15ULL);
+    uint64_t x = key ^ table->seed ^ ((uint64_t) cls * 0x9E3779B97F4A7C15ULL);
 
-    x ^= x >> 30;
-    x *= 0xBF58476D1CE4E5B9ULL;
-    x ^= x >> 27;
-    x *= 0x94D049BB133111EBULL;
-    x ^= x >> 31;
-    return((size_t) x & table->mask);
+    return((size_t) mix64(x) & table->mask);
 }
 
 /* The first entry with a class and key after the entry cursor - 1, or
@@ -1111,7 +1180,7 @@ distinctValue(xp3FuncCall *call, xp3HashTable *table, xp3SeqBuilder *kept,
     size_t found = 0;
 
     if (xp3TypeIsNumeric(atomic->type)) {
-        if (numberKeys(call, atomic, &keys) < 0)
+        if (numberKeys(call, table, atomic, &keys) < 0)
             goto error;
         if (numberKept(table, kept, atomic, &keys)) {
             xp3ItemUnref(item);
@@ -1122,7 +1191,7 @@ distinctValue(xp3FuncCall *call, xp3HashTable *table, xp3SeqBuilder *kept,
         return(keepNumber(call, table, atomic, &keys, index));
     }
 
-    if (hashKey(call, atomic, collation, &cls, &key) < 0)
+    if (hashKey(call, table, atomic, collation, &cls, &key) < 0)
         goto error;
     while ((cls != XP3_HASH_NONE) &&
            ((found = hashFind(table, cls, key, found)) != 0)) {
@@ -1152,11 +1221,12 @@ error:
  * fn:distinct-values#1 and #2 (F&O 3.1, 14.2.1): the values without
  * those equal to an earlier one, in the order of the input. Values are
  * equal as fn:deep-equal compares them, so NaN equals NaN, and the
- * collation compares strings. eq is not transitive across numeric
- * types, so of three values where A eq B, B eq C and A ne C, the first
- * is kept and the others not, which the spec allows. A hash table
- * keeps the time linear (see above). A range of integers has no
- * duplicates.
+ * collation compares strings. Each value is compared with the values
+ * kept only. eq is not transitive across numeric types, so of three
+ * values where A eq B, B eq C and A ne C, A and C are kept, which the
+ * spec allows: distinct-values((1.1e0, 1.1, xs:float(1.1))) is
+ * (1.1e0, xs:float(1.1)). A hash table, seeded against flooding, keeps
+ * the time linear (see above). A range of integers has no duplicates.
  *
  * @param call   the call
  * @param args   the values (xs:anyAtomicType*) and the collation
@@ -1192,6 +1262,7 @@ xp3FnDistinctValues(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     }
     memset(table.heads, 0, buckets * sizeof(size_t));
+    table.seed = hashSeed(call, &table);
 
     xp3FuncBuilderInit(call, &kept);
     xp3IterInit(&iter, args[0]);
@@ -1298,19 +1369,20 @@ sameStringValue(xp3FuncCall *call, xmlNodePtr node1, xmlNodePtr node2,
                 xp3Collation collation) {
     xmlChar *value1 = NULL;
     xmlChar *value2 = NULL;
-    size_t length;
+    size_t length1 = 0;
+    size_t length2 = 0;
     xp3ErrCode err;
     int ret = -1;
 
-    err = xp3NodeStringValue(node1, &value1, &length);
+    err = xp3NodeStringValue(node1, &value1, &length1);
     if (err == XP3_ERR_OK)
-        err = xp3NodeStringValue(node2, &value2, &length);
+        err = xp3NodeStringValue(node2, &value2, &length2);
     if (err == XP3_ERR_LIMIT)
         xp3FuncError(call, err, "the string value of a node is longer "
                      "than 2 GB");
     else if (err != XP3_ERR_OK)
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
-    else
+    else if (xp3FuncBytes(call, (uint64_t) length1 + length2) == 0)
         ret = (xp3CollationCompare(collation, value1, value2) == 0);
     xmlFree(value1);
     xmlFree(value2);
@@ -2002,6 +2074,10 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
             strings |= XP3_HAS_STRING;
         } else if (atomic->type == XP3_TYPE_ANY_URI) {
             strings |= XP3_HAS_URI;
+        }
+        if (compareSteps(call, atomic, (best != NULL) ? best : atomic) < 0) {
+            xp3AtomicUnref(atomic);
+            goto error;
         }
         /* The first value is compared with itself, so that a single
          * value without an order, such as a QName, is an error too */

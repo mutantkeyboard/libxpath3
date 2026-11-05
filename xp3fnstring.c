@@ -10,18 +10,26 @@
  *
  * Strings are UTF-8, so comparing them byte by byte compares their
  * codepoints, which is the Unicode codepoint collation (F&O 3.1,
- * 5.3.2), and a substring found byte by byte starts and ends at
- * character boundaries. The HTML ASCII case-insensitive collation
- * (5.3.4) compares the bytes A to Z as a to z, bytes that UTF-8 never
- * uses inside a character of more than one byte. The URIs of the UCA
- * family (5.3.3) fall back to the codepoint collation, as the spec
- * allows; any other collation raises FOCH0002. Text that libxml2
- * stored without checking may hold bytes that are not UTF-8: each such
- * byte counts as one character, U+FFFD, and is copied unchanged.
+ * 5.3.2), and a substring found byte by byte in valid UTF-8 starts and
+ * ends at character boundaries. The HTML ASCII case-insensitive
+ * collation (5.3.4) compares the bytes A to Z as a to z, bytes that
+ * UTF-8 never uses inside a character of more than one byte. The URIs
+ * of the UCA family (5.3.3) fall back to the codepoint collation, as
+ * the spec allows; any other collation raises FOCH0002. Text that
+ * libxml2 stored without checking may hold bytes that are not UTF-8:
+ * each such byte counts as one character, U+FFFD, and is copied
+ * unchanged. Matching and comparing see it as U+FFFD too: an argument
+ * that isn't valid UTF-8 is matched as a copy with U+FFFD in place of
+ * such bytes, and offsets found in the copy are mapped back, so that
+ * results are parts of the argument as it is.
  *
  * Results are built in one buffer that doubles as it grows, and
  * searches take linear time, so no function is quadratic in the length
- * of its arguments. A string is at most 2 GB long, as everywhere.
+ * of its arguments. A string is at most 2 GB long, as everywhere. Each
+ * function counts a step per XP3_BYTES_PER_STEP bytes it reads and
+ * makes (xp3FuncBytes()), so the step limit bounds the work on long
+ * strings, and checks a result against the byte limit of a fold before
+ * building it (xp3FuncStringFits()).
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -49,6 +57,11 @@
 /* Searches for strings up to this long keep their table on the stack */
 #define XP3_SEARCH_STACK 64
 
+/* The default collation of the static context, which has no setter
+ * yet: calls without a collation argument resolve it, and
+ * fn:default-collation() returns it, so that a setter changes both */
+#define XP3_DEFAULT_COLLATION XP3_COLLATION_URI_CODEPOINT
+
 /*
  * Helpers
  */
@@ -72,27 +85,6 @@ argString(const xp3Value *value) {
 static double
 argDouble(const xp3Value *value) {
     return(value->u.single.u.atomic->u.d);
-}
-
-/*
- * Decode the character at *pos and move past it. A byte that doesn't
- * start valid UTF-8 is one character, U+FFFD.
- */
-static int
-nextChar(const xmlChar *str, size_t len, size_t *pos) {
-    size_t avail = len - *pos;
-    int bytes = (avail < 4) ? (int) avail : 4;
-    int c;
-
-    if (str[*pos] < 0x80)
-        return(str[(*pos)++]);
-    c = xp3GetUTF8Char(str + *pos, &bytes);
-    if (c < 0) {
-        (*pos)++;
-        return(0xFFFD);
-    }
-    *pos += (size_t) bytes;
-    return(c);
 }
 
 /* Encode a code point, at most U+10FFFF, as UTF-8. Returns the number
@@ -121,9 +113,12 @@ encodeChar(int c, xmlChar *out) {
     return(4);
 }
 
-/* A new xs:string from bytes, as the result */
+/* A new xs:string from bytes, as the result: checked against the byte
+ * limit and counted as made */
 static xp3Value *
 newString(xp3FuncCall *call, const xmlChar *str, size_t len) {
+    if ((xp3FuncStringFits(call, len) < 0) || (xp3FuncBytes(call, len) < 0))
+        return(NULL);
     return(xp3FuncAtomic(call, xp3AtomicNewString(XP3_TYPE_STRING, str,
                                                   len)));
 }
@@ -140,6 +135,7 @@ typedef struct {
     xmlChar *data;
     size_t len;
     size_t cap;
+    size_t counted;             /* bytes counted as steps so far */
     const char *name;           /* the function, for messages */
 } xp3StrBuf;
 
@@ -148,18 +144,30 @@ bufInit(xp3StrBuf *buf, const char *name) {
     buf->data = NULL;
     buf->len = 0;
     buf->cap = 0;
+    buf->counted = 0;
     buf->name = name;
 }
 
-/* Append bytes. Returns 0, or -1 after recording LIMIT or NO_MEMORY;
- * the caller then frees buf->data. */
+/* Append bytes, counted as made, stopping before the string passes
+ * the byte limit or the steps run out. Returns 0, or -1 after
+ * recording LIMIT or NO_MEMORY; the caller then frees buf->data. */
 static int
 bufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
           size_t len) {
+    size_t total;
+
     if (len > XP3_STRING_MAX - buf->len) {
         xp3FuncError(call, XP3_ERR_LIMIT, "the result of %s would be "
                      "longer than 2 GB", buf->name);
         return(-1);
+    }
+    total = buf->len + len;
+    if (xp3FuncStringFits(call, total) < 0)
+        return(-1);
+    if (total - buf->counted >= XP3_BYTES_PER_STEP) {
+        if (xp3FuncBytes(call, total - buf->counted) < 0)
+            return(-1);
+        buf->counted = total - (total - buf->counted) % XP3_BYTES_PER_STEP;
     }
     if (buf->len + len >= buf->cap) {
         size_t need = buf->len + len + 1;
@@ -203,12 +211,13 @@ bufAppendAtomic(xp3FuncCall *call, xp3StrBuf *buf,
     return(ret);
 }
 
-/* The string built, as the result; frees the buffer */
+/* The string built, as the result; frees the buffer. bufAppend()
+ * checked and counted it already. */
 static xp3Value *
 bufFinish(xp3FuncCall *call, xp3StrBuf *buf) {
-    xp3Value *result = newString(call, (buf->data != NULL) ? buf->data :
-                                                          BAD_CAST "",
-                                 buf->len);
+    xp3Value *result = xp3FuncAtomic(call, xp3AtomicNewString(
+        XP3_TYPE_STRING, (buf->data != NULL) ? buf->data : BAD_CAST "",
+        buf->len));
 
     xmlFree(buf->data);
     buf->data = NULL;
@@ -239,32 +248,92 @@ bytesEqual(xp3Collation collation, const xmlChar *str1,
     return(1);
 }
 
+/* A string as it is matched: the argument if it is valid UTF-8, or a
+ * copy with U+FFFD for each byte that isn't (xp3ReplaceInvalidUTF8()) */
+typedef struct {
+    const xmlChar *str;
+    size_t len;
+    xmlChar *copy;              /* to free, or NULL */
+} xp3Matched;
+
+/*
+ * Prepare a string for matching, counting the check and the copy as
+ * read and made. Returns 0, or -1 after recording LIMIT or NO_MEMORY;
+ * matchedClear() is needed in either case.
+ */
+static int
+matchedInit(xp3FuncCall *call, xp3Matched *matched, const xmlChar *str,
+            size_t len) {
+    matched->str = str;
+    matched->len = len;
+    matched->copy = NULL;
+    if (xp3FuncBytes(call, len) < 0)
+        return(-1);
+    if (xp3IsValidUTF8(str, len))
+        return(0);
+    matched->copy = xp3ReplaceInvalidUTF8(str, len, &matched->len);
+    if (matched->copy == NULL) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(-1);
+    }
+    matched->str = matched->copy;
+    return(xp3FuncBytes(call, matched->len));
+}
+
+static void
+matchedClear(xp3Matched *matched) {
+    xmlFree(matched->copy);
+    matched->copy = NULL;
+}
+
+/* The byte offset in a string of a character boundary at offset off of
+ * its copy from xp3ReplaceInvalidUTF8(), where each byte that isn't
+ * UTF-8 takes three */
+static size_t
+originalOffset(const xmlChar *str, size_t len, size_t off) {
+    size_t pos = 0;
+    size_t copied = 0;
+
+    while ((pos < len) && (copied < off)) {
+        size_t start = pos;
+
+        xp3NextChar(str, len, &pos);
+        copied += ((pos - start == 1) && (str[start] >= 0x80)) ?
+                  3 : pos - start;
+    }
+    return(pos);
+}
+
 /*
  * Find the first occurrence of needle in haystack under a collation,
  * with the algorithm of Knuth, Morris and Pratt, which takes time
- * linear in both lengths. Sets *at to its byte offset. Returns 1 if
- * found, 0 if not, or -1 after recording NO_MEMORY.
+ * linear in both lengths, counted as read whole. Sets *at to its byte
+ * offset. Returns 1 if found, 0 if not, or -1 after recording LIMIT or
+ * NO_MEMORY.
  */
 static int
 findString(xp3FuncCall *call, xp3Collation collation,
            const xmlChar *haystack, size_t hayLen, const xmlChar *needle,
            size_t needleLen, size_t *at) {
-    size_t fixed[XP3_SEARCH_STACK];
-    size_t *border = fixed;
+    /* Lengths are below XP3_STRING_MAX, so 32 bits hold a border */
+    uint32_t fixed[XP3_SEARCH_STACK];
+    uint32_t *border = fixed;
     size_t i;
-    size_t k;
+    uint32_t k;
     int found = 0;
 
     *at = 0;
+    if (xp3FuncBytes(call, (uint64_t) hayLen + needleLen) < 0)
+        return(-1);
     if (needleLen == 0)
         return(1);
     if (needleLen > hayLen)
         return(0);
     if (needleLen > XP3_SEARCH_STACK) {
-        if (needleLen > SIZE_MAX / sizeof(size_t))
+        if (needleLen > SIZE_MAX / sizeof(uint32_t))
             border = NULL;
         else
-            border = xmlMalloc(needleLen * sizeof(size_t));
+            border = xmlMalloc(needleLen * sizeof(uint32_t));
         if (border == NULL) {
             xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
             return(-1);
@@ -353,8 +422,8 @@ ucaRejection(const xmlChar *rest) {
 
 /**
  * Resolve the collation of a call (F&O 3.1, 5.3.5): the collation
- * argument, or the default collation, the Unicode codepoint collation,
- * if there is none. A relative URI would be resolved against the
+ * argument, or the default collation (XP3_DEFAULT_COLLATION) if there
+ * is none. A relative URI would be resolved against the
  * static base URI, which is absent, so it raises FOCH0002 as any URI
  * that isn't supported does.
  *
@@ -362,7 +431,7 @@ ucaRejection(const xmlChar *rest) {
  * @param uri        the collation argument, an xs:string; NULL for the
  *                   default collation
  * @param collation  set to the collation
- * @returns 0, or -1 after recording FOCH0002
+ * @returns 0, or -1 after recording FOCH0002 or LIMIT
  */
 int
 xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
@@ -372,9 +441,7 @@ xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
     const xmlChar *name;
 
     *collation = XP3_COLLATION_CODEPOINT;
-    if (uri == NULL)
-        return(0);
-    name = argString(uri);
+    name = (uri != NULL) ? argString(uri) : BAD_CAST XP3_DEFAULT_COLLATION;
     if (xmlStrEqual(name, BAD_CAST XP3_COLLATION_URI_CODEPOINT))
         return(0);
     if (xmlStrEqual(name, BAD_CAST XP3_COLLATION_URI_HTML_ASCII)) {
@@ -382,6 +449,9 @@ xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
         return(0);
     }
     if (strncmp((const char *) name, XP3_COLLATION_URI_UCA, ucaLen) == 0) {
+        /* Only a UCA query is read whole */
+        if (xp3FuncBytes(call, strlen((const char *) name)) < 0)
+            return(-1);
         rejection = ucaRejection(name + ucaLen);
         if (rejection == NULL)
             return(0);
@@ -394,7 +464,8 @@ xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
 /**
  * Compare two strings under a collation. The HTML ASCII
  * case-insensitive collation defines only equality; strings are
- * ordered as if A to Z were a to z.
+ * ordered as if A to Z were a to z. A byte that isn't UTF-8 compares
+ * as U+FFFD.
  *
  * @param collation  the collation
  * @param str1       the first string
@@ -404,15 +475,8 @@ xp3FuncCollation(xp3FuncCall *call, const xp3Value *uri,
 int
 xp3CollationCompare(xp3Collation collation, const xmlChar *str1,
                     const xmlChar *str2) {
-    while (1) {
-        int c1 = collationByte(collation, *str1++);
-        int c2 = collationByte(collation, *str2++);
-
-        if (c1 != c2)
-            return((c1 < c2) ? -1 : 1);
-        if (c1 == 0)
-            return(0);
-    }
+    return(xp3CompareChars(str1, str2,
+                           collation == XP3_COLLATION_HTML_ASCII));
 }
 
 /* The collation of a function whose last parameter is the optional
@@ -422,6 +486,23 @@ callCollation(xp3FuncCall *call, xp3Value **args, int count, int arity,
               xp3Collation *collation) {
     return(xp3FuncCollation(call, (count > arity) ? args[arity] : NULL,
                             collation));
+}
+
+/**
+ * fn:default-collation#0 (F&O 3.1, 15.7): the default collation of the
+ * static context, the one calls without a collation argument use.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnDefaultCollation(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) args;
+    (void) count;
+    return(newString(call, BAD_CAST XP3_DEFAULT_COLLATION,
+                     sizeof(XP3_DEFAULT_COLLATION) - 1));
 }
 
 /*
@@ -504,7 +585,7 @@ xp3FnStringToCodepoints(xp3FuncCall *call, xp3Value **args, int count) {
     (void) count;
     xp3FuncBuilderInit(call, &builder);
     while (pos < len) {
-        xp3Atomic *atomic = xp3AtomicNewInteger(nextChar(str, len, &pos));
+        xp3Atomic *atomic = xp3AtomicNewInteger(xp3NextChar(str, len, &pos));
 
         if (atomic == NULL) {
             xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
@@ -539,14 +620,19 @@ error:
  */
 xp3Value *
 xp3FnCompare(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *str1 = argString(args[0]);
+    const xmlChar *str2 = argString(args[1]);
     xp3Collation collation;
 
     if (callCollation(call, args, count, 2, &collation) < 0)
         return(NULL);
     if ((xp3ValueCount(args[0]) == 0) || (xp3ValueCount(args[1]) == 0))
         return(xp3ValueEmpty());
+    if (xp3FuncBytes(call, (uint64_t) strlen((const char *) str1) +
+                           strlen((const char *) str2)) < 0)
+        return(NULL);
     return(xp3FuncAtomic(call, xp3AtomicNewInteger(xp3CollationCompare(
-        collation, argString(args[0]), argString(args[1])))));
+        collation, str1, str2))));
 }
 
 /**
@@ -560,11 +646,17 @@ xp3FnCompare(xp3FuncCall *call, xp3Value **args, int count) {
  */
 xp3Value *
 xp3FnCodepointEqual(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *str1 = argString(args[0]);
+    const xmlChar *str2 = argString(args[1]);
+
     (void) count;
     if ((xp3ValueCount(args[0]) == 0) || (xp3ValueCount(args[1]) == 0))
         return(xp3ValueEmpty());
+    if (xp3FuncBytes(call, (uint64_t) strlen((const char *) str1) +
+                           strlen((const char *) str2)) < 0)
+        return(NULL);
     return(xp3FuncAtomic(call, xp3AtomicNewBoolean(
-        xmlStrEqual(argString(args[0]), argString(args[1])))));
+        xp3CompareChars(str1, str2, 0) == 0)));
 }
 
 /* Whether str holds token between whitespace, under a collation */
@@ -601,6 +693,7 @@ xp3Value *
 xp3FnContainsToken(xp3FuncCall *call, xp3Value **args, int count) {
     const xmlChar *token = argString(args[1]);
     xp3Collation collation;
+    xp3Matched matchedToken;
     size_t tokenLen;
     xp3Iter iter;
     xp3Item item;
@@ -617,14 +710,29 @@ xp3FnContainsToken(xp3FuncCall *call, xp3Value **args, int count) {
     if (tokenLen == 0)
         return(xp3FuncAtomic(call, xp3AtomicNewBoolean(0)));
 
-    if (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)
+    if ((matchedInit(call, &matchedToken, token, tokenLen) < 0) ||
+        (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)) {
+        matchedClear(&matchedToken);
         return(NULL);
+    }
     xp3IterInit(&iter, args[0]);
     while ((!contained) && ((found = xp3IterNext(&iter, &item)) > 0)) {
-        contained = hasToken(collation, item.u.atomic->u.str, token,
-                             tokenLen);
+        const xmlChar *str = item.u.atomic->u.str;
+        xp3Matched matched;
+        int ret = matchedInit(call, &matched, str,
+                              strlen((const char *) str));
+
+        if (ret == 0)
+            contained = hasToken(collation, matched.str, matchedToken.str,
+                                 matchedToken.len);
+        matchedClear(&matched);
         xp3ItemUnref(item);
+        if (ret < 0) {
+            matchedClear(&matchedToken);
+            return(NULL);
+        }
     }
+    matchedClear(&matchedToken);
     if ((!contained) && (found < 0)) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         return(NULL);
@@ -757,6 +865,8 @@ xp3FnSubstring(xp3FuncCall *call, xp3Value **args, int count) {
     size_t pos = 0;
     size_t from;
 
+    if (xp3FuncBytes(call, len) < 0)
+        return(NULL);
     if (count == 3) {
         end = first + roundHalfUp(argDouble(args[2]));
         if (!(first < end))
@@ -765,13 +875,13 @@ xp3FnSubstring(xp3FuncCall *call, xp3Value **args, int count) {
         return(newString(call, BAD_CAST "", 0));
     }
     while ((pos < len) && (position < first)) {
-        nextChar(str, len, &pos);
+        xp3NextChar(str, len, &pos);
         position += 1;
     }
     from = pos;
     if (count == 3) {
         while ((pos < len) && (position < end)) {
-            nextChar(str, len, &pos);
+            xp3NextChar(str, len, &pos);
             position += 1;
         }
     } else {
@@ -802,8 +912,12 @@ xp3FnStringLength(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     str = argString(value);
     len = strlen((const char *) str);
+    if (xp3FuncBytes(call, len) < 0) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
     while (pos < len) {
-        nextChar(str, len, &pos);
+        xp3NextChar(str, len, &pos);
         chars++;
     }
     xp3ValueUnref(value);
@@ -827,6 +941,7 @@ xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count) {
     const xmlChar *in;
     xmlChar *out;
     xp3Value *result;
+    size_t inLen;
     size_t len = 0;
     int space = 0;
 
@@ -835,7 +950,12 @@ xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count) {
     in = argString(value);
     while (isSpace(*in))
         in++;
-    out = xmlMalloc(strlen((const char *) in) + 1);
+    inLen = strlen((const char *) in);
+    if (xp3FuncBytes(call, inLen) < 0) {
+        xp3ValueUnref(value);
+        return(NULL);
+    }
+    out = xmlMalloc(inLen + 1);
     if (out == NULL) {
         xp3ValueUnref(value);
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
@@ -857,13 +977,23 @@ xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count) {
     return(result);
 }
 
-/* A character of the map string of fn:translate */
+/*
+ * A character of the map string of fn:translate, in 8 bytes, as the
+ * map string may be long. Replacements are in the order of the map
+ * string, and those past the end of the replacement string come after
+ * them, so the replacement orders the entries of a character by their
+ * position, as far as it matters.
+ */
 typedef struct {
-    int from;
-    size_t order;               /* its position in the map string */
-    const xmlChar *to;          /* its replacement, NULL to remove it */
-    size_t toLen;
+    uint32_t from;
+    uint32_t to;                /* the byte offset of its replacement in
+                                 * the replacement string, or
+                                 * XP3_TRANSLATE_REMOVE */
 } xp3Translation;
+
+/* The replacement of a character past the end of the replacement
+ * string, which is removed; strings are shorter than this */
+#define XP3_TRANSLATE_REMOVE UINT32_MAX
 
 /* By character, then by position */
 static int
@@ -873,8 +1003,7 @@ compareTranslations(const void *a, const void *b) {
 
     if (left->from != right->from)
         return((left->from < right->from) ? -1 : 1);
-    return((left->order < right->order) ? -1 :
-           (left->order > right->order) ? 1 : 0);
+    return((left->to < right->to) ? -1 : (left->to > right->to) ? 1 : 0);
 }
 
 /* The translation of a character, or NULL if it has none */
@@ -886,9 +1015,9 @@ findTranslation(const xp3Translation *map, size_t count, int c) {
     while (low < high) {
         size_t mid = low + (high - low) / 2;
 
-        if (map[mid].from == c)
+        if (map[mid].from == (uint32_t) c)
             return(&map[mid]);
-        if (map[mid].from < c)
+        if (map[mid].from < (uint32_t) c)
             low = mid + 1;
         else
             high = mid;
@@ -899,9 +1028,11 @@ findTranslation(const xp3Translation *map, size_t count, int c) {
 /*
  * The map string of fn:translate as a table sorted by character, each
  * with the character at the same position of the replacement string,
- * where the first position of a character counts. Sets *result to the
- * table, NULL for an empty map string, and *count to its length.
- * Returns 0, or -1 after recording NO_MEMORY.
+ * where the first position of a character counts. Reading the strings
+ * is counted, and a step per entry for building and sorting the table,
+ * before it is allocated. Sets *result to the table, NULL for an empty
+ * map string, and *count to its length. Returns 0, or -1 after
+ * recording LIMIT or NO_MEMORY.
  */
 static int
 translationTable(xp3FuncCall *call, const xmlChar *map,
@@ -918,12 +1049,16 @@ translationTable(xp3FuncCall *call, const xmlChar *map,
 
     *result = NULL;
     *count = 0;
+    if (xp3FuncBytes(call, (uint64_t) mapLen + transLen) < 0)
+        return(-1);
     while (pos < mapLen) {
-        nextChar(map, mapLen, &pos);
+        xp3NextChar(map, mapLen, &pos);
         chars++;
     }
     if (chars == 0)
         return(0);
+    if (xp3FuncSteps(call, chars) < 0)
+        return(-1);
     if (chars > SIZE_MAX / sizeof(xp3Translation))
         table = NULL;
     else
@@ -933,16 +1068,11 @@ translationTable(xp3FuncCall *call, const xmlChar *map,
         return(-1);
     }
     for (i = 0, pos = 0; i < chars; i++) {
-        table[i].from = nextChar(map, mapLen, &pos);
-        table[i].order = i;
-        table[i].to = NULL;
-        table[i].toLen = 0;
+        table[i].from = (uint32_t) xp3NextChar(map, mapLen, &pos);
+        table[i].to = XP3_TRANSLATE_REMOVE;
         if (transPos < transLen) {
-            size_t start = transPos;
-
-            nextChar(trans, transLen, &transPos);
-            table[i].to = trans + start;
-            table[i].toLen = transPos - start;
+            table[i].to = (uint32_t) transPos;
+            xp3NextChar(trans, transLen, &transPos);
         }
     }
     qsort(table, chars, sizeof(xp3Translation), compareTranslations);
@@ -971,15 +1101,18 @@ translationTable(xp3FuncCall *call, const xmlChar *map,
 xp3Value *
 xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
     const xmlChar *str = argString(args[0]);
+    const xmlChar *trans = argString(args[2]);
     size_t len = strlen((const char *) str);
+    size_t transLen = strlen((const char *) trans);
     xp3Translation *table;
     size_t entries;
     xp3StrBuf buf;
     size_t pos = 0;
 
     (void) count;
-    if (translationTable(call, argString(args[1]), argString(args[2]),
-                         &table, &entries) < 0)
+    if ((xp3FuncBytes(call, len) < 0) ||
+        (translationTable(call, argString(args[1]), trans, &table,
+                          &entries) < 0))
         return(NULL);
     if (table == NULL)
         return(newString(call, str, len));
@@ -987,13 +1120,18 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
     while (pos < len) {
         size_t start = pos;
         const xp3Translation *entry;
-        int ret;
+        int ret = 0;
 
-        entry = findTranslation(table, entries, nextChar(str, len, &pos));
-        if (entry == NULL)
+        entry = findTranslation(table, entries, xp3NextChar(str, len, &pos));
+        if (entry == NULL) {
             ret = bufAppend(call, &buf, str + start, pos - start);
-        else
-            ret = bufAppend(call, &buf, entry->to, entry->toLen);
+        } else if (entry->to != XP3_TRANSLATE_REMOVE) {
+            size_t end = entry->to;
+
+            xp3NextChar(trans, transLen, &end);
+            ret = bufAppend(call, &buf, trans + entry->to,
+                            end - entry->to);
+        }
         if (ret < 0) {
             xmlFree(buf.data);
             xmlFree(table);
@@ -1008,24 +1146,58 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
  * Substring matching
  */
 
+/* The first two arguments as matched (matchedInit()). Returns 0, or
+ * -1 after recording an error; matchedClear() is needed for both. */
+static int
+matchedPair(xp3FuncCall *call, xp3Value **args, xp3Matched *first,
+            xp3Matched *second) {
+    const xmlChar *str1 = argString(args[0]);
+    const xmlChar *str2 = argString(args[1]);
+
+    second->copy = NULL;
+    if (matchedInit(call, first, str1, strlen((const char *) str1)) < 0)
+        return(-1);
+    return(matchedInit(call, second, str2, strlen((const char *) str2)));
+}
+
 /*
  * Find the second string in the first, after resolving the collation,
  * for the functions of F&O 3.1, 5.5. The empty sequence is the empty
- * string, which every string contains at its start. Sets *at to the
- * byte offset of the match. Returns 1 if found, 0 if not, or -1 after
- * recording an error.
+ * string, which every string contains at its start. Bytes that aren't
+ * UTF-8 match as U+FFFD. Sets *start and *end to the byte offsets of
+ * the match in the first string as it is. Returns 1 if found, 0 if
+ * not, or -1 after recording an error.
  */
 static int
-findArgument(xp3FuncCall *call, xp3Value **args, int count, size_t *at) {
+findArgument(xp3FuncCall *call, xp3Value **args, int count, size_t *start,
+             size_t *end) {
     const xmlChar *haystack = argString(args[0]);
-    const xmlChar *needle = argString(args[1]);
+    xp3Matched hay;
+    xp3Matched needle;
     xp3Collation collation;
+    size_t at = 0;
+    int found = -1;
 
+    *start = 0;
+    *end = 0;
     if (callCollation(call, args, count, 2, &collation) < 0)
         return(-1);
-    return(findString(call, collation, haystack,
-                      strlen((const char *) haystack), needle,
-                      strlen((const char *) needle), at));
+    if (matchedPair(call, args, &hay, &needle) == 0)
+        found = findString(call, collation, hay.str, hay.len, needle.str,
+                           needle.len, &at);
+    if (found > 0) {
+        *start = at;
+        *end = at + needle.len;
+        if (hay.copy != NULL) {
+            size_t hayLen = strlen((const char *) haystack);
+
+            *start = originalOffset(haystack, hayLen, *start);
+            *end = originalOffset(haystack, hayLen, *end);
+        }
+    }
+    matchedClear(&hay);
+    matchedClear(&needle);
+    return(found);
 }
 
 /**
@@ -1040,8 +1212,9 @@ findArgument(xp3FuncCall *call, xp3Value **args, int count, size_t *at) {
  */
 xp3Value *
 xp3FnContains(xp3FuncCall *call, xp3Value **args, int count) {
-    size_t at;
-    int found = findArgument(call, args, count, &at);
+    size_t start;
+    size_t end;
+    int found = findArgument(call, args, count, &start, &end);
 
     if (found < 0)
         return(NULL);
@@ -1060,16 +1233,20 @@ xp3FnContains(xp3FuncCall *call, xp3Value **args, int count) {
  */
 xp3Value *
 xp3FnStartsWith(xp3FuncCall *call, xp3Value **args, int count) {
-    const xmlChar *str = argString(args[0]);
-    const xmlChar *prefix = argString(args[1]);
-    size_t prefixLen = strlen((const char *) prefix);
+    xp3Matched str;
+    xp3Matched prefix;
     xp3Collation collation;
+    xp3Value *result = NULL;
 
     if (callCollation(call, args, count, 2, &collation) < 0)
         return(NULL);
-    return(xp3FuncAtomic(call, xp3AtomicNewBoolean(
-        (prefixLen <= strlen((const char *) str)) &&
-        bytesEqual(collation, str, prefix, prefixLen))));
+    if (matchedPair(call, args, &str, &prefix) == 0)
+        result = xp3FuncAtomic(call, xp3AtomicNewBoolean(
+            (prefix.len <= str.len) &&
+            bytesEqual(collation, str.str, prefix.str, prefix.len)));
+    matchedClear(&str);
+    matchedClear(&prefix);
+    return(result);
 }
 
 /**
@@ -1084,17 +1261,21 @@ xp3FnStartsWith(xp3FuncCall *call, xp3Value **args, int count) {
  */
 xp3Value *
 xp3FnEndsWith(xp3FuncCall *call, xp3Value **args, int count) {
-    const xmlChar *str = argString(args[0]);
-    const xmlChar *suffix = argString(args[1]);
-    size_t len = strlen((const char *) str);
-    size_t suffixLen = strlen((const char *) suffix);
+    xp3Matched str;
+    xp3Matched suffix;
     xp3Collation collation;
+    xp3Value *result = NULL;
 
     if (callCollation(call, args, count, 2, &collation) < 0)
         return(NULL);
-    return(xp3FuncAtomic(call, xp3AtomicNewBoolean(
-        (suffixLen <= len) &&
-        bytesEqual(collation, str + len - suffixLen, suffix, suffixLen))));
+    if (matchedPair(call, args, &str, &suffix) == 0)
+        result = xp3FuncAtomic(call, xp3AtomicNewBoolean(
+            (suffix.len <= str.len) &&
+            bytesEqual(collation, str.str + str.len - suffix.len,
+                       suffix.str, suffix.len)));
+    matchedClear(&str);
+    matchedClear(&suffix);
+    return(result);
 }
 
 /**
@@ -1110,12 +1291,13 @@ xp3FnEndsWith(xp3FuncCall *call, xp3Value **args, int count) {
  */
 xp3Value *
 xp3FnSubstringBefore(xp3FuncCall *call, xp3Value **args, int count) {
-    size_t at;
-    int found = findArgument(call, args, count, &at);
+    size_t start;
+    size_t end;
+    int found = findArgument(call, args, count, &start, &end);
 
     if (found < 0)
         return(NULL);
-    return(newString(call, argString(args[0]), found ? at : 0));
+    return(newString(call, argString(args[0]), start));
 }
 
 /**
@@ -1132,16 +1314,15 @@ xp3FnSubstringBefore(xp3FuncCall *call, xp3Value **args, int count) {
 xp3Value *
 xp3FnSubstringAfter(xp3FuncCall *call, xp3Value **args, int count) {
     const xmlChar *str = argString(args[0]);
-    size_t skip = strlen((const char *) argString(args[1]));
-    size_t at;
-    int found = findArgument(call, args, count, &at);
+    size_t start;
+    size_t end;
+    int found = findArgument(call, args, count, &start, &end);
 
     if (found < 0)
         return(NULL);
     if (!found)
         return(newString(call, BAD_CAST "", 0));
-    return(newString(call, str + at + skip,
-                     strlen((const char *) str) - at - skip));
+    return(newString(call, str + end, strlen((const char *) str) - end));
 }
 
 /*
@@ -1164,6 +1345,9 @@ xp3FnTokenize(xp3FuncCall *call, xp3Value **args, int count) {
     xp3SeqBuilder builder;
 
     (void) count;
+    /* The string is read, and its tokens together are no longer */
+    if (xp3FuncBytes(call, 2 * (uint64_t) strlen((const char *) str)) < 0)
+        return(NULL);
     xp3FuncBuilderInit(call, &builder);
     while (*str != 0) {
         const xmlChar *start;
@@ -1242,10 +1426,12 @@ escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
     size_t pos = 0;
     xp3StrBuf buf;
 
+    if (xp3FuncBytes(call, len) < 0)
+        return(NULL);
     bufInit(&buf, name);
     while (pos < len) {
         size_t start = pos;
-        int c = nextChar(str, len, &pos);
+        int c = xp3NextChar(str, len, &pos);
         xmlChar bytes[4];
         xmlChar escaped[12];
         int count;

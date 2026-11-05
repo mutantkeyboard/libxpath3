@@ -41,8 +41,11 @@ typedef enum
     XP3_ERR_XPST0051,  /* sequence type with a non-atomic type */
     XP3_ERR_XPST0080,  /* cast to an abstract type */
     XP3_ERR_XPST0081,  /* unbound namespace prefix */
+    XP3_ERR_XQST0034,  /* function name and arity registered twice */
     XP3_ERR_XQST0039,  /* duplicate parameter name */
+    XP3_ERR_XQST0045,  /* function name in a reserved namespace */
     XP3_ERR_XQST0052,  /* cast to an unknown or complex type */
+    XP3_ERR_XQST0060,  /* function name in no namespace */
     XP3_ERR_XQST0070,  /* the xmlns namespace in a name */
     XP3_ERR_XPDY0002,  /* context item or variable value absent */
     XP3_ERR_XPDY0050,  /* the root of the context node is no document */

@@ -18,6 +18,7 @@
 
 #include <libxpath3/xpath3.h>
 #include "private/xp3ast.h"
+#include "private/xp3func.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 
@@ -65,5 +66,9 @@ struct _xp3Expr {
 xp3Expr *
 xp3CompileLength(const xp3StaticContext *ctx, const xmlChar *expr,
                  size_t length, xp3Error **error);
+
+xp3ExtFunction *
+xp3CompileSignature(const xp3StaticContext *ctx, const xmlChar *signature,
+                    xp3Error **error);
 
 #endif /* XP3_XP3STATIC_H */

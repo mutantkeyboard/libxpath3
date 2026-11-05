@@ -9,10 +9,11 @@
  * that change it: path steps, predicates and filters.
  *
  * Evaluation covers XPath 3.1 sections 3.1 (primary expressions, with
- * static function calls), 3.2.1 (filters), 3.3 (paths), 3.4 to 3.8
- * (sequences and the operators), 3.9 (for), 3.10 (let), 3.12 (if),
- * 3.13 (quantified expressions), 3.14 (types), 3.15 (simple map) and
- * 3.16 (arrows to named functions). Built-in functions without an
+ * static function calls, also of extension functions), 3.2.1
+ * (filters), 3.3 (paths), 3.4 to 3.8 (sequences and the operators),
+ * 3.9 (for), 3.10 (let), 3.12 (if), 3.13 (quantified expressions),
+ * 3.14 (types), 3.15 (simple map) and 3.16 (arrows to named
+ * functions). Built-in functions without an
  * implementation raise UNSUPPORTED, and so do maps, arrays, function
  * items and dynamic calls, which come with Part 12.
  *
@@ -208,6 +209,49 @@ xp3SetMaxSequenceLength(xp3DynamicContext *ctx, size_t max) {
     return(0);
 }
 
+/**
+ * Limit the steps of work one evaluation may take: each expression
+ * evaluated, each node an axis visits, each pair of values a general
+ * comparison tries, each item of an expanded range, and each 256 bytes
+ * of strings that comparisons and functions read or make. Past the
+ * limit, the evaluation fails with the error LIMIT. The count starts
+ * again with each evaluation. The default is 0, no limit, as for
+ * libxml2's XPath operation limit, so an expression takes as long as
+ * its input makes it; expressions from untrusted sources need a limit.
+ * Parts of an expression that compiling evaluated already take no
+ * steps, and the C code of an extension function isn't counted, only
+ * the conversion of its arguments and result.
+ *
+ * @param ctx  the context
+ * @param max  the most steps, or 0 for no limit
+ * @returns 0, or -1 if ctx is NULL
+ */
+int
+xp3SetMaxSteps(xp3DynamicContext *ctx, uint64_t max) {
+    if (ctx == NULL)
+        return(-1);
+    ctx->maxOperations = max;
+    return(0);
+}
+
+/**
+ * Set per-evaluation data for extension functions, which they read
+ * with xp3FunctionUserData(): for example the handler object of a
+ * binding, when an expression compiled once is evaluated with
+ * different handlers.
+ *
+ * @param ctx       the context
+ * @param userData  any pointer, never freed by the library
+ * @returns 0, or -1 if ctx is NULL
+ */
+int
+xp3SetDynamicContextUserData(xp3DynamicContext *ctx, void *userData) {
+    if (ctx == NULL)
+        return(-1);
+    ctx->userData = userData;
+    return(0);
+}
+
 /*
  * Evaluation state
  */
@@ -231,12 +275,9 @@ typedef struct {
     uint64_t maxOperations;     /* 0 for no limit */
     size_t maxBytes;            /* folding only: most bytes of a value,
                                  * see evalCheckSize(); 0 for no limit */
+    void *userData;             /* of the dynamic context */
     xp3Error *err;              /* the first error */
 } xp3Eval;
-
-/* Measuring the size of values while folding costs a step per this
- * many bytes, so it can't take longer than the steps allow */
-#define XP3_BYTES_PER_STEP 256
 
 static xp3Value *
 evalExpr(xp3Eval *ev, const xp3AstNode *node);
@@ -288,16 +329,17 @@ evalBuildError(xp3Eval *ev, xp3ErrCode code, const xp3AstNode *node) {
 
 /*
  * Count steps of work: each expression evaluated, each node an axis
- * visits, each pair a general comparison tries and each item of an
- * expanded range. Past the limit, the evaluation fails with LIMIT.
- * Returns 0 or -1.
+ * visits, each pair a general comparison tries, each item of an
+ * expanded range, and each XP3_BYTES_PER_STEP bytes of strings that
+ * comparisons and functions read or make. Past the limit, the
+ * evaluation fails with LIMIT. Returns 0 or -1.
  */
 static int
 evalSteps(xp3Eval *ev, const xp3AstNode *node, uint64_t steps) {
     ev->operations += steps;
     if ((ev->maxOperations > 0) && (ev->operations > ev->maxOperations)) {
         evalError(ev, XP3_ERR_LIMIT, node, "the evaluation needs more than "
-                  "%lu steps", (unsigned long) ev->maxOperations);
+                  "%llu steps", (unsigned long long) ev->maxOperations);
         return(-1);
     }
     return(0);
@@ -1642,6 +1684,18 @@ compareError(xp3Eval *ev, xp3ErrCode err, const xp3AstNode *node,
         evalNoMemory(ev);
 }
 
+/* Count the steps of comparing two values: a step per
+ * XP3_BYTES_PER_STEP bytes of strings, binary values or digits, as the
+ * string functions count them. Returns 0 or -1. */
+static int
+compareSteps(xp3Eval *ev, const xp3AstNode *node, const xp3Atomic *left,
+             const xp3Atomic *right) {
+    uint64_t bytes = (uint64_t) xp3AtomicSize(left, SIZE_MAX) +
+                     xp3AtomicSize(right, SIZE_MAX);
+
+    return(evalSteps(ev, node, bytes / XP3_BYTES_PER_STEP));
+}
+
 /* eq, ne, lt, le, gt, ge (XPath 3.1, 3.7.1): untyped values compare as
  * strings */
 static xp3Value *
@@ -1662,6 +1716,11 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(left);
         xp3AtomicUnref(right);
         return(xp3ValueEmpty());
+    }
+    if (compareSteps(ev, node, left, right) < 0) {
+        xp3AtomicUnref(left);
+        xp3AtomicUnref(right);
+        return(NULL);
     }
     err = xp3CompareAtomics((xp3AstOp) node->op, left, right, ev->level,
                             &result);
@@ -1706,7 +1765,8 @@ comparePair(xp3Eval *ev, const xp3AstNode *node, xp3Atomic *left,
     if ((left != NULL) && (right->type == XP3_TYPE_UNTYPED_ATOMIC))
         right = castUntyped(ev, right, generalTarget(left->type),
                             node->last);
-    if ((left != NULL) && (right != NULL)) {
+    if ((left != NULL) && (right != NULL) &&
+        (compareSteps(ev, node, left, right) == 0)) {
         err = xp3CompareAtomics((xp3AstOp) node->op, left, right,
                                 ev->level, &result);
         if (err != XP3_ERR_OK) {
@@ -2446,7 +2506,12 @@ evalConcat(xp3Eval *ev, const xp3AstNode *node) {
     if (rightLen > INT32_MAX - leftLen) {
         evalError(ev, XP3_ERR_LIMIT, node, "the result of || would be "
                   "longer than 2 GB");
-    } else {
+    } else if ((ev->maxBytes > 0) && (leftLen + rightLen > ev->maxBytes)) {
+        /* Checked before it is built, as fn:concat does */
+        evalError(ev, XP3_ERR_LIMIT, node, "a value would have more than "
+                  "%lu bytes", (unsigned long) ev->maxBytes);
+    } else if (evalSteps(ev, node, (leftLen + rightLen) /
+                                   XP3_BYTES_PER_STEP) == 0) {
         str = xmlRealloc(left, leftLen + rightLen + 1);
         if (str != NULL) {
             left = str;
@@ -2530,6 +2595,12 @@ struct _xp3FuncCall {
     const xp3AstNode *node;
 };
 
+/* The call of an extension function, as its implementation sees it
+ * through the public API */
+struct _xp3FunctionCall {
+    xp3FuncCall call;
+};
+
 /* The name of a parameter type, for messages */
 static const char *
 paramTypeName(const xp3FuncType *type) {
@@ -2547,6 +2618,8 @@ paramTypeName(const xp3FuncType *type) {
             return("map(*)");
         case XP3_AST_ARRAY_TEST:
             return("array(*)");
+        case XP3_AST_EMPTY_SEQUENCE_TYPE:
+            return("empty-sequence()");
         default:
             return("item()");
     }
@@ -2602,15 +2675,21 @@ paramItemMatches(xp3Item item, const xp3FuncType *type) {
     }
 }
 
-/* Record an XPTY0004 for argument index (1-based) of a call */
+/* Record an XPTY0004 for argument index (1-based) of a call, or for
+ * its result if index is 0 */
 static void
 argumentError(xp3Eval *ev, const xp3AstNode *call, int index,
               const xp3AstNode *arg, const char *problem,
               const xp3FuncType *type) {
     char name[XP3_NAME_BUF];
+    char what[32];
 
-    evalError(ev, XP3_ERR_XPTY0004, arg, "argument %d of %s#%d %s, where "
-              "%s%s%s is expected", index,
+    if (index > 0)
+        snprintf(what, sizeof(what), "argument %d", index);
+    else
+        snprintf(what, sizeof(what), "the result");
+    evalError(ev, XP3_ERR_XPTY0004, arg, "%s of %s#%d %s, where "
+              "%s%s%s is expected", what,
               displayName(call, name, sizeof(name)),
               (int) xp3AstChildCount(call), problem,
               (type->kind == XP3_AST_ATOMIC_TYPE) ? "xs:" : "",
@@ -2675,12 +2754,13 @@ convertAtomic(xp3Eval *ev, xp3Atomic *atomic, const xp3FuncType *type,
 
 /*
  * Apply the function conversion rules (XPath 3.1, 3.1.5.2) to argument
- * index (1-based) of a call: atomize it if an atomic type is expected,
- * convert each value to that type, and check the result against the
- * type and its occurrence [err:XPTY0004]. XPath 1.0 compatibility mode
- * doesn't exist (doc/DESIGN.md 5.1), so the rules are the same at
- * every level. Takes over the reference to value. Returns the
- * converted value, or NULL on error.
+ * index (1-based) of a call, or to the result of an extension function
+ * if index is 0: atomize it if an atomic type is expected, convert
+ * each value to that type, and check the result against the type and
+ * its occurrence [err:XPTY0004]. XPath 1.0 compatibility mode doesn't
+ * exist (doc/DESIGN.md 5.1), so the rules are the same at every level.
+ * Takes over the reference to value. Returns the converted value, or
+ * NULL on error.
  */
 static xp3Value *
 convertArgument(xp3Eval *ev, xp3Value *value, const xp3FuncType *type,
@@ -2693,6 +2773,14 @@ convertArgument(xp3Eval *ev, xp3Value *value, const xp3FuncType *type,
     int found;
     char problem[XP3_NAME_BUF];
 
+    if (type->kind == XP3_AST_EMPTY_SEQUENCE_TYPE) {
+        if (xp3ValueCount(value) == 0)
+            return(value);
+        argumentError(ev, call, index, arg, "is not the empty sequence",
+                      type);
+        xp3ValueUnref(value);
+        return(NULL);
+    }
     if (type->kind == XP3_AST_ATOMIC_TYPE) {
         value = atomize(ev, value, arg);
         if (value == NULL)
@@ -2796,6 +2884,63 @@ hasPlaceholder(const xp3AstNode *node) {
 }
 
 /*
+ * The size of a sequence an extension function returned, the sum of
+ * its items' xp3AtomicSize(), counted up to more than max
+ */
+static size_t
+resultSize(const xp3Value *value, size_t max) {
+    size_t size = 0;
+    xp3Iter iter;
+    xp3Item item;
+
+    xp3IterInit(&iter, value);
+    while ((size <= max) && (xp3IterNext(&iter, &item) > 0)) {
+        if (item.kind == XP3_ITEM_ATOMIC)
+            size += xp3AtomicSize(item.u.atomic, max - size + 1);
+        xp3ItemUnref(item);
+    }
+    return(size);
+}
+
+/*
+ * Call an extension function with the converted arguments, and convert
+ * its result to the declared type with the same rules, as XQuery 3.1,
+ * 4.18 does for the result of a function declaration. The result
+ * counts against the limits like a sequence the evaluator built.
+ */
+static xp3Value *
+callExtension(xp3Eval *ev, const xp3AstNode *node,
+              const xp3ExtFunction *func, xp3Value **args, int count) {
+    xp3FunctionCall call;
+    xp3Value *result;
+
+    call.call.ev = ev;
+    call.call.node = node;
+    result = func->impl(&call, args, count, func->userData);
+    /* An implementation that raised an error and returned a value
+     * anyway still fails */
+    if (ev->err != NULL) {
+        xp3ValueUnref(result);
+        return(NULL);
+    }
+    if (result == NULL) {
+        evalNoMemory(ev);
+        return(NULL);
+    }
+    /* Ranges never count, as everywhere else. While folding, the
+     * size of a single value is checked by evalExpr(). */
+    if (((result->shape != XP3_SEQ_RANGE) &&
+         (xp3ValueCount(result) > ev->maxItems)) ||
+        ((ev->maxBytes > 0) && (result->shape == XP3_SEQ_ARRAY) &&
+         (resultSize(result, ev->maxBytes) > ev->maxBytes))) {
+        evalBuildError(ev, XP3_ERR_LIMIT, node);
+        xp3ValueUnref(result);
+        return(NULL);
+    }
+    return(convertArgument(ev, result, &func->info.result, node, 0, node));
+}
+
+/*
  * A static function call (XPath 3.1, 3.1.5), or an arrow to a named
  * function (3.16), whose left side is the first argument: the
  * arguments are evaluated in order and converted to the parameter
@@ -2808,7 +2953,7 @@ evalCall(xp3Eval *ev, const xp3AstNode *node) {
     xp3Value **args = fixed;
     const xp3AstNode *child;
     xp3Value *result = NULL;
-    xp3FuncImpl impl;
+    xp3FuncImpl impl = NULL;
     xp3FuncCall call;
     size_t arity = xp3AstChildCount(node);
     int count = 0;
@@ -2822,9 +2967,11 @@ evalCall(xp3Eval *ev, const xp3AstNode *node) {
     /* A constructor function as a function item, or => $f() */
     if (info == NULL)
         return(evalUnsupported(ev, node));
-    impl = xp3FuncImplementation(info);
-    if (impl == NULL)
-        return(evalUnsupported(ev, node));
+    if (!(info->flags & XP3_FUNC_EXTENSION)) {
+        impl = xp3FuncImplementation(info);
+        if (impl == NULL)
+            return(evalUnsupported(ev, node));
+    }
 
     if (arity > XP3_CALL_ARGS) {
         if (arity > SIZE_MAX / sizeof(xp3Value *)) {
@@ -2850,6 +2997,11 @@ evalCall(xp3Eval *ev, const xp3AstNode *node) {
         args[count++] = value;
     }
 
+    if (info->flags & XP3_FUNC_EXTENSION) {
+        result = callExtension(ev, node, (const xp3ExtFunction *) info, args,
+                               count);
+        goto done;
+    }
     call.ev = ev;
     call.node = node;
     result = impl(&call, args, count);
@@ -2964,6 +3116,42 @@ xp3FuncSteps(xp3FuncCall *call, uint64_t steps) {
 }
 
 /**
+ * Count the steps of reading or making strings: one per
+ * XP3_BYTES_PER_STEP bytes, counted by totals, so that a short string
+ * costs nothing.
+ *
+ * @param call   the call
+ * @param bytes  the bytes read or made
+ * @returns 0, or -1 after recording LIMIT
+ */
+int
+xp3FuncBytes(xp3FuncCall *call, uint64_t bytes) {
+    return(evalSteps(call->ev, call->node, bytes / XP3_BYTES_PER_STEP));
+}
+
+/**
+ * Check, before building it, that a string of a call's result fits
+ * the byte limit of a fold, as sequences are checked item by item
+ * (evalCheckSize()). Without folding there is no such limit.
+ *
+ * @param call  the call
+ * @param len   the length of the string in bytes
+ * @returns 0, or -1 after recording LIMIT
+ */
+int
+xp3FuncStringFits(xp3FuncCall *call, size_t len) {
+    char name[XP3_NAME_BUF];
+
+    if ((call->ev->maxBytes == 0) || (len <= call->ev->maxBytes))
+        return(0);
+    evalError(call->ev, XP3_ERR_LIMIT, call->node, "the result of %s "
+              "would have more than %lu bytes",
+              callName(call, name, sizeof(name)),
+              (unsigned long) call->ev->maxBytes);
+    return(-1);
+}
+
+/**
  * Get the language level of the evaluation, for operations that differ
  * between the levels, such as ordering binary values.
  *
@@ -3045,6 +3233,49 @@ xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic) {
 xp3Value *
 xp3FuncAtomize(xp3FuncCall *call, xp3Value *value) {
     return(atomize(call->ev, value, call->node));
+}
+
+/*
+ * The call interface of extension functions (xpath3.h)
+ */
+
+/**
+ * Raise an error from the implementation of an extension function, as
+ * fn:error does, at the position of the call; the implementation then
+ * returns NULL. Only the first error of a call counts.
+ *
+ * @param call       the call
+ * @param uri        the namespace of the error code, NULL for the err
+ *                   namespace (http://www.w3.org/2005/xqt-errors), so
+ *                   standard codes such as FORG0001 need no URI
+ * @param localName  the local name of the code, NULL for err:FOER0000
+ * @param message    the message, may be NULL
+ */
+void
+xp3FunctionError(xp3FunctionCall *call, const xmlChar *uri,
+                 const xmlChar *localName, const xmlChar *message) {
+    if (call == NULL)
+        return;
+    xp3FuncUserError(&call->call, (uri != NULL) ? uri : BAD_CAST XP3_ERR_NS,
+                     localName, message);
+}
+
+/**
+ * Get the per-evaluation data of a call of an extension function.
+ *
+ * A call with constant arguments to a function registered with
+ * #XP3_FUNCTION_DETERMINISTIC may be evaluated while compiling, where
+ * there is no dynamic context, and gets NULL.
+ *
+ * @param call  the call
+ * @returns the pointer set with xp3SetDynamicContextUserData() on the
+ *          dynamic context of the evaluation, or NULL
+ */
+void *
+xp3FunctionUserData(xp3FunctionCall *call) {
+    if (call == NULL)
+        return(NULL);
+    return(call->call.ev->userData);
 }
 
 /* Binary operators other than and and or */
@@ -3212,6 +3443,7 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
     ev->maxItems = (ctx != NULL) ? ctx->maxSequenceLength :
                                    XP3_MAX_SEQUENCE_ITEMS;
     ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
+    ev->userData = (ctx != NULL) ? ctx->userData : NULL;
     ev->level = expr->level;
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
         /* Mapped now, not when it was set: text may have been added
@@ -3577,6 +3809,83 @@ xp3NewBooleanSequence(const int *values, size_t count) {
 }
 
 /**
+ * Create a sequence of atomic values of any built-in type, such as
+ * xs:decimal or xs:untypedAtomic, which the other constructors can't
+ * make: each lexical form is cast to the type as from xs:string
+ * (F&O 3.1, 19.2), so whitespace is handled as the type's facets say.
+ * Casting to the date, time and duration types and to xs:QName is not
+ * implemented yet and raises UNSUPPORTED.
+ *
+ * @param type      the type of all values, not xs:anyAtomicType or
+ *                  xs:NOTATION, which are abstract
+ * @param lexicals  their lexical forms in UTF-8, may be NULL if count
+ *                  is 0
+ * @param count     the number of values
+ * @param error     where to store the error, or NULL. It is set to NULL
+ *                  on success, and must be freed with xp3ErrorFree()
+ *                  otherwise.
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL on
+ *          error: the error of the cast for an invalid value, such as
+ *          FORG0001, or NO_MEMORY. An unknown or abstract type, a NULL
+ *          array or string, a string that isn't UTF-8, or more than 10
+ *          million values return NULL without an error.
+ */
+xp3Sequence *
+xp3NewAtomicSequence(xp3AtomicType type, const xmlChar **lexicals,
+                     size_t count, xp3Error **error) {
+    xp3SeqBuilder builder;
+    xp3Value *seq;
+    size_t i;
+
+    if (error != NULL)
+        *error = NULL;
+    if (((unsigned) type >= XP3_TYPE_COUNT) || xp3TypeIsAbstract(type) ||
+        ((lexicals == NULL) && (count > 0)) ||
+        (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        xp3Atomic *str;
+        xp3Atomic *value = NULL;
+        xp3ErrCode err;
+
+        if ((lexicals[i] == NULL) || (!xmlCheckUTF8(lexicals[i]))) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        str = xp3AtomicNewString(XP3_TYPE_STRING, lexicals[i],
+                                 strlen((const char *) lexicals[i]));
+        err = (str != NULL) ? xp3CastAtomic(str, type, &value) :
+                              XP3_ERR_NO_MEMORY;
+        xp3AtomicUnref(str);
+        if (err == XP3_ERR_OK) {
+            if (builderAddAtomic(&builder, value) == 0)
+                continue;
+            err = XP3_ERR_NO_MEMORY;
+        } else {
+            xp3SeqBuilderClear(&builder);
+        }
+        if (error == NULL)
+            return(NULL);
+        if (err == XP3_ERR_NO_MEMORY)
+            *error = xp3ErrorNoMemory();
+        else if (err == XP3_ERR_UNSUPPORTED)
+            *error = xp3ErrorNew(err, 0, 0, "casting to xs:%s is not "
+                                 "implemented yet",
+                                 (const char *) xp3TypeLocalName(type));
+        else
+            *error = xp3ErrorNew(err, 0, 0, "\"%.40s\" is not a valid "
+                                 "xs:%s", (const char *) lexicals[i],
+                                 (const char *) xp3TypeLocalName(type));
+        return(NULL);
+    }
+    seq = xp3SeqBuilderFinish(&builder);
+    if ((seq == NULL) && (error != NULL))
+        *error = xp3ErrorNoMemory();
+    return(seq);
+}
+
+/**
  * Release a sequence. NULL is ignored.
  *
  * @param seq  the sequence
@@ -3584,6 +3893,28 @@ xp3NewBooleanSequence(const int *values, size_t count) {
 void
 xp3FreeSequence(xp3Sequence *seq) {
     xp3ValueUnref(seq);
+}
+
+/**
+ * Keep a sequence beyond the call it was passed to: an extension
+ * function returns its argument this way, and a binding keeps one.
+ *
+ * Usually this adds a reference and returns seq itself. A sequence
+ * that is, or holds values of, a constant that compiling folded is
+ * shared by every evaluation and lives only as long as its expression,
+ * so for it this returns a copy with a reference of its own. Either
+ * way, keep the pointer this returns, not seq, and release it with
+ * xp3FreeSequence().
+ *
+ * @param seq  the sequence, may be NULL
+ * @returns seq with a reference added, a copy of it, or NULL if seq is
+ *          NULL or memory allocation failed
+ */
+xp3Sequence *
+xp3SequenceRef(xp3Sequence *seq) {
+    if (seq == NULL)
+        return(NULL);
+    return(xp3ValueDetach(xp3ValueRef(seq)));
 }
 
 /**

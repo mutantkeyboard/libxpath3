@@ -10,6 +10,8 @@
 #ifndef XP3_TESTALLOC_H
 #define XP3_TESTALLOC_H
 
+#include <stddef.h>
+
 /*
  * Typical use: run an operation with the n-th allocation failing, for
  * n = 0, 1, 2, ... until xp3TestAllocFailed() reports that no failure
@@ -38,5 +40,10 @@ xp3TestAllocFailAt(int n);
 /* Whether a failure was injected since the last xp3TestAllocFailAt(). */
 int
 xp3TestAllocFailed(void);
+
+/* The size of the largest allocation since xp3TestAllocInstall(), for
+ * tests that a limit stops work before memory is spent on it. */
+size_t
+xp3TestAllocLargest(void);
 
 #endif /* XP3_TESTALLOC_H */

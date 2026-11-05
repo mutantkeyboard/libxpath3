@@ -31,6 +31,10 @@
 /* Reserved for namespace declarations, never in names */
 #define XP3_NS_XMLNS "http://www.w3.org/2000/xmlns/"
 
+/* Reserved by XQuery 3.1, 4.18, like xml, xs, xsi, fn, math, map and
+ * array: no extension function can be in these namespaces */
+#define XP3_NS_XQUERY "http://www.w3.org/2012/xquery"
+
 /* Default limit on the length of an expression, in bytes */
 #define XP3_DEFAULT_MAX_EXPR_LENGTH (1024 * 1024)
 /* Default XPath version */
@@ -51,6 +55,10 @@ struct _xp3StaticContext {
     xmlChar *defaultElementNs;  /* for element and type names, or NULL */
     xmlHashTable *variables;    /* (local name, URI) of declared
                                  * variables, or NULL if none */
+    xmlHashTable *functions;    /* (local name, URI) -> the
+                                 * xp3ExtFunction of each registered
+                                 * arity, chained by next, or NULL if
+                                 * none */
     size_t maxExprLength;       /* compile-time limit, in bytes */
     int maxParseDepth;          /* compile-time limit on nesting */
     int noOptimize;             /* internal, for tests and the QT3
@@ -63,5 +71,11 @@ xp3StaticContextLookupNs(const xp3StaticContext *ctx, const xmlChar *prefix);
 int
 xp3StaticContextHasVariable(const xp3StaticContext *ctx, const xmlChar *uri,
                             const xmlChar *localName);
+
+struct _xp3ExtFunction;
+
+const struct _xp3ExtFunction *
+xp3StaticContextFunctions(const xp3StaticContext *ctx, const xmlChar *uri,
+                          const xmlChar *localName);
 
 #endif /* XP3_XP3CONTEXT_H */

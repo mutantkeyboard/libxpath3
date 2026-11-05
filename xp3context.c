@@ -16,6 +16,8 @@
 
 #include "private/xp3context.h"
 #include "private/xp3error.h"
+#include "private/xp3func.h"
+#include "private/xp3static.h"
 
 
 /* Namespaces bound in every new static context */
@@ -52,6 +54,20 @@ xp3BindNs(xp3StaticContext *ctx, const xmlChar *prefix, const xmlChar *uri) {
         return(-1);
     }
     return(0);
+}
+
+/* Free the entries of a name in the function registry */
+static void
+xp3FreeFunctions(void *payload, const xmlChar *name) {
+    xp3ExtFunction *func = payload;
+
+    (void) name;
+    while (func != NULL) {
+        xp3ExtFunction *next = func->next;
+
+        xmlFree(func);
+        func = next;
+    }
 }
 
 /**
@@ -104,6 +120,7 @@ xp3FreeStaticContext(xp3StaticContext *ctx) {
         return;
     xmlHashFree(ctx->namespaces, xmlHashDefaultDeallocator);
     xmlHashFree(ctx->variables, NULL);
+    xmlHashFree(ctx->functions, xp3FreeFunctions);
     xmlFree(ctx->defaultElementNs);
     xmlFree(ctx);
 }
@@ -232,6 +249,97 @@ xp3DeclareVariable(xp3StaticContext *ctx, const xmlChar *uri,
 }
 
 /**
+ * Register an extension function, for expressions compiled with this
+ * context afterwards.
+ *
+ * The signature is written as F&O writes them, for example
+ * "u:decimal-or-zero($value as item()*) as xs:decimal", and parsed
+ * once, here. Its prefixes and the default element namespace of type
+ * names are those of the context so far, and parameter names are only
+ * for messages. A parameter without "as" is item()*, and so is the
+ * result. The name must be in a namespace, and not in one of the
+ * namespaces XQuery 3.1, 4.18 reserves: xml, xs, xsi, fn, math, map,
+ * array and http://www.w3.org/2012/xquery. An unprefixed name is in
+ * the default function namespace, fn, so it is reserved too. One name
+ * may have several arities, each registered once.
+ *
+ * Without #XP3_FUNCTION_DETERMINISTIC in flags, the function is
+ * nondeterministic: it is called on each evaluation, also with
+ * constant arguments. Compiled expressions copy what they need, so
+ * the context may be freed after compiling.
+ *
+ * Errors: XPST0003 for a syntax error in the signature, XPST0081 for
+ * an undeclared prefix, XPST0051 for an unknown or non-atomic type
+ * name, XQST0060 for a name in no namespace, XQST0045 for a reserved
+ * namespace, XQST0070 for the xmlns namespace, XQST0034 for a name
+ * and arity registered already, XQST0039 for a parameter name used
+ * twice, UNSUPPORTED for item types the function conversion rules
+ * can't check yet (element and attribute tests with a name or type,
+ * schema-element(), schema-attribute(), document-node() with an
+ * element test, processing-instruction() with a name, typed function,
+ * map and array tests, and xs:error), LIMIT for a signature beyond
+ * the limits of expressions, and NO_MEMORY. On error nothing is
+ * registered.
+ *
+ * @param ctx        the context
+ * @param signature  the signature, a NUL-terminated UTF-8 string
+ * @param flags      xp3FunctionFlags, 0 for none
+ * @param impl       the implementation
+ * @param userData   passed to impl; never freed by the library, so it
+ *                   must outlive every expression compiled with ctx
+ * @param error      where to store the error, or NULL. It is set to
+ *                   NULL on success, and must be freed with
+ *                   xp3ErrorFree() otherwise.
+ * @returns 0 on success, -1 on error. A NULL ctx, signature or impl,
+ *          or an unknown flag, returns -1 without an error.
+ */
+int
+xp3RegisterFunction(xp3StaticContext *ctx, const xmlChar *signature,
+                    int flags, xp3FunctionImpl impl, void *userData,
+                    xp3Error **error) {
+    xp3ExtFunction *func;
+    xp3ExtFunction *first;
+
+    if (error != NULL)
+        *error = NULL;
+    if ((ctx == NULL) || (signature == NULL) || (impl == NULL) ||
+        ((flags & ~XP3_FUNCTION_DETERMINISTIC) != 0))
+        return(-1);
+
+    func = xp3CompileSignature(ctx, signature, error);
+    if (func == NULL)
+        return(-1);
+    func->impl = impl;
+    func->userData = userData;
+    if ((flags & XP3_FUNCTION_DETERMINISTIC) == 0)
+        func->info.flags |= XP3_FUNC_NONDETERMINISTIC;
+
+    if (ctx->functions == NULL) {
+        ctx->functions = xmlHashCreate(0);
+        if (ctx->functions == NULL)
+            goto no_memory;
+    }
+    /* xp3CompileSignature() checked that the arity is new */
+    first = xmlHashLookup2(ctx->functions, BAD_CAST func->info.name,
+                           func->uri);
+    if (first != NULL) {
+        func->next = first->next;
+        first->next = func;
+        return(0);
+    }
+    if (xmlHashAddEntry2(ctx->functions, BAD_CAST func->info.name,
+                         func->uri, func) < 0)
+        goto no_memory;
+    return(0);
+
+no_memory:
+    xmlFree(func);
+    if (error != NULL)
+        *error = xp3ErrorNoMemory();
+    return(-1);
+}
+
+/**
  * Look up the namespace URI bound to a prefix. Without a context, the
  * prefixes bound in every new context are used.
  *
@@ -270,4 +378,22 @@ xp3StaticContextHasVariable(const xp3StaticContext *ctx, const xmlChar *uri,
     if ((ctx == NULL) || (ctx->variables == NULL) || (localName == NULL))
         return(0);
     return(xmlHashLookup2(ctx->variables, localName, uri) != NULL);
+}
+
+/**
+ * Get the extension functions registered with a name.
+ *
+ * @param ctx        the context, or NULL for none
+ * @param uri        the namespace URI
+ * @param localName  the local name
+ * @returns the entry of one arity, with the others chained by next,
+ *          or NULL if none is registered
+ */
+const xp3ExtFunction *
+xp3StaticContextFunctions(const xp3StaticContext *ctx, const xmlChar *uri,
+                          const xmlChar *localName) {
+    if ((ctx == NULL) || (ctx->functions == NULL) || (uri == NULL) ||
+        (localName == NULL))
+        return(NULL);
+    return(xmlHashLookup2(ctx->functions, localName, uri));
 }
