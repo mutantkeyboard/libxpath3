@@ -263,12 +263,19 @@ There is one API for all XPath versions from 2.0 on. There is no separate XPath 
 
 - **One table of built-in functions**, each entry holding name, arity, signature and implementation. Function calls apply the function conversion rules from the signature: atomize, cast `xs:untypedAtomic`, promote numeric types.
 - **The table is generated from the W3C specifications.** `codegen/genFunctions.py` reads the F&O 3.1 function catalog, the XML source of the Recommendation's function descriptions, and writes `codegen/functions.inc`. Each entry is one signature: namespace, local name, arity, the first language level that has it, the function properties of F&O 3.1 1.7.4 (focus-dependent, context-dependent, nondeterministic, higher-order, and nondeterministic with respect to ordering); constant folding skips a call with any of the first four, while the fifth only tells the evaluator not to rely on the order of the result, and the signature text. The language level comes from comparing with F&O 1.0 (XPath 2.0) and F&O 3.0 by name and arity, so `fn:round#1` is 2.0 while `fn:round#2` is 3.0. Generating the 273 signatures avoids copying mistakes, and the few corrections to the catalog's own mistakes are listed in one place, the generator. The generator is Python, like libxml2's `codegen/`; the output is committed, so building needs no Python. The signature text is the 3.1 one at every level: where a type changed between versions, as the argument of `fn:string-join` did (`xs:string*` before 3.1, `xs:anyAtomicType*` since), the 3.1 type applies at level 2.0 and 3.0 too, because the level restricts which functions exist, not their types (5.1). Constructor functions such as `xs:integer(...)` are not in the table: they follow from the atomic types (4.2).
-- **Types as data.** The generator also writes each parameter's and the result's type, in the form a SequenceType takes in the parse tree: an item type (an atomic type or `xs:numeric`, `item()`, a kind test, or `function(*)`, `map(*)` and `array(*)`, which keep only their kind, enough for the conversion rules) and an occurrence indicator. So built-in functions need no parsing and no initialization at run time, and the library keeps no mutable global state. Parsing the 273 signature texts at first use was the alternative; it needs thread-safe one-time initialization for nothing the generator can't do once. Only extension functions will have their signature parsed, with the parser's SequenceType rules.
+- **Types as data.** The generator also writes each parameter's and the result's type, in the form a SequenceType takes in the parse tree: an item type (an atomic type or `xs:numeric`, `item()`, a kind test, or `function(*)`, `map(*)` and `array(*)`, which keep only their kind, enough for the conversion rules) and an occurrence indicator. So built-in functions need no parsing and no initialization at run time, and the library keeps no mutable global state. Parsing the 273 signature texts at first use was the alternative; it needs thread-safe one-time initialization for nothing the generator can't do once. Only extension functions have their signature parsed, with the parser's SequenceType rules, into the same data.
 - **Implementations are bound by id.** The generator gives every signature an id in the order of the table (`XP3_FN_ABS_1`, `XP3_FN_MATH_PI_0`, `XP3_FN_MAP_GET_2`), and a hand-written table in `xp3func.c` fills in the implementations by designated initializer (`[XP3_FN_NOT_1] = xp3FnNot`). A signature without one compiles and raises `UNSUPPORTED` when called (7.2), so functions can be added one at a time and the generated table is never edited by hand. Generating the implementation names into each entry instead would need a stub for all 273 signatures from the start.
 - **Calls.** Arguments are evaluated eagerly, in order, and converted by the function conversion rules (XPath 3.1, 3.1.5.2): atomized where an atomic type is expected, `xs:untypedAtomic` cast to that type (to `xs:double` for `xs:numeric`), numbers promoted along `xs:decimal`, `xs:float`, `xs:double` and `xs:anyURI` to `xs:string`, then checked against the type and occurrence (XPTY0004). There is no XPath 1.0 compatibility mode yet, so the rules are the same at every level. The types are those of F&O 3.1 at every level (5.1), so `fn:error(())` raises FOER0000 also at XPath 2.0 and 3.0, where `$code` was not optional and QT3 expects XPTY0004. Implementations get the converted arguments and a narrow call interface for the focus (XPDY0002 when it is absent), errors with any code, the step counter and the sequence limits; they never see the evaluator itself. `E1 || E2` is evaluated as `fn:concat(E1, E2)`, and an arrow to a named function as a call with the left side as first argument.
 - **Comparing sequences** (F&O 3.1, 14.2): `fn:deep-equal` compares node values under the collation, never node names, which are QNames. In mixed `xs:string` and `xs:anyURI` input to `fn:min` and `fn:max`, only a winning `xs:anyURI` becomes `xs:string`, as QT3 expects, where the text of 14.4.3 and 14.4.4 would cast every value. `fn:distinct-values` keeps the first of equal values, in input order. Maps, arrays and function items in `fn:deep-equal` raise `UNSUPPORTED` until Part 12.
 - **Stage 1 priority:** the functions that real-world validation rule sets use most come first. Those are `exists`, `count`, `sum`, `round`, `abs`, `matches`, `tokenize`, `replace`, `string-join`, `string-to-codepoints`, `upper-case`, `distinct-values`, `ends-with` and the XPath 1.0 string functions. The rest of the XPath 2.0 function library follows by chapter of the spec.
-- **Extension functions:** applications register C functions with a signature written as text, for example `xs:decimal u:decimalOrZero(item()*)`. libxpath3 parses the signature and applies the conversion rules before calling the C function, so extension functions receive correctly typed arguments.
+- **Extension functions** (since 8d): applications register C functions with `xp3RegisterFunction()` and a signature written as F&O writes them, for example `u:decimal-or-zero($value as item()*) as xs:decimal`: the form of the built-in signatures, of XQuery function declarations, and of every spec reader's habit.
+  - **Registering.** The signature is parsed once, with the parser's EQName, `$name` and SequenceType rules and the limits of expressions, at XPath 3.1 whatever the language level, since the level may change after registering. Its prefixes and the default element namespace are those of the static context so far. A parameter without `as` is `item()*`, and so is a missing result type. The types become the data the generated table has, so built-in and extension functions share one set of conversion rules. Errors are positioned in the signature: `XPST0003`, `XPST0081` and `XPST0051` as in expressions, and for the name the codes of XQuery 3.1 4.18, since XPath has none: `XQST0060` for a name in no namespace, `XQST0045` for a reserved namespace (xml, xs, xsi, fn, math, map, array and `http://www.w3.org/2012/xquery`; an unprefixed name is in the default function namespace, fn), `XQST0034` for a name and arity registered twice and `XQST0039` for a parameter name used twice. Item types the data keeps only by their kind raise `UNSUPPORTED` instead of being checked loosely: element and attribute tests with a name or type, `schema-element()`, `schema-attribute()`, `document-node()` with an element test, `processing-instruction()` with a name, typed function, map and array tests, and `xs:error`. `function(*)`, `map(*)` and `array(*)` are accepted, though no such values exist before Part 12.
+  - **Resolving.** Built-in functions are looked up first, then the registry of the static context, keyed by namespace, local name and arity. The reserved namespaces keep the two apart. Extension functions exist at every language level, the `XPST0017` messages know their arities, and named function references and dynamic calls behave as for built-in functions until Part 12.
+  - **Expressions own their copies.** Compiling copies each entry an expression calls into the expression: its name, types, implementation, user data and flags. A call never points into the static context, which can be freed after compiling (D13), and entries are never written after compiling, so threads share them without a lock. The user data has no destructor: freeing it with the registry would need the registry counted across the expressions compiled with it, and libxml2's `xmlXPathRegisterFuncNS` has none either.
+  - **Calls.** The arguments are converted like those of built-in functions and passed as borrowed `xp3Sequence`s. The result is converted and checked against the declared result type with the same rules, as XQuery 3.1 4.18 does for the body of a function declaration, so a wrong result raises `XPTY0004` instead of reaching the evaluator. It counts against the maximum sequence length, and against the limits of a fold while folding; the implementation's own C work isn't counted. An implementation raises errors with `xp3FunctionError()`, which takes the path of `fn:error`: a NULL namespace is the err namespace, so standard codes such as `FORG0001` need none, a NULL local name is `err:FOER0000`, and only the first error counts. NULL without an error is `NO_MEMORY`, since a failed allocation is why the `xp3New*Sequence()` functions return NULL. The call interface is errors and user data only: there is no focus, and a function that needs the context node takes it as an argument, as in `u:f(.)`. A focus flag can be added later without breaking the API.
+  - **User data.** One pointer comes from registering, one from the dynamic context (`xp3SetDynamicContextUserData()`, read with `xp3FunctionUserData()`), because bindings compile an expression once and evaluate it with a different handler object each time. A call folded while compiling has no dynamic context and gets NULL.
+  - **Folding.** Without `XP3_FUNCTION_DETERMINISTIC`, a function is nondeterministic and never folded: a C function that reads a clock or a file mustn't be evaluated once, silently, at compile time. With it, a call with constant arguments folds like one of a built-in function. Folding unless a flag says otherwise was the alternative, wrong by default for exactly those functions.
+  - **Results.** `xp3SequenceRef()` lets an implementation return its argument, and a binding keep one. It adds a reference, except to a folded constant, which every evaluation shares and which lives only as long as its expression: that is copied, so callers keep the pointer it returns. `xp3NewAtomicSequence()` makes values of any built-in atomic type by casting their lexical forms as from `xs:string`, so a function declared `as xs:decimal` can return one; the date and time types follow when casting to them is implemented (Part 10).
 
 ### 6.4 Regular expressions
 
@@ -312,7 +319,7 @@ The maximum sequence length exists since 7b: `xp3SetMaxSequenceLength()`, 10 mil
 
 ## 8. Public API sketch
 
-Library name `libxpath3`, API prefix `xp3`. Compiling and evaluating exist since 6b and 7b with these names; extension functions come with Part 8.
+Library name `libxpath3`, API prefix `xp3`. Compiling and evaluating exist since 6b and 7b with these names, extension functions since 8d.
 
 ```c
 /* Static context and compilation */
@@ -320,11 +327,21 @@ xp3StaticContext *xp3NewStaticContext(void);
 int  xp3DeclareNamespace(xp3StaticContext *sctx, const xmlChar *prefix, const xmlChar *uri);
 int  xp3DeclareVariable(xp3StaticContext *sctx, const xmlChar *uri, const xmlChar *localName);
 int  xp3SetDefaultElementNamespace(xp3StaticContext *sctx, const xmlChar *uri);
-int  xp3RegisterFunction(xp3StaticContext *sctx, const char *signature,
-                         xp3FunctionImpl impl, void *userData);
 int  xp3SetStaticContextLanguageLevel(xp3StaticContext *sctx, xp3LanguageLevel level);  /* XP3_XPATH_20, _30, _31 (default) */
 xp3Expr *xp3Compile(const xp3StaticContext *sctx, const xmlChar *expr, xp3Error **err);
 void xp3FreeExpr(xp3Expr *expr);
+
+/* Extension functions (6.3) */
+typedef struct _xp3FunctionCall xp3FunctionCall;                    /* opaque, valid during the call */
+typedef xp3Sequence *(*xp3FunctionImpl)(xp3FunctionCall *call, xp3Sequence **args, int count,
+                                        void *userData);           /* new sequence, or NULL on error */
+typedef enum { XP3_FUNCTION_DETERMINISTIC = 1 << 0 } xp3FunctionFlags;  /* without it: never folded */
+int   xp3RegisterFunction(xp3StaticContext *sctx, const xmlChar *signature, int flags,
+                          xp3FunctionImpl impl, void *userData, xp3Error **err);
+                          /* "u:f($a as xs:string?, $b) as xs:decimal" */
+void  xp3FunctionError(xp3FunctionCall *call, const xmlChar *uri, const xmlChar *localName,
+                       const xmlChar *message);   /* NULL uri: err namespace; NULL localName: FOER0000 */
+void *xp3FunctionUserData(xp3FunctionCall *call); /* from xp3SetDynamicContextUserData() */
 
 /* Evaluation */
 xp3DynamicContext *xp3NewDynamicContext(void);
@@ -333,6 +350,7 @@ int  xp3SetContextNode(xp3DynamicContext *dctx, xmlNode *node);  /* any node of 
 int  xp3BindVariable(xp3DynamicContext *dctx, const xmlChar *uri, const xmlChar *localName,
                      xp3Sequence *value);                           /* adds a reference; NULL unbinds */
 int  xp3SetMaxSequenceLength(xp3DynamicContext *dctx, size_t max);
+int  xp3SetDynamicContextUserData(xp3DynamicContext *dctx, void *userData);  /* for extension functions */
 xp3Sequence *xp3Evaluate(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error **err);
 int  xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *dctx, xp3Error **err);  /* 1, 0, -1 */
 
@@ -342,7 +360,10 @@ xp3Sequence  *xp3NewStringSequence(const xmlChar **strs, size_t count);
 xp3Sequence  *xp3NewIntegerSequence(const int64_t *values, size_t count);
 xp3Sequence  *xp3NewDoubleSequence(const double *values, size_t count);
 xp3Sequence  *xp3NewBooleanSequence(const int *values, size_t count);   /* 0 false, else true */
+xp3Sequence  *xp3NewAtomicSequence(xp3AtomicType type, const xmlChar **lexicals, size_t count,
+                                   xp3Error **err);                       /* cast as from xs:string */
 void          xp3FreeSequence(xp3Sequence *seq);
+xp3Sequence  *xp3SequenceRef(xp3Sequence *seq);   /* seq with a reference, or a copy of a folded constant */
 size_t        xp3SequenceLength(const xp3Sequence *seq);
 int           xp3SequenceItemKind(const xp3Sequence *seq, size_t i);     /* xp3ItemKind, -1 past the end */
 xmlNode      *xp3SequenceNode(const xp3Sequence *seq, size_t i);

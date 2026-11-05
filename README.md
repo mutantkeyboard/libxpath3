@@ -12,6 +12,7 @@ libxpath3 is an XPath 3.1 engine in C for documents parsed with [libxml2](https:
 - **XPath 3.1 on libxml2's tree**, using only libxml2's public API.
 - **XPath 2.0 and 3.0 too.** XPath 3.1 is backwards compatible, so 2.0 and 3.0 expressions work with the same API. An option restricts the language to a specific version.
 - **Exact arithmetic.** `xs:decimal` and `xs:integer` have arbitrary precision.
+- **Extension functions in C**, registered with a signature as the specification writes them, such as `u:f($a as xs:string?) as xs:decimal`. Arguments and results are converted and checked like those of the built-in functions.
 - **Safe for untrusted input.** Limits on recursion, operation count and sizes, and no file or network access unless the application allows it.
 - **A foundation for XSLT 2.0 and 3.0** in libxslt, in coordination with the libxslt maintainer.
 - **Close to libxml2.** MIT licensed and following libxml2's conventions: its memory functions, error reporting, and Meson and CMake builds.

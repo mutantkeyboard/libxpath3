@@ -194,8 +194,9 @@ typedef struct _xp3FunctionCall xp3FunctionCall;
  * The implementation of an extension function.
  *
  * It returns a new sequence, which the library owns from then on: one
- * made with the xp3New*Sequence() functions, or an argument with a
- * reference added by xp3SequenceRef(). The result is converted to the
+ * made with the xp3New*Sequence() functions, or an argument kept with
+ * xp3SequenceRef(), returning the pointer that gives, which may be a
+ * copy, and NULL if it failed. The result is converted to the
  * declared result type and checked like the arguments, so a wrong
  * result raises XPTY0004 instead of reaching the evaluator.
  *
@@ -366,8 +367,15 @@ XP3PUBFUN xp3Sequence *
 XP3PUBFUN xp3Sequence *
 		    xp3NewBooleanSequence	(const int *values,
 						 size_t count);
+XP3PUBFUN xp3Sequence *
+		    xp3NewAtomicSequence	(xp3AtomicType type,
+						 const xmlChar **lexicals,
+						 size_t count,
+						 xp3Error **error);
 XP3PUBFUN void
 		    xp3FreeSequence		(xp3Sequence *seq);
+XP3PUBFUN xp3Sequence *
+		    xp3SequenceRef		(xp3Sequence *seq);
 XP3PUBFUN size_t
 		    xp3SequenceLength		(const xp3Sequence *seq);
 XP3PUBFUN int

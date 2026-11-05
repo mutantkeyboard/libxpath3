@@ -3784,6 +3784,83 @@ xp3NewBooleanSequence(const int *values, size_t count) {
 }
 
 /**
+ * Create a sequence of atomic values of any built-in type, such as
+ * xs:decimal or xs:untypedAtomic, which the other constructors can't
+ * make: each lexical form is cast to the type as from xs:string
+ * (F&O 3.1, 19.2), so whitespace is handled as the type's facets say.
+ * Casting to the date, time and duration types and to xs:QName is not
+ * implemented yet and raises UNSUPPORTED.
+ *
+ * @param type      the type of all values, not xs:anyAtomicType or
+ *                  xs:NOTATION, which are abstract
+ * @param lexicals  their lexical forms in UTF-8, may be NULL if count
+ *                  is 0
+ * @param count     the number of values
+ * @param error     where to store the error, or NULL. It is set to NULL
+ *                  on success, and must be freed with xp3ErrorFree()
+ *                  otherwise.
+ * @returns the sequence, to be freed with xp3FreeSequence(), or NULL on
+ *          error: the error of the cast for an invalid value, such as
+ *          FORG0001, or NO_MEMORY. An unknown or abstract type, a NULL
+ *          array or string, a string that isn't UTF-8, or more than 10
+ *          million values return NULL without an error.
+ */
+xp3Sequence *
+xp3NewAtomicSequence(xp3AtomicType type, const xmlChar **lexicals,
+                     size_t count, xp3Error **error) {
+    xp3SeqBuilder builder;
+    xp3Value *seq;
+    size_t i;
+
+    if (error != NULL)
+        *error = NULL;
+    if (((unsigned) type >= XP3_TYPE_COUNT) || xp3TypeIsAbstract(type) ||
+        ((lexicals == NULL) && (count > 0)) ||
+        (count > XP3_MAX_SEQUENCE_ITEMS))
+        return(NULL);
+    xp3SeqBuilderInit(&builder);
+    for (i = 0; i < count; i++) {
+        xp3Atomic *str;
+        xp3Atomic *value = NULL;
+        xp3ErrCode err;
+
+        if ((lexicals[i] == NULL) || (!xmlCheckUTF8(lexicals[i]))) {
+            xp3SeqBuilderClear(&builder);
+            return(NULL);
+        }
+        str = xp3AtomicNewString(XP3_TYPE_STRING, lexicals[i],
+                                 strlen((const char *) lexicals[i]));
+        err = (str != NULL) ? xp3CastAtomic(str, type, &value) :
+                              XP3_ERR_NO_MEMORY;
+        xp3AtomicUnref(str);
+        if (err == XP3_ERR_OK) {
+            if (builderAddAtomic(&builder, value) == 0)
+                continue;
+            err = XP3_ERR_NO_MEMORY;
+        } else {
+            xp3SeqBuilderClear(&builder);
+        }
+        if (error == NULL)
+            return(NULL);
+        if (err == XP3_ERR_NO_MEMORY)
+            *error = xp3ErrorNoMemory();
+        else if (err == XP3_ERR_UNSUPPORTED)
+            *error = xp3ErrorNew(err, 0, 0, "casting to xs:%s is not "
+                                 "implemented yet",
+                                 (const char *) xp3TypeLocalName(type));
+        else
+            *error = xp3ErrorNew(err, 0, 0, "\"%.40s\" is not a valid "
+                                 "xs:%s", (const char *) lexicals[i],
+                                 (const char *) xp3TypeLocalName(type));
+        return(NULL);
+    }
+    seq = xp3SeqBuilderFinish(&builder);
+    if ((seq == NULL) && (error != NULL))
+        *error = xp3ErrorNoMemory();
+    return(seq);
+}
+
+/**
  * Release a sequence. NULL is ignored.
  *
  * @param seq  the sequence
@@ -3791,6 +3868,28 @@ xp3NewBooleanSequence(const int *values, size_t count) {
 void
 xp3FreeSequence(xp3Sequence *seq) {
     xp3ValueUnref(seq);
+}
+
+/**
+ * Keep a sequence beyond the call it was passed to: an extension
+ * function returns its argument this way, and a binding keeps one.
+ *
+ * Usually this adds a reference and returns seq itself. A sequence
+ * that is, or holds values of, a constant that compiling folded is
+ * shared by every evaluation and lives only as long as its expression,
+ * so for it this returns a copy with a reference of its own. Either
+ * way, keep the pointer this returns, not seq, and release it with
+ * xp3FreeSequence().
+ *
+ * @param seq  the sequence, may be NULL
+ * @returns seq with a reference added, a copy of it, or NULL if seq is
+ *          NULL or memory allocation failed
+ */
+xp3Sequence *
+xp3SequenceRef(xp3Sequence *seq) {
+    if (seq == NULL)
+        return(NULL);
+    return(xp3ValueDetach(xp3ValueRef(seq)));
 }
 
 /**
