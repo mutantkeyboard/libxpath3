@@ -3195,6 +3195,34 @@ xp3FuncBuilderAdd(xp3FuncCall *call, xp3SeqBuilder *builder, xp3Item item) {
 }
 
 /**
+ * Sort the nodes of a sequence being built into document order and
+ * remove duplicates, as paths do, with the document order table of
+ * the evaluation.
+ *
+ * @param call     the call
+ * @param builder  the builder, from xp3FuncBuilderInit(), with nodes
+ *                 only
+ * @returns 0, or -1 after recording NO_MEMORY or XPTY0004 for a node
+ *          that is not part of the data model; the caller then clears
+ *          the builder
+ */
+int
+xp3FuncSortNodes(xp3FuncCall *call, xp3SeqBuilder *builder) {
+    xp3ErrCode err = evalSortNodes(call->ev, builder);
+    char name[XP3_NAME_BUF];
+
+    if (err == XP3_ERR_OK)
+        return(0);
+    if (err == XP3_ERR_NO_MEMORY)
+        evalNoMemory(call->ev);
+    else
+        evalError(call->ev, err, call->node, "a node of the argument of %s "
+                  "is not part of the data model",
+                  callName(call, name, sizeof(name)));
+    return(-1);
+}
+
+/**
  * Finish a sequence being built.
  *
  * @param call     the call

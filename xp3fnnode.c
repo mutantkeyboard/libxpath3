@@ -187,3 +187,156 @@ xp3FnNamespaceUri(xp3FuncCall *call, xp3Value **args, int count) {
     return(newString(call, XP3_TYPE_ANY_URI,
                      (ret > 0) ? xp3NodeNamespaceUri(node) : NULL));
 }
+
+/*
+ * Tree shape
+ */
+
+/**
+ * fn:root#0 and #1 (F&O 3.1, 13.5): the root of the tree a node is
+ * in, a document node or, in a tree without one, the node without a
+ * parent. The empty sequence gives the empty sequence.
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns a node or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnRoot(xp3FuncCall *call, xp3Value **args, int count) {
+    xmlNodePtr node;
+    xp3Value *result;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    if (ret == 0)
+        return(xp3ValueEmpty());
+    result = xp3ValueSingle(xp3ItemFromNode(xp3NodeRoot(node)));
+    if (result == NULL)
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+    return(result);
+}
+
+/**
+ * fn:has-children#0 and #1 (F&O 3.1, 13.7): whether a node has a
+ * child in XDM. Attributes are not children, and neither are the
+ * libxml2 nodes XDM has no node for. The empty sequence gives false.
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns an xs:boolean, or NULL on error
+ */
+xp3Value *
+xp3FnHasChildren(xp3FuncCall *call, xp3Value **args, int count) {
+    xmlNodePtr node;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    return(xp3FuncAtomic(call, xp3AtomicNewBoolean(
+        (ret > 0) && (xp3AxisNext(XP3_AXIS_CHILD, node, NULL) != NULL))));
+}
+
+/*
+ * Whether ancestor is a proper ancestor of node, through the parents
+ * of XDM, in which an attribute's parent is its element. Counts a step
+ * per parent visited. Returns 1, 0, or -1 after recording LIMIT.
+ */
+static int
+isAncestor(xp3FuncCall *call, xmlNodePtr ancestor, xmlNodePtr node) {
+    for (node = xp3NodeParent(node); node != NULL;
+         node = xp3NodeParent(node)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+        if (node == ancestor)
+            return(1);
+    }
+    return(0);
+}
+
+/*
+ * fn:innermost or fn:outermost: the nodes in document order without
+ * duplicates, then one pass. In document order, the nodes below a
+ * node, its attributes included, follow it with no other node between
+ * them. So if a node of the sequence has another one below it, the
+ * next one is below it, and the outermost node of the sequence above
+ * a node is the last one kept before it: that one is kept, and every
+ * node between them is below it and so not kept.
+ */
+static xp3Value *
+extremeNodes(xp3FuncCall *call, xp3Value *nodes, int innermost) {
+    xp3SeqBuilder builder;
+    xp3Iter iter;
+    xp3Item item;
+    size_t kept = 0;
+    size_t i;
+    int ret;
+
+    if (xp3ValueCount(nodes) <= 1)
+        return(xp3ValueRef(nodes));
+    xp3FuncBuilderInit(call, &builder);
+    xp3IterInit(&iter, nodes);
+    while ((ret = xp3IterNext(&iter, &item)) > 0) {
+        if (xp3FuncBuilderAdd(call, &builder, item) < 0)
+            goto error;
+    }
+    if (ret < 0) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        goto error;
+    }
+    if (xp3FuncSortNodes(call, &builder) < 0)
+        goto error;
+
+    for (i = 0; i < builder.count; i++) {
+        xmlNodePtr node = builder.items[i].u.node;
+
+        if (innermost && (i + 1 < builder.count))
+            ret = isAncestor(call, node, builder.items[i + 1].u.node);
+        else if (!innermost && (kept > 0))
+            ret = isAncestor(call, builder.items[kept - 1].u.node, node);
+        else
+            ret = 0;
+        if (ret < 0)
+            goto error;
+        if (ret == 0)
+            builder.items[kept++] = builder.items[i];
+    }
+    builder.count = kept;
+    return(xp3FuncBuilderFinish(call, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    return(NULL);
+}
+
+/**
+ * fn:innermost (F&O 3.1, 13.8): the nodes that are not an ancestor of
+ * another node of the sequence, in document order without duplicates.
+ *
+ * @param call   the call
+ * @param args   the nodes, node()*
+ * @param count  1
+ * @returns the nodes, or NULL on error
+ */
+xp3Value *
+xp3FnInnermost(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(extremeNodes(call, args[0], 1));
+}
+
+/**
+ * fn:outermost (F&O 3.1, 13.9): the nodes that have no ancestor in the
+ * sequence, in document order without duplicates.
+ *
+ * @param call   the call
+ * @param args   the nodes, node()*
+ * @param count  1
+ * @returns the nodes, or NULL on error
+ */
+xp3Value *
+xp3FnOutermost(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(extremeNodes(call, args[0], 0));
+}

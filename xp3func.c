@@ -127,6 +127,12 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_LOCAL_NAME_1] = xp3FnLocalName,
     [XP3_FN_NAMESPACE_URI_0] = xp3FnNamespaceUri,
     [XP3_FN_NAMESPACE_URI_1] = xp3FnNamespaceUri,
+    [XP3_FN_ROOT_0] = xp3FnRoot,
+    [XP3_FN_ROOT_1] = xp3FnRoot,
+    [XP3_FN_HAS_CHILDREN_0] = xp3FnHasChildren,
+    [XP3_FN_HAS_CHILDREN_1] = xp3FnHasChildren,
+    [XP3_FN_INNERMOST_1] = xp3FnInnermost,
+    [XP3_FN_OUTERMOST_1] = xp3FnOutermost,
     /* Sequences (14) */
     [XP3_FN_EMPTY_1] = xp3FnEmpty,
     [XP3_FN_EXISTS_1] = xp3FnExists,

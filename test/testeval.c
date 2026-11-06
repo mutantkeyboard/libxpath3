@@ -1798,6 +1798,8 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "local-name()", "error:XPDY0002");
     checkEval(NULL, NULL, "namespace-uri()", "error:XPDY0002");
     checkEval(NULL, NULL, "node-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "root()", "error:XPDY0002");
+    checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -2017,6 +2019,156 @@ testNodeNames(void) {
     xmlFreeDoc(doc);
 }
 
+/*
+ * The shape of trees (F&O 3.1, 13.5 and 13.7 to 13.9): a chain of
+ * elements with attributes, elements with only an attribute and with
+ * nothing, and the other kinds of nodes.
+ */
+static const char xp3TreeDoc[] =
+    "<r a='1'>"
+    "<x id='x1' b='2'><x id='x2'><x id='x3'>t</x></x></x>"
+    "<y id='y1' c='3'/><y id='y2'></y>"
+    "text<!--c--><?p v?>"
+    "</r>";
+
+/* Evaluated with r as the context node, and $o bound to the element o
+ * of another document, <o><p/></o> */
+static const xp3EvalCase xp3TreeCases[] = {
+    /* fn:root */
+    { "root(), root(.), root(()), root(/)", "d d d" },
+    { "(/, ., @a, x, x/@b, .//text(), comment(), processing-instruction()) "
+      "! root()",
+      "d d d d d d d d d" },
+    { "root(x//x[@id = 'x3']/text()) is /, root($o) is root($o/*), "
+      "root($o) is /",
+      "boolean:true boolean:true boolean:false" },
+    { "1 ! root()", "error:XPTY0004" },
+    { "root(1)", "error:XPTY0004" },
+    { "root((x, y))", "error:XPTY0004" },
+
+    /* fn:has-children */
+    { "has-children(/), has-children(), has-children(.), has-children(x), "
+      "has-children(x//x[@id = 'x3'])",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "y ! has-children(), has-children(@a), has-children(x/@b)",
+      "boolean:false boolean:false boolean:false boolean:false" },
+    { "(text(), comment(), processing-instruction(), x//text()) ! "
+      "has-children(), has-children(())",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    { "1 ! has-children()", "error:XPTY0004" },
+
+    /* fn:innermost and fn:outermost */
+    { "innermost(()), outermost(())", "" },
+    { "innermost(x), outermost(y[2])", "e:x#x1 e:y#y2" },
+    { "innermost((x, x/@b)), innermost((x/@b, x))", "a:b a:b" },
+    { "outermost((x, x/@b)), outermost((x/@b, x))", "e:x#x1 e:x#x1" },
+    { "innermost(reverse(.//x)), outermost(reverse(.//x))",
+      "e:x#x3 e:x#x1" },
+    { "let $x := .//x return (innermost(($x[2], $x, $x[1], $x[3])), "
+      "outermost(($x[3], $x[2], $x[2])))",
+      "e:x#x3 e:x#x2" },
+    { "innermost(reverse(y)), outermost((y[2], y[1], y[2]))",
+      "e:y#y1 e:y#y2 e:y#y1 e:y#y2" },
+    { "innermost((., @a, x, x/@b, .//text()))", "a:a a:b t:t t:text" },
+    { "outermost((., @a, x, x/@b, .//text()))", "e:r" },
+    { "innermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    { "outermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    /* An attribute is no ancestor of the element after it */
+    { "innermost((x//x, x/@b)), outermost((x//x, x/@b))",
+      "a:b e:x#x3 a:b e:x#x2" },
+    { "innermost((/, comment())), outermost((comment(), /))", "c:c d" },
+    { "count(innermost(($o/*, $o, x, x/x))), "
+      "innermost(($o/*, $o, x, x/x)) except ($o/*, x/x)",
+      "integer:2" },
+    { "count(outermost(($o/*, $o, x, x/x))), "
+      "outermost(($o/*, $o, x, x/x)) except ($o, x)",
+      "integer:2" },
+    { "innermost(1)", "error:XPTY0004" },
+    { "outermost((x, 1))", "error:XPTY0004" }
+};
+
+/* A tree without a document, a/b/c with an attribute k on b and a text
+ * in c, evaluated with b as the context node */
+static const xp3EvalCase xp3DetachedTreeCases[] = {
+    { "root(), root(.), root(@k), root(c/text())", "e:a e:a e:a e:a" },
+    { "root() is .., has-children(root()), has-children(c/text())",
+      "boolean:true boolean:true boolean:false" },
+    { "innermost((c, @k, ., ..)), outermost((c, @k, ., ..))",
+      "a:k e:c e:a" }
+};
+
+static void
+testTreeShape(void) {
+    xmlDocPtr doc = parseDoc(xp3TreeDoc);
+    xmlDocPtr other = parseDoc("<o><p/></o>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr middle = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3DynamicContext *detachedCtx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr otherRoot;
+    size_t i;
+
+    if (detached != NULL)
+        middle = xmlNewChild(detached, NULL, BAD_CAST "b", NULL);
+    if ((doc == NULL) || (other == NULL) || (middle == NULL) ||
+        (xmlNewProp(middle, BAD_CAST "k", BAD_CAST "v") == NULL) ||
+        (xmlNewChild(middle, NULL, BAD_CAST "c", BAD_CAST "leaf") == NULL) ||
+        (ctx == NULL) || (detachedCtx == NULL) || (sctx == NULL) ||
+        (plain == NULL) || (level20 == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "o") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "o") < 0) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0) ||
+        (xp3SetContextNode(detachedCtx, middle) < 0)) {
+        check(0, "tree shape test set up");
+        goto done;
+    }
+    otherRoot = xmlDocGetRootElement(other);
+    bound = xp3NewNodeSequence(&otherRoot, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "o", bound) < 0)) {
+        check(0, "tree shape variable bound");
+        goto done;
+    }
+    plain->noOptimize = 1;
+    for (i = 0; i < sizeof(xp3TreeCases) / sizeof(xp3TreeCases[0]); i++) {
+        checkEval(sctx, ctx, xp3TreeCases[i].expr, xp3TreeCases[i].expected);
+        checkEval(plain, ctx, xp3TreeCases[i].expr,
+                  xp3TreeCases[i].expected);
+    }
+    for (i = 0;
+         i < sizeof(xp3DetachedTreeCases) / sizeof(xp3DetachedTreeCases[0]);
+         i++) {
+        checkEval(sctx, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+        checkEval(plain, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+    }
+    /* fn:root is in XPath 2.0, the others come with 3.0 */
+    checkEval(level20, ctx, "root()", "d");
+    checkEval(level20, ctx, "has-children(.)", "error:XPST0017");
+    checkEval(level20, ctx, "innermost(.)", "error:XPST0017");
+    checkEval(level20, ctx, "outermost(.)", "error:XPST0017");
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(detachedCtx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(other);
+    xmlFreeDoc(doc);
+}
+
 /* A document of one chain of elements, the innermost with a text */
 static xmlDocPtr
 chainDoc(int depth, const char *leaf) {
@@ -2081,6 +2233,30 @@ done:
     xmlFreeDoc(doc);
     xmlFreeDoc(same);
     xmlFreeDoc(other);
+}
+
+/*
+ * fn:innermost and fn:outermost count a step per parent they visit. On
+ * a chain, outermost walks from each node up to the top, while
+ * innermost only walks to the parent of the next node.
+ */
+static void
+testTreeShapeSteps(void) {
+    xmlDocPtr doc = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((doc == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) doc) < 0)) {
+        check(0, "tree shape step test set up");
+    } else {
+        checkEval(NULL, ctx, "outermost(//*)", "e:a");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*)", "integer:1001");
+        checkEval(NULL, ctx, "innermost(//*)", "e:b");
+        checkEval(NULL, ctx, "count(outermost(//*))", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
 }
 
 /*
@@ -3615,6 +3791,15 @@ static const char *const xp3AllocNamesExpected =
     "string:p:e string:a anyURI:urn:d QName:p:e QName:t string:r QName:r "
     "string: anyURI:";
 
+/* The shape of trees, on xp3TreeDoc */
+static const char *const xp3AllocTree =
+    "(root(), root(@a), has-children(), has-children(y[1]), "
+    "innermost(reverse(.//x)), outermost((x//x, x/@b, .)), "
+    "innermost((x/@b, x)))";
+
+static const char *const xp3AllocTreeExpected =
+    "d d boolean:true boolean:false e:x#x3 e:r a:b";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -4639,7 +4824,9 @@ main(void) {
     testStringLevels();
     testDeepEqual();
     testNodeNames();
+    testTreeShape();
     testDeepTrees();
+    testTreeShapeSteps();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -4670,6 +4857,7 @@ main(void) {
                              xp3AllocCompareExpected);
     testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
                              xp3AllocNamesExpected);
+    testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();
