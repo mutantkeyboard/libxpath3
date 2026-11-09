@@ -51,9 +51,6 @@
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 
-/* The longest string, as for every atomic value (xp3AtomicNewString()) */
-#define XP3_STRING_MAX ((size_t) INT32_MAX)
-
 /* Searches for strings up to this long keep their table on the stack */
 #define XP3_SEARCH_STACK 64
 

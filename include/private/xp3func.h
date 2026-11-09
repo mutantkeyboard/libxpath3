@@ -97,7 +97,9 @@ struct _xp3FuncInfo {
 typedef struct _xp3ExtFunction xp3ExtFunction;
 
 struct _xp3ExtFunction {
-    xp3FuncInfo info;
+    xp3FuncInfo info;           /* first, so that the info of an
+                                 * extension function can be cast to
+                                 * its entry (evalCall()) */
     const xmlChar *uri;
     xp3FunctionImpl impl;
     void *userData;
