@@ -397,6 +397,9 @@ xp3Value *
 xp3FnRoot(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
+xp3FnPath(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
 xp3FnHasChildren(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *

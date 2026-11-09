@@ -17,12 +17,15 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
+#include "private/xp3context.h"
 #include "private/xp3func.h"
 #include "private/xp3nodes.h"
 #include "private/xp3types.h"
@@ -339,4 +342,280 @@ xp3Value *
 xp3FnOutermost(xp3FuncCall *call, xp3Value **args, int count) {
     (void) count;
     return(extremeNodes(call, args[0], 0));
+}
+
+/*
+ * Paths
+ */
+
+/* The start of a path in a tree whose root is not a document node */
+#define XP3_PATH_ROOT "Q{" XP3_NS_FN "}root()"
+
+/* The longest string, as for every atomic value (xp3AtomicNewString()) */
+#define XP3_STRING_MAX ((size_t) INT32_MAX)
+
+/* A step of a path: a node below the root, and its position among its
+ * like siblings, which an attribute doesn't have */
+typedef struct {
+    xmlNodePtr node;
+    size_t position;
+} xp3PathStep;
+
+/*
+ * Whether a sibling counts for the position of a node: a node of the
+ * same kind, with the same expanded name for an element and the same
+ * target for a processing instruction. Text nodes and comments have no
+ * name, so each of the same kind counts.
+ */
+static int
+isLikeSibling(xmlNodePtr node, xmlNodePtr sibling) {
+    const xmlChar *localName = xp3NodeLocalName(node);
+    const xmlChar *siblingLocalName = xp3NodeLocalName(sibling);
+    const xmlChar *uri = xp3NodeNamespaceUri(node);
+    const xmlChar *siblingUri = xp3NodeNamespaceUri(sibling);
+
+    if (xp3NodeGetKind(sibling) != xp3NodeGetKind(node))
+        return(0);
+    if (!xmlStrEqual(siblingLocalName, localName))
+        return(0);
+    return(xmlStrEqual(siblingUri, uri));
+}
+
+/*
+ * The position of a node among its like siblings, from 1. The siblings
+ * are those of XDM, so a run of adjacent text nodes counts once.
+ * Counts a step per preceding sibling. Returns 0, or -1 after recording
+ * LIMIT.
+ */
+static int
+stepPosition(xp3FuncCall *call, xmlNodePtr node, size_t *position) {
+    xmlNodePtr sibling;
+
+    *position = 1;
+    for (sibling = xp3AxisNext(XP3_AXIS_PRECEDING_SIBLING, node, NULL);
+         sibling != NULL;
+         sibling = xp3AxisNext(XP3_AXIS_PRECEDING_SIBLING, node, sibling)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+        if (isLikeSibling(node, sibling))
+            (*position)++;
+    }
+    return(0);
+}
+
+/*
+ * The steps of the path to a node, one for each ancestor-or-self below
+ * the root, from the top down, and whether the root is a document
+ * node. Counts a step per ancestor and per preceding sibling. Returns
+ * 0, or -1 after recording an error. *steps is NULL when the node is
+ * the root; otherwise the caller frees it.
+ */
+static int
+pathSteps(xp3FuncCall *call, xmlNodePtr node, xp3PathStep **steps,
+          size_t *count, int *underDocument) {
+    xmlNodePtr root = node;
+    xmlNodePtr parent;
+    xmlNodePtr cur;
+    xp3PathStep *list;
+    size_t depth = 0;
+    size_t i;
+
+    *steps = NULL;
+    *count = 0;
+
+    /* The depth first, so that the steps are allocated once */
+    for (parent = xp3NodeParent(node); parent != NULL;
+         parent = xp3NodeParent(parent)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+        depth++;
+        root = parent;
+    }
+    *underDocument = (xp3NodeGetKind(root) == XP3_NODE_DOCUMENT);
+    if (depth == 0)
+        return(0);
+
+    if (depth > SIZE_MAX / sizeof(xp3PathStep)) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(-1);
+    }
+    list = xmlMalloc(depth * sizeof(xp3PathStep));
+    if (list == NULL) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(-1);
+    }
+
+    /* Then the steps from the node up, filled in from the end */
+    cur = node;
+    for (i = depth; i > 0; i--) {
+        xp3PathStep *step = &list[i - 1];
+
+        step->node = cur;
+        step->position = 0;
+        if (xp3NodeGetKind(cur) != XP3_NODE_ATTRIBUTE) {
+            if (stepPosition(call, cur, &step->position) < 0) {
+                xmlFree(list);
+                return(-1);
+            }
+        }
+        cur = xp3NodeParent(cur);
+    }
+    *steps = list;
+    *count = depth;
+    return(0);
+}
+
+/*
+ * A path is written in two passes over its steps, first counting the
+ * bytes and then copying them, so it is allocated once. out is NULL in
+ * the first pass. A length that would overflow stays at SIZE_MAX.
+ */
+static size_t
+addText(xmlChar *out, size_t length, const xmlChar *text) {
+    size_t size;
+
+    if (text == NULL)
+        return(length);
+    size = strlen((const char *) text);
+    if (size > SIZE_MAX - length)
+        return(SIZE_MAX);
+    if (out != NULL)
+        memcpy(out + length, text, size);
+    return(length + size);
+}
+
+/* "[position]" */
+static size_t
+addPosition(xmlChar *out, size_t length, size_t position) {
+    char text[32];
+
+    snprintf(text, sizeof(text), "[%zu]", position);
+    return(addText(out, length, BAD_CAST text));
+}
+
+/* "Q{uri}local", with an empty uri for a name in no namespace */
+static size_t
+addExpandedName(xmlChar *out, size_t length, const xmlNode *node) {
+    length = addText(out, length, BAD_CAST "Q{");
+    length = addText(out, length, xp3NodeNamespaceUri(node));
+    length = addText(out, length, BAD_CAST "}");
+    return(addText(out, length, xp3NodeLocalName(node)));
+}
+
+/* A step, "/" and the form F&O 3.1, 13.6 gives the kind of node */
+static size_t
+addStep(xmlChar *out, size_t length, const xp3PathStep *step) {
+    const xmlNode *node = step->node;
+
+    length = addText(out, length, BAD_CAST "/");
+    switch (xp3NodeGetKind(node)) {
+        case XP3_NODE_ELEMENT:
+            length = addExpandedName(out, length, node);
+            break;
+        case XP3_NODE_ATTRIBUTE:
+            /* No position, and a name in no namespace as it is */
+            length = addText(out, length, BAD_CAST "@");
+            if (xp3NodeNamespaceUri(node) == NULL)
+                return(addText(out, length, xp3NodeLocalName(node)));
+            return(addExpandedName(out, length, node));
+        case XP3_NODE_TEXT:
+            length = addText(out, length, BAD_CAST "text()");
+            break;
+        case XP3_NODE_COMMENT:
+            length = addText(out, length, BAD_CAST "comment()");
+            break;
+        case XP3_NODE_PI:
+            length = addText(out, length,
+                             BAD_CAST "processing-instruction(");
+            length = addText(out, length, xp3NodeLocalName(node));
+            length = addText(out, length, BAD_CAST ")");
+            break;
+        default:
+            /* A document node is always a root */
+            break;
+    }
+    return(addPosition(out, length, step->position));
+}
+
+/* The whole path, with the start of a tree without a document node */
+static size_t
+addPath(xmlChar *out, const xp3PathStep *steps, size_t count,
+        int underDocument) {
+    size_t length = 0;
+    size_t i;
+
+    if (!underDocument)
+        length = addText(out, length, BAD_CAST XP3_PATH_ROOT);
+    for (i = 0; i < count; i++)
+        length = addStep(out, length, &steps[i]);
+    return(length);
+}
+
+/* The path of the steps as the result, checked against the limits
+ * before it is built and counted as made */
+static xp3Value *
+pathString(xp3FuncCall *call, const xp3PathStep *steps, size_t count,
+           int underDocument) {
+    size_t length = addPath(NULL, steps, count, underDocument);
+    xp3Atomic *atomic;
+    xmlChar *path;
+
+    if (length > XP3_STRING_MAX) {
+        xp3FuncError(call, XP3_ERR_LIMIT, "the result of fn:path would "
+                     "be longer than 2 GB");
+        return(NULL);
+    }
+    if (xp3FuncStringFits(call, length) < 0)
+        return(NULL);
+    if (xp3FuncBytes(call, length) < 0)
+        return(NULL);
+
+    path = xmlMalloc(length + 1);
+    if (path == NULL) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(NULL);
+    }
+    addPath(path, steps, count, underDocument);
+    path[length] = 0;
+    atomic = xp3AtomicNewString(XP3_TYPE_STRING, path, length);
+    xmlFree(path);
+    return(xp3FuncAtomic(call, atomic));
+}
+
+/**
+ * fn:path#0 and #1 (F&O 3.1, 13.6): a path that selects a node from
+ * the root of its tree, "/" for a document node. Each ancestor-or-self
+ * below the root is a step, an element with its expanded name and its
+ * position among the siblings of that name, an attribute with its
+ * name, and other nodes with their kind test and position. In a tree
+ * whose root is not a document node, the path starts with
+ * Q{http://www.w3.org/2005/xpath-functions}root(), which is all of the
+ * path of such a root. The empty sequence gives the empty sequence.
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns an xs:string or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnPath(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3PathStep *steps;
+    size_t stepCount;
+    int underDocument;
+    xmlNodePtr node;
+    xp3Value *result;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    if (ret == 0)
+        return(xp3ValueEmpty());
+    if (xp3NodeGetKind(node) == XP3_NODE_DOCUMENT)
+        return(newString(call, XP3_TYPE_STRING, BAD_CAST "/"));
+
+    if (pathSteps(call, node, &steps, &stepCount, &underDocument) < 0)
+        return(NULL);
+    result = pathString(call, steps, stepCount, underDocument);
+    xmlFree(steps);
+    return(result);
 }

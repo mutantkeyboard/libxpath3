@@ -1800,6 +1800,7 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "node-name()", "error:XPDY0002");
     checkEval(NULL, NULL, "root()", "error:XPDY0002");
     checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
+    checkEval(NULL, NULL, "path()", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -2169,6 +2170,209 @@ done:
     xmlFreeDoc(doc);
 }
 
+/*
+ * fn:path (F&O 3.1, 13.6): each kind of node, elements with names that
+ * differ in the local part or the namespace, attributes in a namespace
+ * and in none, a text node of several libxml2 nodes, and processing
+ * instructions with different targets.
+ */
+static const char xp3PathDoc[] =
+    "<?t a?>"
+    "<r xmlns:p='urn:p' a='1' p:a='2'>"
+    "<e/><p:e/><e/><f/><e xmlns='urn:d'/>"
+    "x<!--c-->a<![CDATA[b]]>c<g>y</g>z"
+    "<!--d--><?t v?><?u v?><?t w?>"
+    "</r>"
+    "<!--e-->";
+
+/* Evaluated with r as the context node, after an element h is added
+ * to it with a text node, a character reference that XDM doesn't have
+ * and another text node, then an element i and a third text node */
+static const xp3EvalCase xp3PathCases[] = {
+    { "path(/), path(/processing-instruction()), path(/comment())",
+      "string:/ string:/processing-instruction(t)[1] string:/comment()[1]" },
+    { "path(.), path(e[1]), path(e[2])",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[1] string:/Q{}r[1]/Q{}e[2]" },
+    { "path(Q{urn:p}e), path(f), path(Q{urn:d}e)",
+      "string:/Q{}r[1]/Q{urn:p}e[1] string:/Q{}r[1]/Q{}f[1] "
+      "string:/Q{}r[1]/Q{urn:d}e[1]" },
+    { "path(@a), path(@Q{urn:p}a)",
+      "string:/Q{}r[1]/@a string:/Q{}r[1]/@Q{urn:p}a" },
+    /* a, the CDATA section b and c are one text node */
+    { "text() ! path(), path(g/text())",
+      "string:/Q{}r[1]/text()[1] string:/Q{}r[1]/text()[2] "
+      "string:/Q{}r[1]/text()[3] string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "comment() ! path()",
+      "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2]" },
+    { "processing-instruction() ! path()",
+      "string:/Q{}r[1]/processing-instruction(t)[1] "
+      "string:/Q{}r[1]/processing-instruction(u)[1] "
+      "string:/Q{}r[1]/processing-instruction(t)[2]" },
+    /* The character reference is skipped, so a and b are one text */
+    { "count(h/text()), h/text() ! path()",
+      "integer:2 string:/Q{}r[1]/Q{}h[1]/text()[1] "
+      "string:/Q{}r[1]/Q{}h[1]/text()[2]" },
+    { "path(()), count(path(())), path(.) instance of xs:string",
+      "integer:0 boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "path(), (e[2], @a, g/text()) ! path()",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/@a "
+      "string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "/ ! path()", "string:/" },
+    { "1 ! path()", "error:XPTY0004" },
+    { "path(1)", "error:XPTY0004" },
+    { "path((e, f))", "error:XPTY0004" }
+};
+
+/* The first example of 13.6, evaluated with its document node as the
+ * context node */
+static const char xp3PathSpecDoc[] =
+    "<p xmlns=\"http://example.com/one\" xml:lang=\"de\" "
+    "author=\"Friedrich von Schiller\">\n"
+    "Freude, sch\xc3\xb6ner G\xc3\xb6tterfunken,<br/>\n"
+    "Tochter aus Elysium,<br/>\n"
+    "Wir betreten feuertrunken,<br/>\n"
+    "Himmlische, dein Heiligtum.</p>";
+
+static const xp3EvalCase xp3PathSpecCases[] = {
+    { "path(.)", "string:/" },
+    { "path(*:p)", "string:/Q{http://example.com/one}p[1]" },
+    { "path(*:p/@xml:lang)",
+      "string:/Q{http://example.com/one}p[1]"
+      "/@Q{http://www.w3.org/XML/1998/namespace}lang" },
+    { "path(*:p/@author)",
+      "string:/Q{http://example.com/one}p[1]/@author" },
+    { "path(*:p/*:br[2])",
+      "string:/Q{http://example.com/one}p[1]"
+      "/Q{http://example.com/one}br[2]" },
+    { "path(//text()[starts-with(normalize-space(), 'Tochter')])",
+      "string:/Q{http://example.com/one}p[1]/text()[2]" }
+};
+
+/* The second example of 13.6, a tree without a document node,
+ * evaluated with its root element as the context node */
+static const char xp3PathEmployeeDoc[] =
+    "<employee xml:id=\"ID21256\">"
+    "<empnr>E21256</empnr><first>John</first><last>Brown</last>"
+    "</employee>";
+
+#define FN_ROOT "Q{http://www.w3.org/2005/xpath-functions}root()"
+
+static const xp3EvalCase xp3PathEmployeeCases[] = {
+    { "path(.), path()", "string:" FN_ROOT " string:" FN_ROOT },
+    { "path(@xml:id)",
+      "string:" FN_ROOT "/@Q{http://www.w3.org/XML/1998/namespace}id" },
+    { "path(empnr), path(last/text())",
+      "string:" FN_ROOT "/Q{}empnr[1] "
+      "string:" FN_ROOT "/Q{}last[1]/text()[1]" }
+};
+
+/* The children of h in xp3PathCases */
+static int
+addPathChildren(xmlDocPtr doc, xmlNodePtr h) {
+    xmlNodePtr children[5];
+    size_t i;
+
+    children[0] = xmlNewDocText(doc, BAD_CAST "a");
+    children[1] = xmlNewCharRef(doc, BAD_CAST "#66");
+    children[2] = xmlNewDocText(doc, BAD_CAST "b");
+    children[3] = xmlNewDocNode(doc, NULL, BAD_CAST "i", NULL);
+    children[4] = xmlNewDocText(doc, BAD_CAST "c");
+    for (i = 0; i < 5; i++) {
+        if (children[i] == NULL)
+            return(-1);
+        xmlAddChild(h, children[i]);
+    }
+    return(0);
+}
+
+/* Each case evaluated optimized and not */
+static void
+checkPathCases(const xp3StaticContext *sctx, const xp3StaticContext *plain,
+               xp3DynamicContext *ctx, const xp3EvalCase *cases,
+               size_t count) {
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        checkEval(sctx, ctx, cases[i].expr, cases[i].expected);
+        checkEval(plain, ctx, cases[i].expr, cases[i].expected);
+    }
+}
+
+static void
+testPath(void) {
+    xmlDocPtr doc = parseDoc(xp3PathDoc);
+    xmlDocPtr spec = parseDoc(xp3PathSpecDoc);
+    xmlDocPtr employeeDoc = parseDoc(xp3PathEmployeeDoc);
+    xmlNodePtr employee = NULL;
+    xmlNodePtr text = xmlNewText(BAD_CAST "fred");
+    xmlAttrPtr attr = xmlNewProp(NULL, BAD_CAST "name", BAD_CAST "fred");
+    xmlNodePtr h = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        h = xmlNewChild(xmlDocGetRootElement(doc), NULL, BAD_CAST "h",
+                        NULL);
+    if (employeeDoc != NULL) {
+        /* Unlinked, it keeps the document's xml namespace */
+        employee = xmlDocGetRootElement(employeeDoc);
+        xmlUnlinkNode(employee);
+    }
+    if ((h == NULL) || (spec == NULL) || (employee == NULL) ||
+        (text == NULL) || (attr == NULL) ||
+        (addPathChildren(doc, h) < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "path test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "path context node set");
+    checkPathCases(sctx, plain, ctx, xp3PathCases,
+                   sizeof(xp3PathCases) / sizeof(xp3PathCases[0]));
+    /* fn:path comes with XPath 3.0 */
+    checkEval(level20, ctx, "path()", "error:XPST0017");
+    checkEval(level20, ctx, "path(.)", "error:XPST0017");
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) spec) == 0,
+          "path example document set");
+    checkPathCases(sctx, plain, ctx, xp3PathSpecCases,
+                   sizeof(xp3PathSpecCases) / sizeof(xp3PathSpecCases[0]));
+
+    check(xp3SetContextNode(ctx, employee) == 0, "path example tree set");
+    checkPathCases(sctx, plain, ctx, xp3PathEmployeeCases,
+                   sizeof(xp3PathEmployeeCases) /
+                   sizeof(xp3PathEmployeeCases[0]));
+
+    /* A text node and an attribute without a parent are roots */
+    check(xp3SetContextNode(ctx, text) == 0, "parentless text set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) attr) == 0,
+          "parentless attribute set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeProp(attr);
+    xmlFreeNode(text);
+    xmlFreeNode(employee);
+    xmlFreeDoc(employeeDoc);
+    xmlFreeDoc(spec);
+    xmlFreeDoc(doc);
+}
+
 /* A document of one chain of elements, the innermost with a text */
 static xmlDocPtr
 chainDoc(int depth, const char *leaf) {
@@ -2257,6 +2461,54 @@ testTreeShapeSteps(void) {
     }
     xp3FreeDynamicContext(ctx);
     xmlFreeDoc(doc);
+}
+
+/*
+ * fn:path counts a step per ancestor and per preceding sibling it
+ * visits: on a chain the path of each node costs its depth, and among
+ * siblings of the same name its position.
+ */
+static void
+testPathSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr root = NULL;
+    int i;
+
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        if (xmlNewChild(root, NULL, BAD_CAST "a", NULL) == NULL)
+            root = NULL;
+    }
+    if ((chain == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "path step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! path())", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(//*)", "integer:1001");
+    /* 1,000 steps of "/Q{}a[1]" and one of "/Q{}b[1]" */
+    checkEval(NULL, ctx, "string-length(path(//b))", "integer:8008");
+    checkEval(NULL, ctx, "count(//* ! path())", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "siblings set as the context");
+    checkEval(NULL, ctx, "count(r/a ! path())", "integer:1000");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(r/a)", "integer:1000");
+    checkEval(NULL, ctx, "path(r/a[last()])", "string:/Q{}r[1]/Q{}a[1000]");
+    checkEval(NULL, ctx, "count(r/a ! path())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
 }
 
 /*
@@ -3800,6 +4052,18 @@ static const char *const xp3AllocTree =
 static const char *const xp3AllocTreeExpected =
     "d d boolean:true boolean:false e:x#x3 e:r a:b";
 
+/* fn:path, on xp3PathDoc */
+static const char *const xp3AllocPath =
+    "(path(/), path(), path(@Q{urn:p}a), path(e[2]), path(text()[3]), "
+    "comment() ! path(), path(processing-instruction('t')[2]), "
+    "path(()))";
+
+static const char *const xp3AllocPathExpected =
+    "string:/ string:/Q{}r[1] string:/Q{}r[1]/@Q{urn:p}a "
+    "string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/text()[3] "
+    "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2] "
+    "string:/Q{}r[1]/processing-instruction(t)[2]";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -4825,8 +5089,10 @@ main(void) {
     testDeepEqual();
     testNodeNames();
     testTreeShape();
+    testPath();
     testDeepTrees();
     testTreeShapeSteps();
+    testPathSteps();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -4858,6 +5124,7 @@ main(void) {
     testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
                              xp3AllocNamesExpected);
     testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
+    testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();
