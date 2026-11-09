@@ -74,6 +74,9 @@ xp3NodeStringValue(xmlNodePtr node, xmlChar **value, size_t *length);
 xp3ErrCode
 xp3NodeTypedValue(xmlNodePtr node, xp3Atomic **value);
 
+size_t
+xp3NodeAddText(xmlChar *out, size_t length, const xmlChar *text);
+
 /*
  * Document order
  */

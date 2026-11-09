@@ -2598,7 +2598,7 @@ struct _xp3FuncCall {
 /* The call of an extension function, as its implementation sees it
  * through the public API */
 struct _xp3FunctionCall {
-    xp3FuncCall call;
+    xp3FuncCall base;
 };
 
 /* The name of a parameter type, for messages */
@@ -2829,10 +2829,15 @@ convertArgument(xp3Eval *ev, xp3Value *value, const xp3FuncType *type,
     if (!convert)
         return(value);
     if (type->kind != XP3_AST_ATOMIC_TYPE) {
-        snprintf(problem, sizeof(problem), "has %s",
-                 (item.kind == XP3_ITEM_NODE) ? "a node of another kind" :
-                 (item.kind == XP3_ITEM_ATOMIC) ? "an atomic value" :
-                 "a function item");
+        const char *what;
+
+        if (item.kind == XP3_ITEM_NODE)
+            what = "a node of another kind";
+        else if (item.kind == XP3_ITEM_ATOMIC)
+            what = "an atomic value";
+        else
+            what = "a function item";
+        snprintf(problem, sizeof(problem), "has %s", what);
         argumentError(ev, call, index, arg, problem, type);
         xp3ValueUnref(value);
         return(NULL);
@@ -2913,9 +2918,11 @@ callExtension(xp3Eval *ev, const xp3AstNode *node,
               const xp3ExtFunction *func, xp3Value **args, int count) {
     xp3FunctionCall call;
     xp3Value *result;
+    int tooManyItems;
+    int tooManyBytes;
 
-    call.call.ev = ev;
-    call.call.node = node;
+    call.base.ev = ev;
+    call.base.node = node;
     result = func->impl(&call, args, count, func->userData);
     /* An implementation that raised an error and returned a value
      * anyway still fails */
@@ -2929,10 +2936,11 @@ callExtension(xp3Eval *ev, const xp3AstNode *node,
     }
     /* Ranges never count, as everywhere else. While folding, the
      * size of a single value is checked by evalExpr(). */
-    if (((result->shape != XP3_SEQ_RANGE) &&
-         (xp3ValueCount(result) > ev->maxItems)) ||
-        ((ev->maxBytes > 0) && (result->shape == XP3_SEQ_ARRAY) &&
-         (resultSize(result, ev->maxBytes) > ev->maxBytes))) {
+    tooManyItems = (result->shape != XP3_SEQ_RANGE) &&
+                   (xp3ValueCount(result) > ev->maxItems);
+    tooManyBytes = (ev->maxBytes > 0) && (result->shape == XP3_SEQ_ARRAY) &&
+                   (resultSize(result, ev->maxBytes) > ev->maxBytes);
+    if (tooManyItems || tooManyBytes) {
         evalBuildError(ev, XP3_ERR_LIMIT, node);
         xp3ValueUnref(result);
         return(NULL);
@@ -2998,6 +3006,7 @@ evalCall(xp3Eval *ev, const xp3AstNode *node) {
     }
 
     if (info->flags & XP3_FUNC_EXTENSION) {
+        /* The info is the first field of its xp3ExtFunction */
         result = callExtension(ev, node, (const xp3ExtFunction *) info, args,
                                count);
         goto done;
@@ -3284,7 +3293,7 @@ xp3FunctionError(xp3FunctionCall *call, const xmlChar *uri,
                  const xmlChar *localName, const xmlChar *message) {
     if (call == NULL)
         return;
-    xp3FuncUserError(&call->call, (uri != NULL) ? uri : BAD_CAST XP3_ERR_NS,
+    xp3FuncUserError(&call->base, (uri != NULL) ? uri : BAD_CAST XP3_ERR_NS,
                      localName, message);
 }
 
@@ -3303,7 +3312,7 @@ void *
 xp3FunctionUserData(xp3FunctionCall *call) {
     if (call == NULL)
         return(NULL);
-    return(call->call.ev->userData);
+    return(call->base.ev->userData);
 }
 
 /* Binary operators other than and and or */

@@ -351,9 +351,6 @@ xp3FnOutermost(xp3FuncCall *call, xp3Value **args, int count) {
 /* The start of a path in a tree whose root is not a document node */
 #define XP3_PATH_ROOT "Q{" XP3_NS_FN "}root()"
 
-/* The longest string, as for every atomic value (xp3AtomicNewString()) */
-#define XP3_STRING_MAX ((size_t) INT32_MAX)
-
 /* A step of a path: a node below the root, and its position among its
  * like siblings, which an attribute doesn't have */
 typedef struct {
@@ -467,22 +464,9 @@ pathSteps(xp3FuncCall *call, xmlNodePtr node, xp3PathStep **steps,
 
 /*
  * A path is written in two passes over its steps, first counting the
- * bytes and then copying them, so it is allocated once. out is NULL in
- * the first pass. A length that would overflow stays at SIZE_MAX.
+ * bytes and then copying them (xp3NodeAddText()), so it is allocated
+ * once. out is NULL in the first pass.
  */
-static size_t
-addText(xmlChar *out, size_t length, const xmlChar *text) {
-    size_t size;
-
-    if (text == NULL)
-        return(length);
-    size = strlen((const char *) text);
-    if (size > SIZE_MAX - length)
-        return(SIZE_MAX);
-    if (out != NULL)
-        memcpy(out + length, text, size);
-    return(length + size);
-}
 
 /* "[position]" */
 static size_t
@@ -490,50 +474,56 @@ addPosition(xmlChar *out, size_t length, size_t position) {
     char text[32];
 
     snprintf(text, sizeof(text), "[%zu]", position);
-    return(addText(out, length, BAD_CAST text));
+    return(xp3NodeAddText(out, length, BAD_CAST text));
 }
 
 /* "Q{uri}local", with an empty uri for a name in no namespace */
 static size_t
 addExpandedName(xmlChar *out, size_t length, const xmlNode *node) {
-    length = addText(out, length, BAD_CAST "Q{");
-    length = addText(out, length, xp3NodeNamespaceUri(node));
-    length = addText(out, length, BAD_CAST "}");
-    return(addText(out, length, xp3NodeLocalName(node)));
+    length = xp3NodeAddText(out, length, BAD_CAST "Q{");
+    length = xp3NodeAddText(out, length, xp3NodeNamespaceUri(node));
+    length = xp3NodeAddText(out, length, BAD_CAST "}");
+    return(xp3NodeAddText(out, length, xp3NodeLocalName(node)));
 }
 
 /* A step, "/" and the form F&O 3.1, 13.6 gives the kind of node */
 static size_t
 addStep(xmlChar *out, size_t length, const xp3PathStep *step) {
     const xmlNode *node = step->node;
+    int hasPosition = 1;
 
-    length = addText(out, length, BAD_CAST "/");
+    length = xp3NodeAddText(out, length, BAD_CAST "/");
     switch (xp3NodeGetKind(node)) {
         case XP3_NODE_ELEMENT:
             length = addExpandedName(out, length, node);
             break;
         case XP3_NODE_ATTRIBUTE:
             /* No position, and a name in no namespace as it is */
-            length = addText(out, length, BAD_CAST "@");
+            hasPosition = 0;
+            length = xp3NodeAddText(out, length, BAD_CAST "@");
             if (xp3NodeNamespaceUri(node) == NULL)
-                return(addText(out, length, xp3NodeLocalName(node)));
-            return(addExpandedName(out, length, node));
+                length = xp3NodeAddText(out, length, xp3NodeLocalName(node));
+            else
+                length = addExpandedName(out, length, node);
+            break;
         case XP3_NODE_TEXT:
-            length = addText(out, length, BAD_CAST "text()");
+            length = xp3NodeAddText(out, length, BAD_CAST "text()");
             break;
         case XP3_NODE_COMMENT:
-            length = addText(out, length, BAD_CAST "comment()");
+            length = xp3NodeAddText(out, length, BAD_CAST "comment()");
             break;
         case XP3_NODE_PI:
-            length = addText(out, length,
-                             BAD_CAST "processing-instruction(");
-            length = addText(out, length, xp3NodeLocalName(node));
-            length = addText(out, length, BAD_CAST ")");
+            length = xp3NodeAddText(out, length,
+                                    BAD_CAST "processing-instruction(");
+            length = xp3NodeAddText(out, length, xp3NodeLocalName(node));
+            length = xp3NodeAddText(out, length, BAD_CAST ")");
             break;
         default:
             /* A document node is always a root */
             break;
     }
+    if (!hasPosition)
+        return(length);
     return(addPosition(out, length, step->position));
 }
 
@@ -545,7 +535,7 @@ addPath(xmlChar *out, const xp3PathStep *steps, size_t count,
     size_t i;
 
     if (!underDocument)
-        length = addText(out, length, BAD_CAST XP3_PATH_ROOT);
+        length = xp3NodeAddText(out, length, BAD_CAST XP3_PATH_ROOT);
     for (i = 0; i < count; i++)
         length = addStep(out, length, &steps[i]);
     return(length);
