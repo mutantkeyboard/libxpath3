@@ -1222,18 +1222,19 @@ distinctValue(xp3FuncCall *call, xp3HashTable *table, xp3SeqBuilder *kept,
 
     if (hashKey(call, table, atomic, collation, &cls, &key) < 0)
         goto error;
-    while ((cls != XP3_HASH_NONE) &&
-           ((found = hashFind(table, cls, key, found)) != 0)) {
-        const xp3Atomic *other =
-            kept->items[hashEntryAt(table, found)->item].u.atomic;
-        int equal = atomicsEqual(call, other, atomic, collation,
-                                 XP3_NAN_EQUAL);
+    if (cls != XP3_HASH_NONE) {
+        while ((found = hashFind(table, cls, key, found)) != 0) {
+            const xp3Atomic *other =
+                kept->items[hashEntryAt(table, found)->item].u.atomic;
+            int equal = atomicsEqual(call, other, atomic, collation,
+                                     XP3_NAN_EQUAL);
 
-        if (equal < 0)
-            goto error;
-        if (equal) {
-            xp3ItemUnref(item);
-            return(0);
+            if (equal < 0)
+                goto error;
+            if (equal) {
+                xp3ItemUnref(item);
+                return(0);
+            }
         }
     }
     if (xp3FuncBuilderAdd(call, kept, item) < 0)
@@ -1520,8 +1521,10 @@ sameAttributes(xp3FuncCall *call, xmlNodePtr element1, xmlNodePtr element2,
         return(-1);
     }
     for (i = 0; (ret > 0) && (i < count1); i++) {
-        ret = sameName(list1[i], list2[i]) ?
-              sameStringValue(call, list1[i], list2[i], collation) : 0;
+        if (sameName(list1[i], list2[i]))
+            ret = sameStringValue(call, list1[i], list2[i], collation);
+        else
+            ret = 0;
     }
     xmlFree(list1);
     xmlFree(list2);
