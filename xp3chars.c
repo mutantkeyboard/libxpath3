@@ -88,16 +88,11 @@ xp3IsValidUTF8(const xmlChar *str, size_t len) {
     size_t pos = 0;
 
     while (pos < len) {
-        size_t avail = len - pos;
-        int bytes = (avail < 4) ? (int) avail : 4;
+        size_t start = pos;
 
-        if (str[pos] < 0x80) {
-            pos++;
-            continue;
-        }
-        if (xp3GetUTF8Char(str + pos, &bytes) < 0)
+        xp3NextChar(str, len, &pos);
+        if ((pos - start == 1) && (str[start] >= 0x80))
             return(0);
-        pos += (size_t) bytes;
     }
     return(1);
 }
