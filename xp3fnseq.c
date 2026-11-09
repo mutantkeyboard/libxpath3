@@ -726,6 +726,19 @@ compareSteps(xp3FuncCall *call, const xp3Atomic *left,
                               xp3AtomicSize(right, SIZE_MAX)));
 }
 
+/* Record that comparing dates, times and durations is not implemented
+ * yet. Returns -1. */
+static int
+temporalUnsupported(xp3FuncCall *call) {
+    xp3FuncError(call, XP3_ERR_UNSUPPORTED, "comparing dates, times "
+                 "and durations is not implemented yet");
+    return(-1);
+}
+
+/* The nanEqual argument of atomicsEqual() */
+#define XP3_NAN_EQUAL 1
+#define XP3_NAN_UNEQUAL 0
+
 /*
  * Whether two atomic values are equal as F&O 3.1, 14.2 compares them:
  * with eq, strings under the collation, and values that eq can't
@@ -739,11 +752,8 @@ atomicsEqual(xp3FuncCall *call, const xp3Atomic *left,
     xp3ErrCode err;
     int equal;
 
-    if (isTemporal(left->type) || isTemporal(right->type)) {
-        xp3FuncError(call, XP3_ERR_UNSUPPORTED, "comparing dates, times "
-                     "and durations is not implemented yet");
-        return(-1);
-    }
+    if (isTemporal(left->type) || isTemporal(right->type))
+        return(temporalUnsupported(call));
     if (compareSteps(call, left, right) < 0)
         return(-1);
     if (isStringType(left->type) && isStringType(right->type))
@@ -912,11 +922,8 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
 
     *cls = XP3_HASH_NONE;
     *key = 0;
-    if (isTemporal(atomic->type)) {
-        xp3FuncError(call, XP3_ERR_UNSUPPORTED, "comparing dates, times "
-                     "and durations is not implemented yet");
-        return(-1);
-    }
+    if (isTemporal(atomic->type))
+        return(temporalUnsupported(call));
     if (isStringType(atomic->type)) {
         const xmlChar *str = atomic->u.str;
         size_t len = strlen((const char *) str);
@@ -1039,12 +1046,24 @@ doubleKey(double value) {
     return(bits);
 }
 
+/* 2^64 divided by the golden ratio. Multiplied by it, the small class
+ * numbers differ in many bits, so that a class can't cancel against a
+ * few low bits of the key. */
+#define XP3_GOLDEN_RATIO_64 0x9E3779B97F4A7C15ULL
+
 /* The bucket of a key */
 static size_t
 hashBucket(const xp3HashTable *table, xp3HashClass cls, uint64_t key) {
-    uint64_t x = key ^ table->seed ^ ((uint64_t) cls * 0x9E3779B97F4A7C15ULL);
+    uint64_t x = key ^ table->seed ^ ((uint64_t) cls * XP3_GOLDEN_RATIO_64);
 
     return((size_t) mix64(x) & table->mask);
+}
+
+/* The entry that a reference from hashFind() or a next link names: its
+ * index + 1, so that 0 can mean none */
+static xp3HashEntry *
+hashEntryAt(const xp3HashTable *table, size_t ref) {
+    return(&table->entries[ref - 1]);
 }
 
 /* The first entry with a class and key after the entry cursor - 1, or
@@ -1052,13 +1071,19 @@ hashBucket(const xp3HashTable *table, xp3HashClass cls, uint64_t key) {
 static size_t
 hashFind(const xp3HashTable *table, xp3HashClass cls, uint64_t key,
          size_t cursor) {
-    size_t next = (cursor == 0) ?
-                  table->heads[hashBucket(table, cls, key)] :
-                  table->entries[cursor - 1].next;
+    size_t next;
 
-    while ((next != 0) && ((table->entries[next - 1].cls != cls) ||
-                           (table->entries[next - 1].key != key)))
-        next = table->entries[next - 1].next;
+    if (cursor == 0)
+        next = table->heads[hashBucket(table, cls, key)];
+    else
+        next = hashEntryAt(table, cursor)->next;
+    while (next != 0) {
+        const xp3HashEntry *entry = hashEntryAt(table, next);
+
+        if ((entry->cls == cls) && (entry->key == key))
+            break;
+        next = entry->next;
+    }
     return(next);
 }
 
@@ -1098,7 +1123,7 @@ static int
 hasMark(const xp3HashTable *table, double value, uint32_t marks) {
     size_t found = hashFind(table, XP3_HASH_DOUBLE, doubleKey(value), 0);
 
-    return((found != 0) && (table->entries[found - 1].marks & marks));
+    return((found != 0) && (hashEntryAt(table, found)->marks & marks));
 }
 
 /* Mark the entry of a double value. Returns 0, or -1 after recording
@@ -1110,7 +1135,7 @@ addMark(xp3FuncCall *call, xp3HashTable *table, double value,
     size_t found = hashFind(table, XP3_HASH_DOUBLE, key, 0);
 
     if (found != 0) {
-        table->entries[found - 1].marks |= mark;
+        hashEntryAt(table, found)->marks |= mark;
         return(0);
     }
     return(hashAdd(call, table, XP3_HASH_DOUBLE, key, 0, mark));
@@ -1124,9 +1149,13 @@ numberKept(const xp3HashTable *table, const xp3SeqBuilder *kept,
 
     switch (xp3TypeRepresentation(atomic->type)) {
         case XP3_REP_FLOAT:
+            /* eq rounds a decimal to xs:float to compare it with a
+             * float, so XP3_MARK_BY_DOUBLE says nothing here */
             return(hasMark(table, keys->asDouble, XP3_MARK_DOUBLE |
                            XP3_MARK_FLOAT | XP3_MARK_BY_FLOAT));
         case XP3_REP_DOUBLE:
+            /* eq rounds a decimal to xs:double to compare it with a
+             * double, so XP3_MARK_BY_FLOAT says nothing here */
             return(hasMark(table, keys->asDouble, XP3_MARK_DOUBLE |
                            XP3_MARK_FLOAT | XP3_MARK_BY_DOUBLE));
         default:
@@ -1135,7 +1164,7 @@ numberKept(const xp3HashTable *table, const xp3SeqBuilder *kept,
     while ((found = hashFind(table, XP3_HASH_DECIMAL, keys->exact,
                              found)) != 0) {
         const xp3Atomic *other =
-            kept->items[table->entries[found - 1].item].u.atomic;
+            kept->items[hashEntryAt(table, found)->item].u.atomic;
 
         if (xp3DecimalCompare(other->u.dec, atomic->u.dec) == 0)
             return(1);
@@ -1195,9 +1224,10 @@ distinctValue(xp3FuncCall *call, xp3HashTable *table, xp3SeqBuilder *kept,
         goto error;
     while ((cls != XP3_HASH_NONE) &&
            ((found = hashFind(table, cls, key, found)) != 0)) {
-        int equal = atomicsEqual(call,
-            kept->items[table->entries[found - 1].item].u.atomic,
-            atomic, collation, 1);
+        const xp3Atomic *other =
+            kept->items[hashEntryAt(table, found)->item].u.atomic;
+        int equal = atomicsEqual(call, other, atomic, collation,
+                                 XP3_NAN_EQUAL);
 
         if (equal < 0)
             goto error;
@@ -1319,7 +1349,8 @@ xp3FnIndexOf(xp3FuncCall *call, xp3Value **args, int count) {
     xp3FuncBuilderInit(call, &builder);
     xp3IterInit(&iter, args[0]);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
-        int equal = atomicsEqual(call, item.u.atomic, search, collation, 0);
+        int equal = atomicsEqual(call, item.u.atomic, search, collation,
+                                 XP3_NAN_UNEQUAL);
         xp3Atomic *atomic;
 
         xp3ItemUnref(item);
@@ -1372,6 +1403,7 @@ sameStringValue(xp3FuncCall *call, xmlNodePtr node1, xmlNodePtr node2,
     size_t length1 = 0;
     size_t length2 = 0;
     xp3ErrCode err;
+    int counted = -1;
     int ret = -1;
 
     err = xp3NodeStringValue(node1, &value1, &length1);
@@ -1382,7 +1414,9 @@ sameStringValue(xp3FuncCall *call, xmlNodePtr node1, xmlNodePtr node2,
                      "than 2 GB");
     else if (err != XP3_ERR_OK)
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
-    else if (xp3FuncBytes(call, (uint64_t) length1 + length2) == 0)
+    else
+        counted = xp3FuncBytes(call, (uint64_t) length1 + length2);
+    if (counted == 0)
         ret = (xp3CollationCompare(collation, value1, value2) == 0);
     xmlFree(value1);
     xmlFree(value2);
@@ -1424,6 +1458,18 @@ attributeList(xp3FuncCall *call, xmlNodePtr element, size_t count) {
     return(list);
 }
 
+/* The attribute of an element with the same name as attr, or NULL */
+static xmlNodePtr
+findAttributeByName(xmlNodePtr element, xmlNodePtr attr) {
+    xmlNodePtr other = NULL;
+
+    while ((other = xp3AxisNext(XP3_AXIS_ATTRIBUTE, element, other)) != NULL) {
+        if (sameName(attr, other))
+            return(other);
+    }
+    return(NULL);
+}
+
 /* Elements with up to this many attributes are matched pairwise; more
  * are sorted by name first, so that matching takes n log n time */
 #define XP3_FEW_ATTRIBUTES 8
@@ -1451,19 +1497,17 @@ sameAttributes(xp3FuncCall *call, xmlNodePtr element1, xmlNodePtr element2,
     if (count1 != count2)
         return(0);
     if (count1 <= XP3_FEW_ATTRIBUTES) {
-        while ((ret > 0) &&
-               ((attr = xp3AxisNext(XP3_AXIS_ATTRIBUTE, element1,
-                                    attr)) != NULL)) {
-            xmlNodePtr other = NULL;
+        while ((attr = xp3AxisNext(XP3_AXIS_ATTRIBUTE, element1,
+                                   attr)) != NULL) {
+            xmlNodePtr other = findAttributeByName(element2, attr);
 
-            while (((other = xp3AxisNext(XP3_AXIS_ATTRIBUTE, element2,
-                                         other)) != NULL) &&
-                   !sameName(attr, other))
-                ;
-            ret = (other != NULL) ?
-                  sameStringValue(call, attr, other, collation) : 0;
+            if (other == NULL)
+                return(0);
+            ret = sameStringValue(call, attr, other, collation);
+            if (ret <= 0)
+                return(ret);
         }
-        return(ret);
+        return(1);
     }
     if (xp3FuncSteps(call, count1) < 0)
         return(-1);
@@ -1558,6 +1602,8 @@ nodesDeepEqual(xp3FuncCall *call, xmlNodePtr top1, xmlNodePtr top2,
     child1 = contentChild(parent1, NULL);
     child2 = contentChild(parent2, NULL);
     while (1) {
+        /* Ascend once the children run out, which they must do on both
+         * sides at once */
         if ((child1 == NULL) || (child2 == NULL)) {
             if (child1 != child2)
                 return(0);
@@ -1570,11 +1616,13 @@ nodesDeepEqual(xp3FuncCall *call, xmlNodePtr top1, xmlNodePtr top2,
             parent2 = xp3NodeParent(parent2);
             continue;
         }
+        /* Compare the two children */
         if (xp3FuncSteps(call, 1) < 0)
             return(-1);
         ret = shallowEqual(call, child1, child2, collation);
         if (ret <= 0)
             return(ret);
+        /* Descend into elements; go on to the next siblings after text */
         if (xp3NodeGetKind(child1) == XP3_NODE_ELEMENT) {
             parent1 = child1;
             parent2 = child2;
@@ -1585,6 +1633,13 @@ nodesDeepEqual(xp3FuncCall *call, xmlNodePtr top1, xmlNodePtr top2,
             child2 = contentChild(parent2, child2);
         }
     }
+}
+
+/* Whether items of a kind are nodes or atomic values, the items that
+ * fn:deep-equal compares so far */
+static int
+isNodeOrAtomic(xp3ItemKind kind) {
+    return((kind == XP3_ITEM_NODE) || (kind == XP3_ITEM_ATOMIC));
 }
 
 /**
@@ -1628,14 +1683,7 @@ xp3FnDeepEqual(xp3FuncCall *call, xp3Value **args, int count) {
             xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
             return(NULL);
         }
-        if ((item1.kind != XP3_ITEM_NODE) &&
-            (item1.kind != XP3_ITEM_ATOMIC)) {
-            xp3FuncError(call, XP3_ERR_UNSUPPORTED, "fn:deep-equal of "
-                         "function items, maps and arrays is not "
-                         "implemented yet");
-            equal = -1;
-        } else if ((item2.kind != XP3_ITEM_NODE) &&
-                   (item2.kind != XP3_ITEM_ATOMIC)) {
+        if (!isNodeOrAtomic(item1.kind) || !isNodeOrAtomic(item2.kind)) {
             xp3FuncError(call, XP3_ERR_UNSUPPORTED, "fn:deep-equal of "
                          "function items, maps and arrays is not "
                          "implemented yet");
@@ -1644,7 +1692,7 @@ xp3FnDeepEqual(xp3FuncCall *call, xp3Value **args, int count) {
             equal = 0;
         } else if (item1.kind == XP3_ITEM_ATOMIC) {
             equal = atomicsEqual(call, item1.u.atomic, item2.u.atomic,
-                                 collation, 1);
+                                 collation, XP3_NAN_EQUAL);
         } else {
             equal = nodesDeepEqual(call, item1.u.node, item2.u.node,
                                    collation);
@@ -2014,6 +2062,32 @@ orderValues(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
     return(XP3_ERR_OK);
 }
 
+/* The primitive types that fn:min and fn:max have seen, which decide
+ * the type of the result */
+typedef struct {
+    int numbers;                /* XP3_HAS_DECIMAL, _FLOAT and _DOUBLE */
+    int strings;                /* XP3_HAS_STRING and _URI */
+    int nan;                    /* whether a float or double is NaN */
+} xp3TypesSeen;
+
+/* Add the type of a value to those seen */
+static void
+classifyExtreme(xp3TypesSeen *seen, const xp3Atomic *atomic) {
+    if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_DECIMAL)) {
+        seen->numbers |= XP3_HAS_DECIMAL;
+    } else if (atomic->type == XP3_TYPE_FLOAT) {
+        seen->numbers |= XP3_HAS_FLOAT;
+        seen->nan |= isnan(atomic->u.f);
+    } else if (atomic->type == XP3_TYPE_DOUBLE) {
+        seen->numbers |= XP3_HAS_DOUBLE;
+        seen->nan |= isnan(atomic->u.d);
+    } else if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_STRING)) {
+        seen->strings |= XP3_HAS_STRING;
+    } else if (atomic->type == XP3_TYPE_ANY_URI) {
+        seen->strings |= XP3_HAS_URI;
+    }
+}
+
 /*
  * fn:min and fn:max (F&O 3.1, 14.4.4 and 14.4.3): the value for which
  * op (lt or gt) holds against every other, compared as by the value
@@ -2029,13 +2103,11 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
     xp3LanguageLevel level = xp3FuncLevel(call);
     xp3Atomic *best = NULL;
     xp3Atomic *result;
+    xp3TypesSeen seen;
     xp3TypeId target;
     xp3ErrCode err;
     xp3Iter iter;
     xp3Item item;
-    int numbers = 0;
-    int strings = 0;
-    int nan = 0;
     int found;
 
     if (xp3ValueCount(value) == 0)
@@ -2049,9 +2121,11 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
     if ((collation != XP3_COLLATION_CODEPOINT) && !hasStrings(value))
         collation = XP3_COLLATION_CODEPOINT;
 
+    memset(&seen, 0, sizeof(seen));
     xp3IterInit(&iter, value);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
         xp3Atomic *atomic = aggregateValue(call, item);
+        xp3Atomic *other;
         int better;
 
         if (atomic == NULL)
@@ -2062,30 +2136,20 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
             xp3AtomicUnref(atomic);
             goto error;
         }
-        if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_DECIMAL)) {
-            numbers |= XP3_HAS_DECIMAL;
-        } else if (atomic->type == XP3_TYPE_FLOAT) {
-            numbers |= XP3_HAS_FLOAT;
-            nan |= isnan(atomic->u.f);
-        } else if (atomic->type == XP3_TYPE_DOUBLE) {
-            numbers |= XP3_HAS_DOUBLE;
-            nan |= isnan(atomic->u.d);
-        } else if (xp3TypeDerivesFrom(atomic->type, XP3_TYPE_STRING)) {
-            strings |= XP3_HAS_STRING;
-        } else if (atomic->type == XP3_TYPE_ANY_URI) {
-            strings |= XP3_HAS_URI;
-        }
-        if (compareSteps(call, atomic, (best != NULL) ? best : atomic) < 0) {
+        classifyExtreme(&seen, atomic);
+        /* The first value is compared with itself, so that a single
+         * value without an order, such as a QName, is an error too */
+        if (best == NULL)
+            other = atomic;
+        else
+            other = best;
+        if (compareSteps(call, atomic, other) < 0) {
             xp3AtomicUnref(atomic);
             goto error;
         }
-        /* The first value is compared with itself, so that a single
-         * value without an order, such as a QName, is an error too */
-        err = orderValues(op, atomic, (best != NULL) ? best : atomic,
-                          level, collation, &better);
+        err = orderValues(op, atomic, other, level, collation, &better);
         if (err != XP3_ERR_OK) {
-            aggregateError(call, err, name, atomic,
-                           (best != NULL) ? best : atomic);
+            aggregateError(call, err, name, atomic, other);
             xp3AtomicUnref(atomic);
             goto error;
         }
@@ -2104,15 +2168,15 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
     /* More than one numeric primitive type promotes all of them. With
      * strings and URIs, a URI becomes an xs:string, while a string
      * keeps its type, as QT3 expects (fn-max-18) */
-    if ((strings == (XP3_HAS_STRING | XP3_HAS_URI)) &&
+    if ((seen.strings == (XP3_HAS_STRING | XP3_HAS_URI)) &&
         (best->type == XP3_TYPE_ANY_URI))
         target = XP3_TYPE_STRING;
-    else if (numbers & (numbers - 1))
-        target = (numbers & XP3_HAS_DOUBLE) ? XP3_TYPE_DOUBLE :
-                                              XP3_TYPE_FLOAT;
+    else if (seen.numbers & (seen.numbers - 1))
+        target = (seen.numbers & XP3_HAS_DOUBLE) ? XP3_TYPE_DOUBLE :
+                                                   XP3_TYPE_FLOAT;
     else
         target = best->type;
-    if (nan) {
+    if (seen.nan) {
         xp3AtomicUnref(best);
         if (target == XP3_TYPE_FLOAT)
             return(xp3FuncAtomic(call, xp3AtomicNewFloat(
