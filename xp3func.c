@@ -52,6 +52,10 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_STRING_1] = xp3FnString,
     [XP3_FN_DATA_0] = xp3FnData,
     [XP3_FN_DATA_1] = xp3FnData,
+    [XP3_FN_BASE_URI_0] = xp3FnBaseUri,
+    [XP3_FN_BASE_URI_1] = xp3FnBaseUri,
+    [XP3_FN_DOCUMENT_URI_0] = xp3FnDocumentUri,
+    [XP3_FN_DOCUMENT_URI_1] = xp3FnDocumentUri,
     /* Errors (3) */
     [XP3_FN_ERROR_0] = xp3FnError,
     [XP3_FN_ERROR_1] = xp3FnError,
@@ -167,6 +171,9 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_MIN_2] = xp3FnMin,
     [XP3_FN_MAX_1] = xp3FnMax,
     [XP3_FN_MAX_2] = xp3FnMax,
+    /* Node identifiers (14.5) */
+    [XP3_FN_GENERATE_ID_0] = xp3FnGenerateId,
+    [XP3_FN_GENERATE_ID_1] = xp3FnGenerateId,
     /* Context functions (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
     [XP3_FN_LAST_0] = xp3FnLast,

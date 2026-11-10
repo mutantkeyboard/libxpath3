@@ -22,6 +22,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+#include <libxml/xmlversion.h>
 
 #include <libxpath3/xpath3.h>
 #include "private/xp3context.h"
@@ -1802,6 +1803,9 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
     checkEval(NULL, NULL, "path()", "error:XPDY0002");
     checkEval(NULL, NULL, "lang('en')", "error:XPDY0002");
+    checkEval(NULL, NULL, "base-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "document-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "generate-id()", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -2547,6 +2551,293 @@ done:
     xmlFreeDoc(doc);
 }
 
+/*
+ * Base and document URIs (F&O 3.1, 2.5 and 2.6), in a document read
+ * from URI_DOC: a relative xml:base resolved against the document, one
+ * below it resolved against that, and an absolute one that overrides
+ * both. No xml:base has dot segments, which libxml2 versions resolve
+ * differently.
+ */
+#define URI_DOC "http://example.org/dir/doc.xml"
+#define URI_SUB "http://example.org/dir/sub/"
+
+static const char xp3UriDoc[] =
+    "<r a='1' xml:base='sub/'>"
+    "<e xml:base='x/y.xml' b='2'>text<!--c--><?p v?></e>"
+    "<f xml:base='http://example.com/abs/'><g xml:base='rel/'/></f>"
+    "<h/>"
+    "</r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3UriCases[] = {
+    /* fn:base-uri: the document, then the xml:base chain */
+    { "base-uri(/), base-uri(.), base-uri(e)",
+      "anyURI:" URI_DOC " anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(f), base-uri(f/g)",
+      "anyURI:http://example.com/abs/ anyURI:http://example.com/abs/rel/" },
+    /* Other nodes have the base URI of their parent */
+    { "(e/@b, e/text(), e/comment(), e/processing-instruction()) ! "
+      "base-uri(.)",
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml "
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(@a), base-uri(h)", "anyURI:" URI_SUB " anyURI:" URI_SUB },
+    { "count(base-uri(())), base-uri(.) instance of xs:anyURI",
+      "integer:0 boolean:true" },
+
+    /* fn:document-uri: document nodes only */
+    { "document-uri(/), document-uri(/) instance of xs:anyURI",
+      "anyURI:" URI_DOC " boolean:true" },
+    { "count(document-uri(.)), count(document-uri(@a)), "
+      "count(document-uri(e/text())), count(document-uri(()))",
+      "integer:0 integer:0 integer:0 integer:0" },
+
+    /* The context item for the forms without an argument */
+    { "base-uri(), e ! base-uri(), / ! base-uri()",
+      "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml anyURI:" URI_DOC },
+    { "/ ! document-uri(), count(document-uri())",
+      "anyURI:" URI_DOC " integer:0" },
+    { "1 ! base-uri()", "error:XPTY0004" },
+    { "1 ! document-uri()", "error:XPTY0004" },
+    { "base-uri(1)", "error:XPTY0004" },
+    { "document-uri('a')", "error:XPTY0004" }
+};
+
+static void
+testUris(void) {
+    const char *noUrlXml = "<r xml:base='sub/'><e/></r>";
+    xmlDocPtr doc = xmlReadMemory(xp3UriDoc, (int) strlen(xp3UriDoc),
+                                  URI_DOC, NULL, 0);
+    xmlDocPtr noUrl = xmlReadMemory(noUrlXml, (int) strlen(noUrlXml), NULL,
+                                    NULL, 0);
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr text = xmlNewText(BAD_CAST "t");
+    xmlNodePtr owned = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        owned = xmlNewDocNode(doc, NULL, BAD_CAST "o", NULL);
+    if ((doc == NULL) || (noUrl == NULL) || (detached == NULL) ||
+        (text == NULL) || (owned == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "URI test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "URI context node set");
+    checkPathCases(sctx, plain, ctx, xp3UriCases,
+                   sizeof(xp3UriCases) / sizeof(xp3UriCases[0]));
+    /* fn:document-uri#0 comes with XPath 3.0 */
+    checkEval(level20, ctx, "base-uri(), base-uri(e), document-uri(/)",
+              "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml "
+              "anyURI:" URI_DOC);
+    checkEval(level20, ctx, "document-uri()", "error:XPST0017");
+
+    /* Without a URL, the document has neither, and xml:base stays
+     * relative */
+    check(xp3SetContextNode(ctx, (xmlNodePtr) noUrl) == 0,
+          "document without a URL set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri()), "
+              "base-uri(r), base-uri(r/e)",
+              "integer:0 integer:0 anyURI:sub/ anyURI:sub/");
+
+    /* Without a parent or a document, there is no base */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    check(xp3SetContextNode(ctx, text) == 0, "detached text set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    /* An element without a parent has the URL of the document that
+     * owns it, as libxml2 gives it */
+    check(xp3SetContextNode(ctx, owned) == 0, "unlinked element set");
+    checkEval(sctx, ctx, "base-uri(), count(document-uri())",
+              "anyURI:" URI_DOC " integer:0");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(owned);
+    xmlFreeNode(text);
+    xmlFreeNode(detached);
+    xmlFreeDoc(noUrl);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:generate-id (F&O 3.1, 14.5.4): a text node of three libxml2
+ * nodes, attributes and the other kinds of nodes. The ids are the
+ * positions in document order from 1: / is id1, r id2, @a id3, e id4,
+ * @b id5, the text id6, the comment id7, the PI id8 and f id9.
+ */
+static const char xp3IdDoc[] =
+    "<r a='1'><e b='2'>a<![CDATA[b]]>c</e><!--c--><?p v?><f/></r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3IdCases[] = {
+    { "generate-id(/), generate-id(.), generate-id(@a), generate-id(e)",
+      "string:id1 string:id2 string:id3 string:id4" },
+    /* The same node the same id, whatever order the calls come in */
+    { "generate-id(e), generate-id(.), generate-id(e)",
+      "string:id4 string:id2 string:id4" },
+    { "(f, e/@b, ., e/text(), f) ! generate-id(.)",
+      "string:id9 string:id5 string:id2 string:id6 string:id9" },
+    /* A text node by any path is the same node */
+    { "generate-id(e/text()) eq generate-id(e/node()[1]), "
+      "generate-id(e/text()) eq generate-id((//text())[1])",
+      "boolean:true boolean:true" },
+    /* An attribute is not its element */
+    { "generate-id(@a) eq generate-id(.), generate-id(e/@b) eq generate-id(e)",
+      "boolean:false boolean:false" },
+    /* Different nodes, different ids */
+    { "let $n := (/, //node(), //@*) "
+      "return count($n) eq count(distinct-values($n ! generate-id(.)))",
+      "boolean:true" },
+    { "generate-id(()), generate-id(.) instance of xs:string",
+      "string: boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "generate-id(), generate-id() eq generate-id(.), "
+      "(e, comment(), /) ! generate-id()",
+      "string:id2 boolean:true string:id4 string:id7 string:id1" },
+    { "1 ! generate-id()", "error:XPTY0004" },
+    { "generate-id(1)", "error:XPTY0004" }
+};
+
+/*
+ * Evaluated with the document as the context node, in
+ * <r><a id='1'><a id='2'/></a><a id='3'/></r>: the //a rewrite visits
+ * the a elements in another order, and pruning skips the call on r, so
+ * ids numbered in the order of the calls would differ when optimized.
+ * In document order, a#1 is id3 and a#2 id5.
+ */
+static const xp3EvalCase xp3IdOptimizedCases[] = {
+    { "//a[generate-id() = 'id5']/string(@id)", "string:2" },
+    { "(generate-id(r) = '' and 0, generate-id(r/a[1]))",
+      "boolean:false string:id3" }
+};
+
+/* Whether an id is an ASCII name, [A-Za-z][A-Za-z0-9]*, as F&O 3.1,
+ * 14.5.4 requires */
+static int
+isAsciiName(const xmlChar *id) {
+    size_t i;
+
+    if ((id == NULL) || (id[0] == 0))
+        return(0);
+    for (i = 0; id[i] != 0; i++) {
+        int letter = ((id[i] >= 'A') && (id[i] <= 'Z')) ||
+                     ((id[i] >= 'a') && (id[i] <= 'z'));
+        int digit = (id[i] >= '0') && (id[i] <= '9');
+
+        if (letter)
+            continue;
+        if (i == 0)
+            return(0);
+        if (!digit)
+            return(0);
+    }
+    return(1);
+}
+
+/* The ids of every node but the document, r to f, are id2 to id9 in
+ * each evaluation of the unchanged document */
+static void
+checkIdsAgain(const xp3StaticContext *sctx, xp3DynamicContext *ctx) {
+    xp3Expr *expr = xp3Compile(sctx, BAD_CAST "(//node() | //@*) ! "
+                               "generate-id(.)", NULL);
+    xp3Sequence *ids;
+    size_t i;
+    size_t j;
+
+    check(expr != NULL, "generate-id expression compiled");
+    for (i = 0; (expr != NULL) && (i < 2); i++) {
+        ids = xp3Evaluate(expr, ctx, NULL);
+        check((ids != NULL) && (xp3SequenceLength(ids) == 8),
+              "an id for each node");
+        for (j = 0; (ids != NULL) && (j < xp3SequenceLength(ids)); j++) {
+            xmlChar *id = xp3SequenceStringValue(ids, j);
+            char expected[32];
+
+            snprintf(expected, sizeof(expected), "id%lu",
+                     (unsigned long) j + 2);
+            check(isAsciiName(id), "an id is an ASCII name");
+            check(xmlStrEqual(id, BAD_CAST expected),
+                  "an unchanged document gets the same ids again");
+            xmlFree(id);
+        }
+        xp3FreeSequence(ids);
+    }
+    xp3FreeExpr(expr);
+}
+
+static void
+testGenerateId(void) {
+    xmlDocPtr doc = parseDoc(xp3IdDoc);
+    xmlDocPtr nested = parseDoc("<r><a id='1'><a id='2'/></a><a id='3'/>"
+                                "</r>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr root = NULL;
+    xmlNodePtr cdata;
+
+    if (doc != NULL)
+        root = xmlDocGetRootElement(doc);
+    if ((root == NULL) || (nested == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "v") < 0)) {
+        check(0, "generate-id test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    /* The CDATA section in the middle of the text run of e */
+    cdata = root->children->children->next;
+    bound = xp3NewNodeSequence(&cdata, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound) < 0) ||
+        (xp3SetContextNode(ctx, root) < 0)) {
+        check(0, "generate-id context set");
+        goto done;
+    }
+    checkPathCases(sctx, plain, ctx, xp3IdCases,
+                   sizeof(xp3IdCases) / sizeof(xp3IdCases[0]));
+    checkEval(sctx, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(plain, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(level20, ctx, "generate-id(.)", "error:XPST0017");
+    checkIdsAgain(sctx, ctx);
+    checkIdsAgain(plain, ctx);
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) nested) == 0,
+          "nested document set");
+    checkPathCases(sctx, plain, ctx, xp3IdOptimizedCases,
+                   sizeof(xp3IdOptimizedCases) /
+                   sizeof(xp3IdOptimizedCases[0]));
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(nested);
+    xmlFreeDoc(doc);
+}
+
 /* A document of one chain of elements, the innermost with a text */
 static xmlDocPtr
 chainDoc(int depth, const char *leaf) {
@@ -2745,6 +3036,32 @@ testNamespaceSteps(void) {
 done:
     xp3FreeDynamicContext(ctx);
     xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * fn:base-uri counts a step per node from the one whose base it gives
+ * up to the root, as libxml2 may read the xml:base of each: on a
+ * chain, each node costs its depth.
+ */
+static void
+testBaseUriSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (chain != NULL)
+        chain->URL = xmlStrdup(BAD_CAST URI_DOC);
+    if ((chain == NULL) || (chain->URL == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) chain) < 0)) {
+        check(0, "base URI step test set up");
+    } else {
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "integer:1001");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*), base-uri(//b)",
+                  "integer:1001 anyURI:" URI_DOC);
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
     xmlFreeDoc(chain);
 }
 
@@ -4311,6 +4628,29 @@ static const char *const xp3AllocNamespacesExpected =
     "string:s string:p string:xml anyURI:urn:q anyURI:urn:d boolean:true "
     "boolean:true boolean:false";
 
+/*
+ * fn:base-uri, on xp3UriDoc read from test.xml. Before libxml2 2.13 a
+ * failed allocation in xmlNodeGetBase() can't be told from no base, so
+ * it gives the empty sequence and this loop runs from 2.13 on only.
+ */
+static const char *const xp3AllocBaseUri =
+    "(base-uri(/), base-uri(), base-uri(e/@b), base-uri(f/g), "
+    "base-uri(()))";
+
+static const char *const xp3AllocBaseUriExpected =
+    "anyURI:test.xml anyURI:sub/ anyURI:sub/x/y.xml "
+    "anyURI:http://example.com/abs/rel/";
+
+/* fn:document-uri and fn:generate-id, on xp3UriDoc read from
+ * test.xml */
+static const char *const xp3AllocIds =
+    "(document-uri(/), document-uri(), generate-id(e), generate-id(), "
+    "generate-id(e), generate-id(()), (e/node(), @a) ! generate-id(.))";
+
+static const char *const xp3AllocIdsExpected =
+    "anyURI:test.xml string:id5 string:id2 string:id5 string: string:id8 "
+    "string:id9 string:id10 string:id3";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -5338,10 +5678,13 @@ main(void) {
     testTreeShape();
     testPath();
     testNamespaces();
+    testUris();
+    testGenerateId();
     testDeepTrees();
     testTreeShapeSteps();
     testPathSteps();
     testNamespaceSteps();
+    testBaseUriSteps();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -5376,6 +5719,11 @@ main(void) {
     testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
     testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
                              xp3AllocNamespacesExpected);
+#if LIBXML_VERSION >= 21300
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
+                             xp3AllocBaseUriExpected);
+#endif
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();

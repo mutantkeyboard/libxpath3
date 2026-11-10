@@ -870,6 +870,25 @@ orderPosition(xp3DocOrder *order, xmlNodePtr *node, size_t *position) {
 }
 
 /**
+ * Get the position of a node in document order, indexing its tree
+ * first if needed: from 0 for the first node of the first tree the
+ * table indexed, and on through the trees indexed after it, so the
+ * nodes of all trees have different positions. fn:generate-id makes
+ * its ids from them.
+ *
+ * @param order     the table
+ * @param node      the node
+ * @param position  set to its position
+ * @returns XP3_ERR_OK, XP3_ERR_NO_MEMORY, or XP3_ERR_XPTY0004 if the
+ *          node is not an XDM node or its tree changed after the table
+ *          indexed it
+ */
+xp3ErrCode
+xp3DocOrderPosition(xp3DocOrder *order, xmlNodePtr node, size_t *position) {
+    return(orderPosition(order, &node, position));
+}
+
+/**
  * Compare two nodes in document order. Nodes of different trees are
  * in the order their trees were first seen by this table.
  *

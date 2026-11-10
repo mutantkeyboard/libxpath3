@@ -193,6 +193,9 @@ xp3FuncBuilderAdd(xp3FuncCall *call, xp3SeqBuilder *builder, xp3Item item);
 int
 xp3FuncSortNodes(xp3FuncCall *call, xp3SeqBuilder *builder);
 
+int
+xp3FuncNodePosition(xp3FuncCall *call, xmlNodePtr node, size_t *position);
+
 xp3Value *
 xp3FuncBuilderFinish(xp3FuncCall *call, xp3SeqBuilder *builder);
 
@@ -421,6 +424,15 @@ xp3FnNamespaceUriForPrefix(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnLang(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnBaseUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDocumentUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnGenerateId(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnumeric.c */
 xp3Value *

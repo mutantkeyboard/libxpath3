@@ -24,6 +24,7 @@
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
+#include <libxml/xmlversion.h>
 
 #include "private/xp3context.h"
 #include "private/xp3func.h"
@@ -919,4 +920,174 @@ xp3FnLang(xp3FuncCall *call, xp3Value **args, int count) {
     matches = langMatches(value, valueLen, test, testLen);
     xmlFree(value);
     return(xp3FuncAtomic(call, xp3AtomicNewBoolean(matches)));
+}
+
+/*
+ * Base and document URIs
+ */
+
+/*
+ * The node whose base URI a node has in XDM: an element or a document
+ * node itself, and a node of another kind its parent, or NULL if it
+ * has none.
+ */
+static xmlNodePtr
+baseNode(xmlNodePtr node) {
+    xp3NodeKind kind = xp3NodeGetKind(node);
+
+    if ((kind == XP3_NODE_ELEMENT) || (kind == XP3_NODE_DOCUMENT))
+        return(node);
+    return(xp3NodeParent(node));
+}
+
+/* Count a step per node from a node up to its root, the nodes whose
+ * xml:base libxml2 may read. Returns 0, or -1 after recording LIMIT. */
+static int
+countBaseSteps(xp3FuncCall *call, xmlNodePtr node) {
+    xmlNodePtr cur;
+
+    for (cur = node; cur != NULL; cur = xp3NodeParent(cur)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+    }
+    return(0);
+}
+
+/*
+ * The base URI libxml2 gives a node: its xml:base and those of its
+ * ancestors, each resolved against the next one up, and then against
+ * the URL of the document. Sets *base to it, to be freed, or to NULL
+ * if there is none or a URI can't be resolved. Returns 0, or -1 if
+ * memory ran out.
+ *
+ * Only xmlNodeGetBaseSafe(), from libxml2 2.13 on, tells a failed
+ * allocation from a node without a base. xmlNodeGetBase() returns NULL
+ * for both, so with an older libxml2 a failed allocation here gives
+ * the empty sequence instead of NO_MEMORY.
+ */
+static int
+libxmlBase(xmlNodePtr node, xmlChar **base) {
+#if LIBXML_VERSION >= 21300
+    if (xmlNodeGetBaseSafe(node->doc, node, base) < 0)
+        return(-1);
+#else
+    *base = xmlNodeGetBase(node->doc, node);
+#endif
+    return(0);
+}
+
+/**
+ * fn:base-uri#0 and #1 (F&O 3.1, 2.5): the base URI of a node, as
+ * libxml2 computes it from xml:base and the URL of the document, and
+ * returns it, also when it is a relative file path (doc/DESIGN.md
+ * 4.5). Attributes, text nodes, comments and processing instructions
+ * have the base URI of their parent, and without a parent none. A node
+ * without a base URI and the empty sequence give the empty sequence.
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns an xs:anyURI or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnBaseUri(xp3FuncCall *call, xp3Value **args, int count) {
+    xmlNodePtr node;
+    xp3Value *result;
+    xmlChar *base;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    if (ret == 0)
+        return(xp3ValueEmpty());
+    node = baseNode(node);
+    if (node == NULL)
+        return(xp3ValueEmpty());
+    if (countBaseSteps(call, node) < 0)
+        return(NULL);
+    if (libxmlBase(node, &base) < 0) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(NULL);
+    }
+    if (base == NULL)
+        return(xp3ValueEmpty());
+    result = newString(call, XP3_TYPE_ANY_URI, base);
+    xmlFree(base);
+    return(result);
+}
+
+/* Whether a node is a libxml2 document, which has a URL. A document
+ * fragment is a document node in XDM too, but has none. */
+static int
+isLibxmlDocument(const xmlNode *node) {
+    return((node->type == XML_DOCUMENT_NODE) ||
+           (node->type == XML_HTML_DOCUMENT_NODE));
+}
+
+/**
+ * fn:document-uri#0 and #1 (F&O 3.1, 2.6): the URL libxml2 keeps for a
+ * document, as it is, also when it is a relative file path
+ * (doc/DESIGN.md 4.5). Other nodes, a document without a URL and the
+ * empty sequence give the empty sequence.
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns an xs:anyURI or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnDocumentUri(xp3FuncCall *call, xp3Value **args, int count) {
+    xmlNodePtr node;
+    xmlDocPtr doc;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    if ((ret == 0) || (!isLibxmlDocument(node)))
+        return(xp3ValueEmpty());
+    doc = (xmlDocPtr) node;
+    if (doc->URL == NULL)
+        return(xp3ValueEmpty());
+    return(newString(call, XP3_TYPE_ANY_URI, doc->URL));
+}
+
+/*
+ * Node identifiers
+ */
+
+/* Room for "id" and the digits of any size_t */
+#define XP3_ID_SIZE 32
+
+/**
+ * fn:generate-id#0 and #1 (F&O 3.1, 14.5.4): a string that identifies
+ * a node, "id" and its position in the document order of the
+ * evaluation, counted from 1. Nodes of all trees have different
+ * positions, so the same node gives the same id and different nodes
+ * different ones. In an evaluation of nodes of one tree, the ids
+ * depend neither on the order of the calls nor on optimizing; with
+ * several trees, they depend on the order the trees were first indexed
+ * in, as document order between trees does.
+ * The ids are ASCII names, as F&O requires, and don't depend on
+ * addresses (doc/DESIGN.md 4.5). The empty sequence gives "".
+ *
+ * @param call   the call
+ * @param args   the node, node()?
+ * @param count  0 or 1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnGenerateId(xp3FuncCall *call, xp3Value **args, int count) {
+    char id[XP3_ID_SIZE];
+    xmlNodePtr node;
+    size_t position;
+    int ret = argNode(call, args, count, &node);
+
+    if (ret < 0)
+        return(NULL);
+    if (ret == 0)
+        return(newString(call, XP3_TYPE_STRING, NULL));
+    if (xp3FuncNodePosition(call, node, &position) < 0)
+        return(NULL);
+    snprintf(id, sizeof(id), "id%zu", position + 1);
+    return(newString(call, XP3_TYPE_STRING, BAD_CAST id));
 }

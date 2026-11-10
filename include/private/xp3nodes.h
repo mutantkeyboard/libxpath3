@@ -87,6 +87,9 @@ void
 xp3DocOrderFree(xp3DocOrder *order);
 
 xp3ErrCode
+xp3DocOrderPosition(xp3DocOrder *order, xmlNodePtr node, size_t *position);
+
+xp3ErrCode
 xp3DocOrderCompare(xp3DocOrder *order, xmlNodePtr first,
                    xmlNodePtr second, int *result);
 

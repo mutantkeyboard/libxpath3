@@ -3232,6 +3232,37 @@ xp3FuncSortNodes(xp3FuncCall *call, xp3SeqBuilder *builder) {
 }
 
 /**
+ * Get the position of a node in the document order of the evaluation,
+ * from 0, with the table paths sort with: the nodes of a tree in
+ * document order, and the trees in the order the table first indexed
+ * them.
+ *
+ * @param call      the call
+ * @param node      the node
+ * @param position  set to its position
+ * @returns 0, or -1 after recording NO_MEMORY or XPTY0004 for a node
+ *          that is not part of the data model
+ */
+int
+xp3FuncNodePosition(xp3FuncCall *call, xmlNodePtr node, size_t *position) {
+    xp3Eval *ev = call->ev;
+    char name[XP3_NAME_BUF];
+    xp3ErrCode err;
+
+    if (evalOrder(ev) == NULL)
+        return(-1);
+    err = xp3DocOrderPosition(ev->order, node, position);
+    if (err == XP3_ERR_OK)
+        return(0);
+    if (err == XP3_ERR_NO_MEMORY)
+        evalNoMemory(ev);
+    else
+        evalError(ev, err, call->node, "the node of %s is not part of the "
+                  "data model", callName(call, name, sizeof(name)));
+    return(-1);
+}
+
+/**
  * Finish a sequence being built.
  *
  * @param call     the call
