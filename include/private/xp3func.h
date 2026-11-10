@@ -202,6 +202,9 @@ xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic);
 xp3Value *
 xp3FuncAtomize(xp3FuncCall *call, xp3Value *value);
 
+const xmlChar *
+xp3FuncString(const xp3Value *value);
+
 /*
  * Collations (F&O 3.1, 5.3), in xp3fnstring.c. The Unicode codepoint
  * collation is the default. The URIs of the UCA family (5.3.3) are
@@ -409,6 +412,15 @@ xp3FnInnermost(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnOutermost(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnInScopePrefixes(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNamespaceUriForPrefix(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLang(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnumeric.c */
 xp3Value *

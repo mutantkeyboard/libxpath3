@@ -120,6 +120,9 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_FALSE_0] = xp3FnFalse,
     [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
     [XP3_FN_NOT_1] = xp3FnNot,
+    /* Namespaces of elements (10.2) */
+    [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
+    [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,
     /* Functions on nodes (13) */
     [XP3_FN_NAME_0] = xp3FnName,
     [XP3_FN_NAME_1] = xp3FnName,
@@ -127,6 +130,8 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_LOCAL_NAME_1] = xp3FnLocalName,
     [XP3_FN_NAMESPACE_URI_0] = xp3FnNamespaceUri,
     [XP3_FN_NAMESPACE_URI_1] = xp3FnNamespaceUri,
+    [XP3_FN_LANG_1] = xp3FnLang,
+    [XP3_FN_LANG_2] = xp3FnLang,
     [XP3_FN_ROOT_0] = xp3FnRoot,
     [XP3_FN_ROOT_1] = xp3FnRoot,
     [XP3_FN_PATH_0] = xp3FnPath,

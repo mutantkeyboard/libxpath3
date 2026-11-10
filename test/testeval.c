@@ -1801,6 +1801,7 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "root()", "error:XPDY0002");
     checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
     checkEval(NULL, NULL, "path()", "error:XPDY0002");
+    checkEval(NULL, NULL, "lang('en')", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -2373,6 +2374,179 @@ done:
     xmlFreeDoc(doc);
 }
 
+/*
+ * The namespaces of elements and the language of nodes (F&O 3.1,
+ * 10.2.5, 10.2.6 and 13.4): a default namespace, a prefix bound again
+ * nearer, the default namespace undeclared, and xml:lang given again
+ * nearer, also as "". The elements are in urn:d except f.
+ */
+static const char xp3NamespaceDoc[] =
+    "<r xmlns='urn:d' xmlns:p='urn:p' xml:lang='en-GB'>"
+    "<e xmlns:p='urn:q' xml:lang='DE'>"
+    "<f xmlns='' xmlns:s='urn:s' a='1'>text<!--c--></f>"
+    "</e>"
+    "<g xml:lang=''><h/></g>"
+    "<i xml:lang='-x'/>"
+    "<j xml:lang='\xc3\x89'/>"
+    "<!--c-->"
+    "</r>";
+
+#define XML_NS "http://www.w3.org/XML/1998/namespace"
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3NamespaceCases[] = {
+    /* fn:in-scope-prefixes: the nearest element's first, xml last */
+    { "in-scope-prefixes(.)", "string: string:p string:xml" },
+    { "in-scope-prefixes(*:e)", "string:p string: string:xml" },
+    { "in-scope-prefixes(*:e/f)", "string:s string:p string:xml" },
+    { "in-scope-prefixes(*:g/*:h), in-scope-prefixes(.) instance of "
+      "xs:string+",
+      "string: string:p string:xml boolean:true" },
+    { "in-scope-prefixes(@xml:lang)", "error:XPTY0004" },
+    { "in-scope-prefixes(())", "error:XPTY0004" },
+    { "in-scope-prefixes(comment())", "error:XPTY0004" },
+
+    /* fn:namespace-uri-for-prefix */
+    { "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('p', *:e), "
+      "namespace-uri-for-prefix('p', *:e/f)",
+      "anyURI:urn:p anyURI:urn:q anyURI:urn:q" },
+    { "namespace-uri-for-prefix('', .), namespace-uri-for-prefix((), *:e), "
+      "namespace-uri-for-prefix('s', *:e/f)",
+      "anyURI:urn:d anyURI:urn:d anyURI:urn:s" },
+    { "count(namespace-uri-for-prefix('', *:e/f)), "
+      "count(namespace-uri-for-prefix((), *:e/f)), "
+      "count(namespace-uri-for-prefix('s', .)), "
+      "count(namespace-uri-for-prefix('xmlns', .))",
+      "integer:0 integer:0 integer:0 integer:0" },
+    { "namespace-uri-for-prefix('xml', *:e/f), "
+      "namespace-uri-for-prefix('p', .) instance of xs:anyURI",
+      "anyURI:" XML_NS " boolean:true" },
+    { "namespace-uri-for-prefix('p', @xml:lang)", "error:XPTY0004" },
+    { "namespace-uri-for-prefix('p', ())", "error:XPTY0004" },
+    { "namespace-uri-for-prefix(1, .)", "error:XPTY0004" },
+
+    /* fn:lang: equal, or the part before a "-", ignoring case */
+    { "lang('en', .), lang('EN', .), lang('en-gb', .), lang('En-GB', .)",
+      "boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en-G', .), lang('e', .), lang('', .), lang((), .), "
+      "lang('en-GB-x', .)",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    /* The nearest xml:lang counts, also when it is "" */
+    { "lang('de', *:e), lang('en', *:e), lang('d', *:e)",
+      "boolean:true boolean:false boolean:false" },
+    { "lang('en', *:g), lang('', *:g), lang('', *:g/*:h), "
+      "lang((), *:g/*:h)",
+      "boolean:false boolean:true boolean:true boolean:true" },
+    { "lang('', *:i), lang('-x', *:i), lang('-', *:i), lang('x', *:i)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    /* Case is folded for ASCII letters only */
+    { "lang('\xc3\x89', *:j), lang('\xc3\xa9', *:j)",
+      "boolean:true boolean:false" },
+    /* An attribute starts at its element, other nodes at their parent */
+    { "lang('de', *:e/f), lang('de', *:e/f/@a), lang('de', *:e/f/text()), "
+      "lang('de', *:e/f/comment()), lang('de', *:e/@xml:lang)",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en', comment()), lang('en', @xml:lang), lang('en', /), "
+      "lang('', /)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    { "lang('en', ())", "error:XPTY0004" },
+    { "lang('en', 1)", "error:XPTY0004" },
+    { "lang(1)", "error:XPTY0004" },
+
+    /* The context item for fn:lang#1 */
+    { "lang('en'), *:e ! lang('de'), (*:e/f/@a, *:g) ! lang('de')",
+      "boolean:true boolean:true boolean:true boolean:false" },
+    { "/ ! lang('en')", "boolean:false" },
+    { "1 ! lang('en')", "error:XPTY0004" }
+};
+
+/* Evaluated with a as the context node, after a declaration of xml
+ * and an undeclaration of p on b are added to <a xmlns:p='urn:p'
+ * xmlns:q='urn:q'><b><c/></b></a> */
+static const xp3EvalCase xp3DeclaredCases[] = {
+    { "in-scope-prefixes(.), in-scope-prefixes(b)",
+      "string:p string:q string:xml string:q string:xml" },
+    { "count(namespace-uri-for-prefix('p', b/c)), "
+      "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('xml', .)",
+      "integer:0 anyURI:urn:p anyURI:" XML_NS }
+};
+
+/* Add a namespace declaration to an element as it is, also those that
+ * xmlNewNs() refuses in some versions of libxml2 */
+static int
+addDeclaration(xmlNodePtr element, const char *href, const char *prefix) {
+    xmlNsPtr ns = xmlMalloc(sizeof(xmlNs));
+    xmlNsPtr *last = &element->nsDef;
+
+    if (ns == NULL)
+        return(-1);
+    memset(ns, 0, sizeof(xmlNs));
+    ns->type = XML_NAMESPACE_DECL;
+    ns->href = xmlStrdup(BAD_CAST href);
+    ns->prefix = xmlStrdup(BAD_CAST prefix);
+    while (*last != NULL)
+        last = &(*last)->next;
+    *last = ns;
+    if ((ns->href == NULL) || (ns->prefix == NULL))
+        return(-1);
+    return(0);
+}
+
+static void
+testNamespaces(void) {
+    xmlDocPtr doc = parseDoc(xp3NamespaceDoc);
+    xmlDocPtr declared = parseDoc("<a xmlns:p='urn:p' xmlns:q='urn:q'>"
+                                  "<b><c/></b></a>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr root = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (declared != NULL)
+        root = xmlDocGetRootElement(declared);
+    if ((doc == NULL) || (root == NULL) || (detached == NULL) ||
+        (addDeclaration(root, XML_NS, "xml") < 0) ||
+        (addDeclaration(root->children, "", "p") < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "namespace test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "namespace context node set");
+    checkPathCases(sctx, plain, ctx, xp3NamespaceCases,
+                   sizeof(xp3NamespaceCases) /
+                   sizeof(xp3NamespaceCases[0]));
+    /* All three are in XPath 2.0 */
+    checkEval(level20, ctx, "lang('en'), in-scope-prefixes(.)[last()], "
+              "namespace-uri-for-prefix('p', .)",
+              "boolean:true string:xml anyURI:urn:p");
+
+    check(xp3SetContextNode(ctx, root) == 0, "declarations set");
+    checkPathCases(sctx, plain, ctx, xp3DeclaredCases,
+                   sizeof(xp3DeclaredCases) / sizeof(xp3DeclaredCases[0]));
+
+    /* An element without a document still has xml */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "in-scope-prefixes(.), lang('en')",
+              "string:xml boolean:false");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(declared);
+    xmlFreeDoc(doc);
+}
+
 /* A document of one chain of elements, the innermost with a text */
 static xmlDocPtr
 chainDoc(int depth, const char *leaf) {
@@ -2504,6 +2678,69 @@ testPathSteps(void) {
     checkEval(NULL, ctx, "count(r/a)", "integer:1000");
     checkEval(NULL, ctx, "path(r/a[last()])", "string:/Q{}r[1]/Q{}a[1000]");
     checkEval(NULL, ctx, "count(r/a ! path())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * The namespace functions and fn:lang count a step per ancestor and per
+ * declaration they visit: on a chain with the declaration and xml:lang
+ * at the top, each node costs its depth. fn:in-scope-prefixes walks up
+ * again for each declaration, so many declarations on one element cost
+ * their number squared.
+ */
+static void
+testNamespaceSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr top = NULL;
+    xmlNodePtr root = NULL;
+    char name[32];
+    int i;
+
+    if (chain != NULL)
+        top = xmlDocGetRootElement(chain);
+    if ((top != NULL) &&
+        ((xmlNewNs(top, BAD_CAST "urn:p", BAD_CAST "p") == NULL) ||
+         (xmlSetProp(top, BAD_CAST "xml:lang", BAD_CAST "en") == NULL)))
+        top = NULL;
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        snprintf(name, sizeof(name), "p%d", i);
+        if (xmlNewNs(root, BAD_CAST "urn:p", BAD_CAST name) == NULL)
+            root = NULL;
+    }
+    if ((top == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "namespace step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p', //b), "
+              "in-scope-prefixes(//b), lang('en', //b)",
+              "anyURI:urn:p string:p string:xml boolean:true");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "error:LIMIT");
+    checkEval(NULL, ctx, "count(//* ! in-scope-prefixes(.))", "error:LIMIT");
+    checkEval(NULL, ctx, "count(//*[lang('en')])", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "declarations set as the context");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p999', r)",
+              "anyURI:urn:p");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "error:LIMIT");
 
 done:
     xp3FreeDynamicContext(ctx);
@@ -4064,6 +4301,16 @@ static const char *const xp3AllocPathExpected =
     "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2] "
     "string:/Q{}r[1]/processing-instruction(t)[2]";
 
+/* The namespaces of elements and fn:lang, on xp3NamespaceDoc */
+static const char *const xp3AllocNamespaces =
+    "(in-scope-prefixes(*:e/f), namespace-uri-for-prefix('p', *:e), "
+    "namespace-uri-for-prefix((), .), lang('en'), lang('de', *:e/f/@a), "
+    "lang('x', /))";
+
+static const char *const xp3AllocNamespacesExpected =
+    "string:s string:p string:xml anyURI:urn:q anyURI:urn:d boolean:true "
+    "boolean:true boolean:false";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -5090,9 +5337,11 @@ main(void) {
     testNodeNames();
     testTreeShape();
     testPath();
+    testNamespaces();
     testDeepTrees();
     testTreeShapeSteps();
     testPathSteps();
+    testNamespaceSteps();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -5125,6 +5374,8 @@ main(void) {
                              xp3AllocNamesExpected);
     testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
     testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
+    testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
+                             xp3AllocNamespacesExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();

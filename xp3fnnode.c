@@ -8,8 +8,8 @@
  * argument is the empty sequence or one node.
  *
  * Nodes are read through the XDM view of xp3nodes.c, which has no
- * namespace nodes (doc/DESIGN.md 4.5). The forms without an argument
- * take the context item, which must be a node.
+ * namespace nodes (doc/DESIGN.md 4.5). The forms without a node
+ * argument take the context item, which must be a node.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -608,4 +608,315 @@ xp3FnPath(xp3FuncCall *call, xp3Value **args, int count) {
     result = pathString(call, steps, stepCount, underDocument);
     xmlFree(steps);
     return(result);
+}
+
+/*
+ * Namespaces and language
+ *
+ * The in-scope namespaces of an element and its xml:lang are read from
+ * the public fields of the tree, never with libxml2's lookups:
+ * xmlSearchNs() can add the xml namespace to doc->oldNs, which would
+ * change a tree that is only read, and xmlGetNsList() and
+ * xmlNodeGetLang() allocate, so a failed allocation would look like no
+ * namespace or no language (doc/DESIGN.md 4.5).
+ */
+
+static int
+isElement(const xmlNode *node) {
+    return(xp3NodeGetKind(node) == XP3_NODE_ELEMENT);
+}
+
+/* Whether a declaration binds its prefix: one with an empty URI, as
+ * xmlns="" or XML 1.1's xmlns:p="", undeclares it */
+static int
+isBinding(const xmlNs *ns) {
+    if (ns == NULL)
+        return(0);
+    if (ns->href == NULL)
+        return(0);
+    return(ns->href[0] != 0);
+}
+
+/*
+ * The nearest declaration of a prefix, NULL for the default namespace,
+ * in nsDef on an element and then on each ancestor element, nearest
+ * first as libxml2's xmlGetNsListSafe() takes them. Sets *decl to it,
+ * which may undeclare the prefix, or to NULL if there is none. Counts
+ * a step per element and per declaration visited. Returns 0, or -1
+ * after recording LIMIT.
+ */
+static int
+nearestDeclaration(xp3FuncCall *call, xmlNodePtr element,
+                   const xmlChar *prefix, xmlNsPtr *decl) {
+    xmlNodePtr cur;
+    xmlNsPtr ns;
+
+    *decl = NULL;
+    for (cur = element; isElement(cur); cur = xp3NodeParent(cur)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+        for (ns = cur->nsDef; ns != NULL; ns = ns->next) {
+            if (xp3FuncSteps(call, 1) < 0)
+                return(-1);
+            if (xmlStrEqual(ns->prefix, prefix)) {
+                *decl = ns;
+                return(0);
+            }
+        }
+    }
+    return(0);
+}
+
+/*
+ * Whether a declaration on an element or one of its ancestors puts its
+ * prefix in scope there: it binds the prefix, and no nearer declaration
+ * of the prefix shadows it. The xml prefix is left out, as it is always
+ * in scope. Returns 1, 0, or -1 after recording LIMIT.
+ */
+static int
+isInScope(xp3FuncCall *call, xmlNodePtr element, xmlNsPtr ns) {
+    xmlNsPtr nearest;
+
+    if (!isBinding(ns))
+        return(0);
+    if (xmlStrEqual(ns->prefix, BAD_CAST "xml"))
+        return(0);
+    if (nearestDeclaration(call, element, ns->prefix, &nearest) < 0)
+        return(-1);
+    return(nearest == ns);
+}
+
+/* Add a prefix to the result as an xs:string, "" for the default
+ * namespace. Returns 0, or -1 after recording an error. */
+static int
+addPrefix(xp3FuncCall *call, xp3SeqBuilder *builder,
+          const xmlChar *prefix) {
+    xp3Atomic *atomic;
+    size_t len;
+
+    if (prefix == NULL)
+        prefix = BAD_CAST "";
+    len = strlen((const char *) prefix);
+    if (xp3FuncStringFits(call, len) < 0)
+        return(-1);
+    if (xp3FuncBytes(call, len) < 0)
+        return(-1);
+    atomic = xp3AtomicNewString(XP3_TYPE_STRING, prefix, len);
+    if (atomic == NULL) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(-1);
+    }
+    return(xp3FuncBuilderAdd(call, builder, xp3ItemFromAtomic(atomic)));
+}
+
+/**
+ * fn:in-scope-prefixes (F&O 3.1, 10.2.6): the prefixes of the in-scope
+ * namespaces of an element, "" for the default namespace. They are the
+ * declarations on the element and its ancestor elements that no nearer
+ * declaration of the same prefix shadows or undeclares, and xml, which
+ * is always in scope. The order is implementation-dependent: here the
+ * nearest element's declarations come first, each element's in the
+ * order of its nsDef, and xml last.
+ *
+ * Each declaration is checked for shadowing by walking up from the
+ * element again, which takes time quadratic in the number of
+ * declarations, counted as steps, so the step limit bounds it.
+ *
+ * @param call   the call
+ * @param args   the element, element()
+ * @param count  1
+ * @returns the xs:string values, or NULL on error
+ */
+xp3Value *
+xp3FnInScopePrefixes(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3SeqBuilder builder;
+    xmlNodePtr element;
+    xmlNodePtr cur;
+    xmlNsPtr ns;
+    int ret;
+
+    if (argNode(call, args, count, &element) < 0)
+        return(NULL);
+    xp3FuncBuilderInit(call, &builder);
+    for (cur = element; isElement(cur); cur = xp3NodeParent(cur)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            goto error;
+        for (ns = cur->nsDef; ns != NULL; ns = ns->next) {
+            if (xp3FuncSteps(call, 1) < 0)
+                goto error;
+            ret = isInScope(call, element, ns);
+            if (ret < 0)
+                goto error;
+            if (ret == 0)
+                continue;
+            if (addPrefix(call, &builder, ns->prefix) < 0)
+                goto error;
+        }
+    }
+    if (addPrefix(call, &builder, BAD_CAST "xml") < 0)
+        goto error;
+    return(xp3FuncBuilderFinish(call, &builder));
+
+error:
+    xp3SeqBuilderClear(&builder);
+    return(NULL);
+}
+
+/**
+ * fn:namespace-uri-for-prefix (F&O 3.1, 10.2.5): the namespace URI a
+ * prefix is bound to in the in-scope namespaces of an element. "" and
+ * the empty sequence stand for the default namespace, and xml is
+ * always bound. A prefix that is not bound, or whose nearest
+ * declaration undeclares it, gives the empty sequence.
+ *
+ * @param call   the call
+ * @param args   the prefix, xs:string?, and the element, element()
+ * @param count  2
+ * @returns an xs:anyURI or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnNamespaceUriForPrefix(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *prefix = xp3FuncString(args[0]);
+    xmlNodePtr element;
+    xmlNsPtr decl;
+
+    (void) count;
+    if (argNode(call, args + 1, 1, &element) < 0)
+        return(NULL);
+    if (xmlStrEqual(prefix, BAD_CAST "xml"))
+        return(newString(call, XP3_TYPE_ANY_URI, XML_XML_NAMESPACE));
+
+    /* libxml2 declares the default namespace with a NULL prefix */
+    if (prefix[0] == 0)
+        prefix = NULL;
+    if (nearestDeclaration(call, element, prefix, &decl) < 0)
+        return(NULL);
+    if (!isBinding(decl))
+        return(xp3ValueEmpty());
+    return(newString(call, XP3_TYPE_ANY_URI, decl->href));
+}
+
+/* The xml:lang attribute of an element, or NULL */
+static xmlAttrPtr
+langAttribute(xmlNodePtr element) {
+    xmlAttrPtr attr;
+
+    for (attr = element->properties; attr != NULL; attr = attr->next) {
+        if (attr->ns == NULL)
+            continue;
+        if (!xmlStrEqual(attr->ns->href, XML_XML_NAMESPACE))
+            continue;
+        if (xmlStrEqual(attr->name, BAD_CAST "lang"))
+            return(attr);
+    }
+    return(NULL);
+}
+
+/*
+ * The nearest xml:lang attribute on the ancestor-or-self elements of a
+ * node, starting at the node if it is an element and otherwise at its
+ * parent, so an attribute starts at its own element. Sets *lang to it,
+ * or to NULL if there is none. Counts a step per element visited.
+ * Returns 0, or -1 after recording LIMIT.
+ */
+static int
+nearestLang(xp3FuncCall *call, xmlNodePtr node, xmlAttrPtr *lang) {
+    xmlNodePtr cur = node;
+
+    *lang = NULL;
+    if (!isElement(cur))
+        cur = xp3NodeParent(cur);
+    for (; isElement(cur); cur = xp3NodeParent(cur)) {
+        if (xp3FuncSteps(call, 1) < 0)
+            return(-1);
+        *lang = langAttribute(cur);
+        if (*lang != NULL)
+            return(0);
+    }
+    return(0);
+}
+
+/* A byte with ASCII letters in lower case, and every other byte as it
+ * is */
+static int
+asciiLower(xmlChar c) {
+    if ((c >= 'A') && (c <= 'Z'))
+        return(c - 'A' + 'a');
+    return(c);
+}
+
+/*
+ * Whether a language matches the one tested for, as F&O 3.1, 13.4
+ * defines it: it is equal to it ignoring case, or it starts with it
+ * ignoring case and the next character is "-". Case is folded for
+ * ASCII letters only (doc/DESIGN.md 4.5).
+ */
+static int
+langMatches(const xmlChar *lang, size_t langLen, const xmlChar *test,
+            size_t testLen) {
+    size_t i;
+
+    if (langLen < testLen)
+        return(0);
+    for (i = 0; i < testLen; i++) {
+        if (asciiLower(lang[i]) != asciiLower(test[i]))
+            return(0);
+    }
+    if (langLen == testLen)
+        return(1);
+    return(lang[testLen] == '-');
+}
+
+/**
+ * fn:lang#1 and #2 (F&O 3.1, 13.4): whether the language of a node,
+ * given by the nearest xml:lang attribute on its ancestor-or-self
+ * elements, is the one tested for or a sublanguage of it, ignoring
+ * case. A node without such an attribute has no language and gives
+ * false. The empty sequence tests for "".
+ *
+ * @param call   the call
+ * @param args   the language, xs:string?, and the node, node()
+ * @param count  1 for the context item as the node, or 2
+ * @returns an xs:boolean, or NULL on error
+ */
+xp3Value *
+xp3FnLang(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *test = xp3FuncString(args[0]);
+    size_t testLen = strlen((const char *) test);
+    xmlNodePtr node;
+    xmlAttrPtr lang;
+    xmlChar *value;
+    size_t valueLen;
+    xp3ErrCode err;
+    int matches;
+    int ret;
+
+    if (count == 1)
+        ret = argNode(call, NULL, 0, &node);
+    else
+        ret = argNode(call, args + 1, 1, &node);
+    if (ret < 0)
+        return(NULL);
+    if (nearestLang(call, node, &lang) < 0)
+        return(NULL);
+    if (lang == NULL)
+        return(xp3FuncAtomic(call, xp3AtomicNewBoolean(0)));
+
+    err = xp3NodeStringValue((xmlNodePtr) lang, &value, &valueLen);
+    if (err == XP3_ERR_LIMIT) {
+        xp3FuncError(call, err, "the string value of a node is longer "
+                     "than 2 GB");
+        return(NULL);
+    }
+    if (err != XP3_ERR_OK) {
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+        return(NULL);
+    }
+    if (xp3FuncBytes(call, (uint64_t) valueLen + testLen) < 0) {
+        xmlFree(value);
+        return(NULL);
+    }
+    matches = langMatches(value, valueLen, test, testLen);
+    xmlFree(value);
+    return(xp3FuncAtomic(call, xp3AtomicNewBoolean(matches)));
 }

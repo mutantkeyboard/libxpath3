@@ -3272,6 +3272,22 @@ xp3FuncAtomize(xp3FuncCall *call, xp3Value *value) {
     return(atomize(call->ev, value, call->node));
 }
 
+/**
+ * Get the string of an xs:string? argument, which the function
+ * conversion rules have already made the empty sequence or one
+ * xs:string.
+ *
+ * @param value  the argument
+ * @returns the string, borrowed from the value; the empty string for
+ *          the empty sequence
+ */
+const xmlChar *
+xp3FuncString(const xp3Value *value) {
+    if (xp3ValueCount(value) == 0)
+        return(BAD_CAST "");
+    return(value->u.single.u.atomic->u.str);
+}
+
 /*
  * The call interface of extension functions (xpath3.h)
  */
