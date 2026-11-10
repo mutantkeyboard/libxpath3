@@ -46,10 +46,16 @@
 /* The implementations, by signature; NULL for not implemented yet */
 static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     /* Accessors (F&O 3.1, 2) */
+    [XP3_FN_NODE_NAME_0] = xp3FnNodeName,
+    [XP3_FN_NODE_NAME_1] = xp3FnNodeName,
     [XP3_FN_STRING_0] = xp3FnString,
     [XP3_FN_STRING_1] = xp3FnString,
     [XP3_FN_DATA_0] = xp3FnData,
     [XP3_FN_DATA_1] = xp3FnData,
+    [XP3_FN_BASE_URI_0] = xp3FnBaseUri,
+    [XP3_FN_BASE_URI_1] = xp3FnBaseUri,
+    [XP3_FN_DOCUMENT_URI_0] = xp3FnDocumentUri,
+    [XP3_FN_DOCUMENT_URI_1] = xp3FnDocumentUri,
     /* Errors (3) */
     [XP3_FN_ERROR_0] = xp3FnError,
     [XP3_FN_ERROR_1] = xp3FnError,
@@ -118,6 +124,26 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_FALSE_0] = xp3FnFalse,
     [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
     [XP3_FN_NOT_1] = xp3FnNot,
+    /* Namespaces of elements (10.2) */
+    [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
+    [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,
+    /* Functions on nodes (13) */
+    [XP3_FN_NAME_0] = xp3FnName,
+    [XP3_FN_NAME_1] = xp3FnName,
+    [XP3_FN_LOCAL_NAME_0] = xp3FnLocalName,
+    [XP3_FN_LOCAL_NAME_1] = xp3FnLocalName,
+    [XP3_FN_NAMESPACE_URI_0] = xp3FnNamespaceUri,
+    [XP3_FN_NAMESPACE_URI_1] = xp3FnNamespaceUri,
+    [XP3_FN_LANG_1] = xp3FnLang,
+    [XP3_FN_LANG_2] = xp3FnLang,
+    [XP3_FN_ROOT_0] = xp3FnRoot,
+    [XP3_FN_ROOT_1] = xp3FnRoot,
+    [XP3_FN_PATH_0] = xp3FnPath,
+    [XP3_FN_PATH_1] = xp3FnPath,
+    [XP3_FN_HAS_CHILDREN_0] = xp3FnHasChildren,
+    [XP3_FN_HAS_CHILDREN_1] = xp3FnHasChildren,
+    [XP3_FN_INNERMOST_1] = xp3FnInnermost,
+    [XP3_FN_OUTERMOST_1] = xp3FnOutermost,
     /* Sequences (14) */
     [XP3_FN_EMPTY_1] = xp3FnEmpty,
     [XP3_FN_EXISTS_1] = xp3FnExists,
@@ -145,6 +171,9 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_MIN_2] = xp3FnMin,
     [XP3_FN_MAX_1] = xp3FnMax,
     [XP3_FN_MAX_2] = xp3FnMax,
+    /* Node identifiers (14.5) */
+    [XP3_FN_GENERATE_ID_0] = xp3FnGenerateId,
+    [XP3_FN_GENERATE_ID_1] = xp3FnGenerateId,
     /* Context functions (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
     [XP3_FN_LAST_0] = xp3FnLast,

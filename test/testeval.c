@@ -22,6 +22,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+#include <libxml/xmlversion.h>
 
 #include <libxpath3/xpath3.h>
 #include "private/xp3context.h"
@@ -1794,6 +1795,17 @@ testFunctionFocus(void) {
     checkEval(NULL, NULL, "number()", "error:XPDY0002");
     checkEval(NULL, NULL, "string-length()", "error:XPDY0002");
     checkEval(NULL, NULL, "normalize-space()", "error:XPDY0002");
+    checkEval(NULL, NULL, "name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "local-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "namespace-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "node-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "root()", "error:XPDY0002");
+    checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
+    checkEval(NULL, NULL, "path()", "error:XPDY0002");
+    checkEval(NULL, NULL, "lang('en')", "error:XPDY0002");
+    checkEval(NULL, NULL, "base-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "document-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "generate-id()", "error:XPDY0002");
     checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
               "integer:2 integer:3");
     checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
@@ -1917,6 +1929,915 @@ testDeepEqual(void) {
     xmlFreeDoc(doc);
 }
 
+/*
+ * The names of nodes (F&O 3.1, 2.1 and 13.1 to 13.3): elements with a
+ * prefix, in a default namespace and in none, attributes with and
+ * without a prefix, and the nodes without a name. The second element
+ * has the namespace of the first under another prefix.
+ */
+static const char xp3NameDoc[] =
+    "<r xmlns:p='urn:p' p:a='1' b='2'>"
+    "<p:e/><q:e xmlns:q='urn:p'/><e/>"
+    "<d xmlns='urn:d'><f/></d>"
+    "text<!--c--><?t v?>"
+    "</r>";
+
+static const xp3EvalCase xp3NameCases[] = {
+    { "name(*[1]), local-name(*[1]), namespace-uri(*[1]), node-name(*[1])",
+      "string:p:e string:e anyURI:urn:p QName:p:e" },
+    { "node-name(*[1]) eq node-name(*[2]), "
+      "node-name(*[1]) eq node-name(*[3]), name(*[2])",
+      "boolean:true boolean:false string:q:e" },
+    { "name(*[4]), local-name(*[4]), namespace-uri(*[4]), node-name(*[4]), "
+      "name(*[4]/*), namespace-uri(*[4]/*)",
+      "string:d string:d anyURI:urn:d QName:d string:f anyURI:urn:d" },
+    { "name(*[3]), local-name(*[3]), namespace-uri(*[3]), node-name(*[3])",
+      "string:e string:e anyURI: QName:e" },
+    { "name(@*[1]), local-name(@*[1]), namespace-uri(@*[1]), "
+      "node-name(@*[1]), name(@*[2]), local-name(@*[2]), "
+      "namespace-uri(@*[2]), node-name(@*[2])",
+      "string:p:a string:a anyURI:urn:p QName:p:a string:b string:b "
+      "anyURI: QName:b" },
+    { "name(processing-instruction()), "
+      "local-name(processing-instruction()), "
+      "namespace-uri(processing-instruction()), "
+      "node-name(processing-instruction())",
+      "string:t string:t anyURI: QName:t" },
+    { "(/, text(), comment()) ! (name(.), local-name(.), namespace-uri(.), "
+      "count(node-name(.)))",
+      "string: string: anyURI: integer:0 string: string: anyURI: integer:0 "
+      "string: string: anyURI: integer:0" },
+    { "name(()), local-name(()), namespace-uri(()), node-name(())",
+      "string: string: anyURI:" },
+    { "namespace-uri(*[1]) instance of xs:anyURI, "
+      "node-name(*[1]) instance of xs:QName, name(*[1]) instance of xs:string",
+      "boolean:true boolean:true boolean:true" },
+
+    /* The context item for the forms without an argument */
+    { "name(), local-name(), namespace-uri(), node-name()",
+      "string:r string:r anyURI: QName:r" },
+    { "(*, @*, processing-instruction()) ! name()",
+      "string:p:e string:q:e string:e string:d string:p:a string:b "
+      "string:t" },
+    { "(*[1], @*[1], *[3]) ! namespace-uri(), (*[4], text()) ! local-name(), "
+      "(*[1], comment(), processing-instruction()) ! node-name()",
+      "anyURI:urn:p anyURI:urn:p anyURI: string:d string: QName:p:e "
+      "QName:t" },
+    { "/ ! name(), / ! local-name(), / ! namespace-uri(), / ! node-name()",
+      "string: string: anyURI:" },
+    { "1 ! name()", "error:XPTY0004" },
+    { "'a' ! local-name()", "error:XPTY0004" },
+    { "1 ! namespace-uri()", "error:XPTY0004" },
+    { "1 ! node-name()", "error:XPTY0004" },
+    { "name(1)", "error:XPTY0004" },
+    { "local-name(*)", "error:XPTY0004" }
+};
+
+static void
+testNodeNames(void) {
+    xmlDocPtr doc = parseDoc(xp3NameDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "node name test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3NameCases) / sizeof(xp3NameCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+            checkEval(plain, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+        }
+        /* fn:node-name#0 comes with XPath 3.0 */
+        checkEval(level20, ctx, "node-name()", "error:XPST0017");
+        checkEval(level20, ctx, "node-name(.)", "QName:r");
+    }
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The shape of trees (F&O 3.1, 13.5 and 13.7 to 13.9): a chain of
+ * elements with attributes, elements with only an attribute and with
+ * nothing, and the other kinds of nodes.
+ */
+static const char xp3TreeDoc[] =
+    "<r a='1'>"
+    "<x id='x1' b='2'><x id='x2'><x id='x3'>t</x></x></x>"
+    "<y id='y1' c='3'/><y id='y2'></y>"
+    "text<!--c--><?p v?>"
+    "</r>";
+
+/* Evaluated with r as the context node, and $o bound to the element o
+ * of another document, <o><p/></o> */
+static const xp3EvalCase xp3TreeCases[] = {
+    /* fn:root */
+    { "root(), root(.), root(()), root(/)", "d d d" },
+    { "(/, ., @a, x, x/@b, .//text(), comment(), processing-instruction()) "
+      "! root()",
+      "d d d d d d d d d" },
+    { "root(x//x[@id = 'x3']/text()) is /, root($o) is root($o/*), "
+      "root($o) is /",
+      "boolean:true boolean:true boolean:false" },
+    { "1 ! root()", "error:XPTY0004" },
+    { "root(1)", "error:XPTY0004" },
+    { "root((x, y))", "error:XPTY0004" },
+
+    /* fn:has-children */
+    { "has-children(/), has-children(), has-children(.), has-children(x), "
+      "has-children(x//x[@id = 'x3'])",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "y ! has-children(), has-children(@a), has-children(x/@b)",
+      "boolean:false boolean:false boolean:false boolean:false" },
+    { "(text(), comment(), processing-instruction(), x//text()) ! "
+      "has-children(), has-children(())",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    { "1 ! has-children()", "error:XPTY0004" },
+
+    /* fn:innermost and fn:outermost */
+    { "innermost(()), outermost(())", "" },
+    { "innermost(x), outermost(y[2])", "e:x#x1 e:y#y2" },
+    { "innermost((x, x/@b)), innermost((x/@b, x))", "a:b a:b" },
+    { "outermost((x, x/@b)), outermost((x/@b, x))", "e:x#x1 e:x#x1" },
+    { "innermost(reverse(.//x)), outermost(reverse(.//x))",
+      "e:x#x3 e:x#x1" },
+    { "let $x := .//x return (innermost(($x[2], $x, $x[1], $x[3])), "
+      "outermost(($x[3], $x[2], $x[2])))",
+      "e:x#x3 e:x#x2" },
+    { "innermost(reverse(y)), outermost((y[2], y[1], y[2]))",
+      "e:y#y1 e:y#y2 e:y#y1 e:y#y2" },
+    { "innermost((., @a, x, x/@b, .//text()))", "a:a a:b t:t t:text" },
+    { "outermost((., @a, x, x/@b, .//text()))", "e:r" },
+    { "innermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    { "outermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    /* An attribute is no ancestor of the element after it */
+    { "innermost((x//x, x/@b)), outermost((x//x, x/@b))",
+      "a:b e:x#x3 a:b e:x#x2" },
+    { "innermost((/, comment())), outermost((comment(), /))", "c:c d" },
+    { "count(innermost(($o/*, $o, x, x/x))), "
+      "innermost(($o/*, $o, x, x/x)) except ($o/*, x/x)",
+      "integer:2" },
+    { "count(outermost(($o/*, $o, x, x/x))), "
+      "outermost(($o/*, $o, x, x/x)) except ($o, x)",
+      "integer:2" },
+    { "innermost(1)", "error:XPTY0004" },
+    { "outermost((x, 1))", "error:XPTY0004" }
+};
+
+/* A tree without a document, a/b/c with an attribute k on b and a text
+ * in c, evaluated with b as the context node */
+static const xp3EvalCase xp3DetachedTreeCases[] = {
+    { "root(), root(.), root(@k), root(c/text())", "e:a e:a e:a e:a" },
+    { "root() is .., has-children(root()), has-children(c/text())",
+      "boolean:true boolean:true boolean:false" },
+    { "innermost((c, @k, ., ..)), outermost((c, @k, ., ..))",
+      "a:k e:c e:a" }
+};
+
+static void
+testTreeShape(void) {
+    xmlDocPtr doc = parseDoc(xp3TreeDoc);
+    xmlDocPtr other = parseDoc("<o><p/></o>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr middle = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3DynamicContext *detachedCtx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr otherRoot;
+    size_t i;
+
+    if (detached != NULL)
+        middle = xmlNewChild(detached, NULL, BAD_CAST "b", NULL);
+    if ((doc == NULL) || (other == NULL) || (middle == NULL) ||
+        (xmlNewProp(middle, BAD_CAST "k", BAD_CAST "v") == NULL) ||
+        (xmlNewChild(middle, NULL, BAD_CAST "c", BAD_CAST "leaf") == NULL) ||
+        (ctx == NULL) || (detachedCtx == NULL) || (sctx == NULL) ||
+        (plain == NULL) || (level20 == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "o") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "o") < 0) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0) ||
+        (xp3SetContextNode(detachedCtx, middle) < 0)) {
+        check(0, "tree shape test set up");
+        goto done;
+    }
+    otherRoot = xmlDocGetRootElement(other);
+    bound = xp3NewNodeSequence(&otherRoot, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "o", bound) < 0)) {
+        check(0, "tree shape variable bound");
+        goto done;
+    }
+    plain->noOptimize = 1;
+    for (i = 0; i < sizeof(xp3TreeCases) / sizeof(xp3TreeCases[0]); i++) {
+        checkEval(sctx, ctx, xp3TreeCases[i].expr, xp3TreeCases[i].expected);
+        checkEval(plain, ctx, xp3TreeCases[i].expr,
+                  xp3TreeCases[i].expected);
+    }
+    for (i = 0;
+         i < sizeof(xp3DetachedTreeCases) / sizeof(xp3DetachedTreeCases[0]);
+         i++) {
+        checkEval(sctx, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+        checkEval(plain, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+    }
+    /* fn:root is in XPath 2.0, the others come with 3.0 */
+    checkEval(level20, ctx, "root()", "d");
+    checkEval(level20, ctx, "has-children(.)", "error:XPST0017");
+    checkEval(level20, ctx, "innermost(.)", "error:XPST0017");
+    checkEval(level20, ctx, "outermost(.)", "error:XPST0017");
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(detachedCtx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(other);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:path (F&O 3.1, 13.6): each kind of node, elements with names that
+ * differ in the local part or the namespace, attributes in a namespace
+ * and in none, a text node of several libxml2 nodes, and processing
+ * instructions with different targets.
+ */
+static const char xp3PathDoc[] =
+    "<?t a?>"
+    "<r xmlns:p='urn:p' a='1' p:a='2'>"
+    "<e/><p:e/><e/><f/><e xmlns='urn:d'/>"
+    "x<!--c-->a<![CDATA[b]]>c<g>y</g>z"
+    "<!--d--><?t v?><?u v?><?t w?>"
+    "</r>"
+    "<!--e-->";
+
+/* Evaluated with r as the context node, after an element h is added
+ * to it with a text node, a character reference that XDM doesn't have
+ * and another text node, then an element i and a third text node */
+static const xp3EvalCase xp3PathCases[] = {
+    { "path(/), path(/processing-instruction()), path(/comment())",
+      "string:/ string:/processing-instruction(t)[1] string:/comment()[1]" },
+    { "path(.), path(e[1]), path(e[2])",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[1] string:/Q{}r[1]/Q{}e[2]" },
+    { "path(Q{urn:p}e), path(f), path(Q{urn:d}e)",
+      "string:/Q{}r[1]/Q{urn:p}e[1] string:/Q{}r[1]/Q{}f[1] "
+      "string:/Q{}r[1]/Q{urn:d}e[1]" },
+    { "path(@a), path(@Q{urn:p}a)",
+      "string:/Q{}r[1]/@a string:/Q{}r[1]/@Q{urn:p}a" },
+    /* a, the CDATA section b and c are one text node */
+    { "text() ! path(), path(g/text())",
+      "string:/Q{}r[1]/text()[1] string:/Q{}r[1]/text()[2] "
+      "string:/Q{}r[1]/text()[3] string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "comment() ! path()",
+      "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2]" },
+    { "processing-instruction() ! path()",
+      "string:/Q{}r[1]/processing-instruction(t)[1] "
+      "string:/Q{}r[1]/processing-instruction(u)[1] "
+      "string:/Q{}r[1]/processing-instruction(t)[2]" },
+    /* The character reference is skipped, so a and b are one text */
+    { "count(h/text()), h/text() ! path()",
+      "integer:2 string:/Q{}r[1]/Q{}h[1]/text()[1] "
+      "string:/Q{}r[1]/Q{}h[1]/text()[2]" },
+    { "path(()), count(path(())), path(.) instance of xs:string",
+      "integer:0 boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "path(), (e[2], @a, g/text()) ! path()",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/@a "
+      "string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "/ ! path()", "string:/" },
+    { "1 ! path()", "error:XPTY0004" },
+    { "path(1)", "error:XPTY0004" },
+    { "path((e, f))", "error:XPTY0004" }
+};
+
+/* The first example of 13.6, evaluated with its document node as the
+ * context node */
+static const char xp3PathSpecDoc[] =
+    "<p xmlns=\"http://example.com/one\" xml:lang=\"de\" "
+    "author=\"Friedrich von Schiller\">\n"
+    "Freude, sch\xc3\xb6ner G\xc3\xb6tterfunken,<br/>\n"
+    "Tochter aus Elysium,<br/>\n"
+    "Wir betreten feuertrunken,<br/>\n"
+    "Himmlische, dein Heiligtum.</p>";
+
+static const xp3EvalCase xp3PathSpecCases[] = {
+    { "path(.)", "string:/" },
+    { "path(*:p)", "string:/Q{http://example.com/one}p[1]" },
+    { "path(*:p/@xml:lang)",
+      "string:/Q{http://example.com/one}p[1]"
+      "/@Q{http://www.w3.org/XML/1998/namespace}lang" },
+    { "path(*:p/@author)",
+      "string:/Q{http://example.com/one}p[1]/@author" },
+    { "path(*:p/*:br[2])",
+      "string:/Q{http://example.com/one}p[1]"
+      "/Q{http://example.com/one}br[2]" },
+    { "path(//text()[starts-with(normalize-space(), 'Tochter')])",
+      "string:/Q{http://example.com/one}p[1]/text()[2]" }
+};
+
+/* The second example of 13.6, a tree without a document node,
+ * evaluated with its root element as the context node */
+static const char xp3PathEmployeeDoc[] =
+    "<employee xml:id=\"ID21256\">"
+    "<empnr>E21256</empnr><first>John</first><last>Brown</last>"
+    "</employee>";
+
+#define FN_ROOT "Q{http://www.w3.org/2005/xpath-functions}root()"
+
+static const xp3EvalCase xp3PathEmployeeCases[] = {
+    { "path(.), path()", "string:" FN_ROOT " string:" FN_ROOT },
+    { "path(@xml:id)",
+      "string:" FN_ROOT "/@Q{http://www.w3.org/XML/1998/namespace}id" },
+    { "path(empnr), path(last/text())",
+      "string:" FN_ROOT "/Q{}empnr[1] "
+      "string:" FN_ROOT "/Q{}last[1]/text()[1]" }
+};
+
+/* The children of h in xp3PathCases */
+static int
+addPathChildren(xmlDocPtr doc, xmlNodePtr h) {
+    xmlNodePtr children[5];
+    size_t i;
+
+    children[0] = xmlNewDocText(doc, BAD_CAST "a");
+    children[1] = xmlNewCharRef(doc, BAD_CAST "#66");
+    children[2] = xmlNewDocText(doc, BAD_CAST "b");
+    children[3] = xmlNewDocNode(doc, NULL, BAD_CAST "i", NULL);
+    children[4] = xmlNewDocText(doc, BAD_CAST "c");
+    for (i = 0; i < 5; i++) {
+        if (children[i] == NULL)
+            return(-1);
+        xmlAddChild(h, children[i]);
+    }
+    return(0);
+}
+
+/* Each case evaluated optimized and not */
+static void
+checkPathCases(const xp3StaticContext *sctx, const xp3StaticContext *plain,
+               xp3DynamicContext *ctx, const xp3EvalCase *cases,
+               size_t count) {
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        checkEval(sctx, ctx, cases[i].expr, cases[i].expected);
+        checkEval(plain, ctx, cases[i].expr, cases[i].expected);
+    }
+}
+
+static void
+testPath(void) {
+    xmlDocPtr doc = parseDoc(xp3PathDoc);
+    xmlDocPtr spec = parseDoc(xp3PathSpecDoc);
+    xmlDocPtr employeeDoc = parseDoc(xp3PathEmployeeDoc);
+    xmlNodePtr employee = NULL;
+    xmlNodePtr text = xmlNewText(BAD_CAST "fred");
+    xmlAttrPtr attr = xmlNewProp(NULL, BAD_CAST "name", BAD_CAST "fred");
+    xmlNodePtr h = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        h = xmlNewChild(xmlDocGetRootElement(doc), NULL, BAD_CAST "h",
+                        NULL);
+    if (employeeDoc != NULL) {
+        /* Unlinked, it keeps the document's xml namespace */
+        employee = xmlDocGetRootElement(employeeDoc);
+        xmlUnlinkNode(employee);
+    }
+    if ((h == NULL) || (spec == NULL) || (employee == NULL) ||
+        (text == NULL) || (attr == NULL) ||
+        (addPathChildren(doc, h) < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "path test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "path context node set");
+    checkPathCases(sctx, plain, ctx, xp3PathCases,
+                   sizeof(xp3PathCases) / sizeof(xp3PathCases[0]));
+    /* fn:path comes with XPath 3.0 */
+    checkEval(level20, ctx, "path()", "error:XPST0017");
+    checkEval(level20, ctx, "path(.)", "error:XPST0017");
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) spec) == 0,
+          "path example document set");
+    checkPathCases(sctx, plain, ctx, xp3PathSpecCases,
+                   sizeof(xp3PathSpecCases) / sizeof(xp3PathSpecCases[0]));
+
+    check(xp3SetContextNode(ctx, employee) == 0, "path example tree set");
+    checkPathCases(sctx, plain, ctx, xp3PathEmployeeCases,
+                   sizeof(xp3PathEmployeeCases) /
+                   sizeof(xp3PathEmployeeCases[0]));
+
+    /* A text node and an attribute without a parent are roots */
+    check(xp3SetContextNode(ctx, text) == 0, "parentless text set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) attr) == 0,
+          "parentless attribute set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeProp(attr);
+    xmlFreeNode(text);
+    xmlFreeNode(employee);
+    xmlFreeDoc(employeeDoc);
+    xmlFreeDoc(spec);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The namespaces of elements and the language of nodes (F&O 3.1,
+ * 10.2.5, 10.2.6 and 13.4): a default namespace, a prefix bound again
+ * nearer, the default namespace undeclared, and xml:lang given again
+ * nearer, also as "". The elements are in urn:d except f.
+ */
+static const char xp3NamespaceDoc[] =
+    "<r xmlns='urn:d' xmlns:p='urn:p' xml:lang='en-GB'>"
+    "<e xmlns:p='urn:q' xml:lang='DE'>"
+    "<f xmlns='' xmlns:s='urn:s' a='1'>text<!--c--></f>"
+    "</e>"
+    "<g xml:lang=''><h/></g>"
+    "<i xml:lang='-x'/>"
+    "<j xml:lang='\xc3\x89'/>"
+    "<!--c-->"
+    "</r>";
+
+#define XML_NS "http://www.w3.org/XML/1998/namespace"
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3NamespaceCases[] = {
+    /* fn:in-scope-prefixes: the nearest element's first, xml last */
+    { "in-scope-prefixes(.)", "string: string:p string:xml" },
+    { "in-scope-prefixes(*:e)", "string:p string: string:xml" },
+    { "in-scope-prefixes(*:e/f)", "string:s string:p string:xml" },
+    { "in-scope-prefixes(*:g/*:h), in-scope-prefixes(.) instance of "
+      "xs:string+",
+      "string: string:p string:xml boolean:true" },
+    { "in-scope-prefixes(@xml:lang)", "error:XPTY0004" },
+    { "in-scope-prefixes(())", "error:XPTY0004" },
+    { "in-scope-prefixes(comment())", "error:XPTY0004" },
+
+    /* fn:namespace-uri-for-prefix */
+    { "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('p', *:e), "
+      "namespace-uri-for-prefix('p', *:e/f)",
+      "anyURI:urn:p anyURI:urn:q anyURI:urn:q" },
+    { "namespace-uri-for-prefix('', .), namespace-uri-for-prefix((), *:e), "
+      "namespace-uri-for-prefix('s', *:e/f)",
+      "anyURI:urn:d anyURI:urn:d anyURI:urn:s" },
+    { "count(namespace-uri-for-prefix('', *:e/f)), "
+      "count(namespace-uri-for-prefix((), *:e/f)), "
+      "count(namespace-uri-for-prefix('s', .)), "
+      "count(namespace-uri-for-prefix('xmlns', .))",
+      "integer:0 integer:0 integer:0 integer:0" },
+    { "namespace-uri-for-prefix('xml', *:e/f), "
+      "namespace-uri-for-prefix('p', .) instance of xs:anyURI",
+      "anyURI:" XML_NS " boolean:true" },
+    { "namespace-uri-for-prefix('p', @xml:lang)", "error:XPTY0004" },
+    { "namespace-uri-for-prefix('p', ())", "error:XPTY0004" },
+    { "namespace-uri-for-prefix(1, .)", "error:XPTY0004" },
+
+    /* fn:lang: equal, or the part before a "-", ignoring case */
+    { "lang('en', .), lang('EN', .), lang('en-gb', .), lang('En-GB', .)",
+      "boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en-G', .), lang('e', .), lang('', .), lang((), .), "
+      "lang('en-GB-x', .)",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    /* The nearest xml:lang counts, also when it is "" */
+    { "lang('de', *:e), lang('en', *:e), lang('d', *:e)",
+      "boolean:true boolean:false boolean:false" },
+    { "lang('en', *:g), lang('', *:g), lang('', *:g/*:h), "
+      "lang((), *:g/*:h)",
+      "boolean:false boolean:true boolean:true boolean:true" },
+    { "lang('', *:i), lang('-x', *:i), lang('-', *:i), lang('x', *:i)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    /* Case is folded for ASCII letters only */
+    { "lang('\xc3\x89', *:j), lang('\xc3\xa9', *:j)",
+      "boolean:true boolean:false" },
+    /* An attribute starts at its element, other nodes at their parent */
+    { "lang('de', *:e/f), lang('de', *:e/f/@a), lang('de', *:e/f/text()), "
+      "lang('de', *:e/f/comment()), lang('de', *:e/@xml:lang)",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en', comment()), lang('en', @xml:lang), lang('en', /), "
+      "lang('', /)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    { "lang('en', ())", "error:XPTY0004" },
+    { "lang('en', 1)", "error:XPTY0004" },
+    { "lang(1)", "error:XPTY0004" },
+
+    /* The context item for fn:lang#1 */
+    { "lang('en'), *:e ! lang('de'), (*:e/f/@a, *:g) ! lang('de')",
+      "boolean:true boolean:true boolean:true boolean:false" },
+    { "/ ! lang('en')", "boolean:false" },
+    { "1 ! lang('en')", "error:XPTY0004" }
+};
+
+/* Evaluated with a as the context node, after a declaration of xml
+ * and an undeclaration of p on b are added to <a xmlns:p='urn:p'
+ * xmlns:q='urn:q'><b><c/></b></a> */
+static const xp3EvalCase xp3DeclaredCases[] = {
+    { "in-scope-prefixes(.), in-scope-prefixes(b)",
+      "string:p string:q string:xml string:q string:xml" },
+    { "count(namespace-uri-for-prefix('p', b/c)), "
+      "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('xml', .)",
+      "integer:0 anyURI:urn:p anyURI:" XML_NS }
+};
+
+/* Add a namespace declaration to an element as it is, also those that
+ * xmlNewNs() refuses in some versions of libxml2 */
+static int
+addDeclaration(xmlNodePtr element, const char *href, const char *prefix) {
+    xmlNsPtr ns = xmlMalloc(sizeof(xmlNs));
+    xmlNsPtr *last = &element->nsDef;
+
+    if (ns == NULL)
+        return(-1);
+    memset(ns, 0, sizeof(xmlNs));
+    ns->type = XML_NAMESPACE_DECL;
+    ns->href = xmlStrdup(BAD_CAST href);
+    ns->prefix = xmlStrdup(BAD_CAST prefix);
+    while (*last != NULL)
+        last = &(*last)->next;
+    *last = ns;
+    if ((ns->href == NULL) || (ns->prefix == NULL))
+        return(-1);
+    return(0);
+}
+
+static void
+testNamespaces(void) {
+    xmlDocPtr doc = parseDoc(xp3NamespaceDoc);
+    xmlDocPtr declared = parseDoc("<a xmlns:p='urn:p' xmlns:q='urn:q'>"
+                                  "<b><c/></b></a>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr root = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (declared != NULL)
+        root = xmlDocGetRootElement(declared);
+    if ((doc == NULL) || (root == NULL) || (detached == NULL) ||
+        (addDeclaration(root, XML_NS, "xml") < 0) ||
+        (addDeclaration(root->children, "", "p") < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "namespace test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "namespace context node set");
+    checkPathCases(sctx, plain, ctx, xp3NamespaceCases,
+                   sizeof(xp3NamespaceCases) /
+                   sizeof(xp3NamespaceCases[0]));
+    /* All three are in XPath 2.0 */
+    checkEval(level20, ctx, "lang('en'), in-scope-prefixes(.)[last()], "
+              "namespace-uri-for-prefix('p', .)",
+              "boolean:true string:xml anyURI:urn:p");
+
+    check(xp3SetContextNode(ctx, root) == 0, "declarations set");
+    checkPathCases(sctx, plain, ctx, xp3DeclaredCases,
+                   sizeof(xp3DeclaredCases) / sizeof(xp3DeclaredCases[0]));
+
+    /* An element without a document still has xml */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "in-scope-prefixes(.), lang('en')",
+              "string:xml boolean:false");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(declared);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * Base and document URIs (F&O 3.1, 2.5 and 2.6), in a document read
+ * from URI_DOC: a relative xml:base resolved against the document, one
+ * below it resolved against that, and an absolute one that overrides
+ * both. No xml:base has dot segments, which libxml2 versions resolve
+ * differently.
+ */
+#define URI_DOC "http://example.org/dir/doc.xml"
+#define URI_SUB "http://example.org/dir/sub/"
+
+static const char xp3UriDoc[] =
+    "<r a='1' xml:base='sub/'>"
+    "<e xml:base='x/y.xml' b='2'>text<!--c--><?p v?></e>"
+    "<f xml:base='http://example.com/abs/'><g xml:base='rel/'/></f>"
+    "<h/>"
+    "</r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3UriCases[] = {
+    /* fn:base-uri: the document, then the xml:base chain */
+    { "base-uri(/), base-uri(.), base-uri(e)",
+      "anyURI:" URI_DOC " anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(f), base-uri(f/g)",
+      "anyURI:http://example.com/abs/ anyURI:http://example.com/abs/rel/" },
+    /* Other nodes have the base URI of their parent */
+    { "(e/@b, e/text(), e/comment(), e/processing-instruction()) ! "
+      "base-uri(.)",
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml "
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(@a), base-uri(h)", "anyURI:" URI_SUB " anyURI:" URI_SUB },
+    { "count(base-uri(())), base-uri(.) instance of xs:anyURI",
+      "integer:0 boolean:true" },
+
+    /* fn:document-uri: document nodes only */
+    { "document-uri(/), document-uri(/) instance of xs:anyURI",
+      "anyURI:" URI_DOC " boolean:true" },
+    { "count(document-uri(.)), count(document-uri(@a)), "
+      "count(document-uri(e/text())), count(document-uri(()))",
+      "integer:0 integer:0 integer:0 integer:0" },
+
+    /* The context item for the forms without an argument */
+    { "base-uri(), e ! base-uri(), / ! base-uri()",
+      "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml anyURI:" URI_DOC },
+    { "/ ! document-uri(), count(document-uri())",
+      "anyURI:" URI_DOC " integer:0" },
+    { "1 ! base-uri()", "error:XPTY0004" },
+    { "1 ! document-uri()", "error:XPTY0004" },
+    { "base-uri(1)", "error:XPTY0004" },
+    { "document-uri('a')", "error:XPTY0004" }
+};
+
+static void
+testUris(void) {
+    const char *noUrlXml = "<r xml:base='sub/'><e/></r>";
+    xmlDocPtr doc = xmlReadMemory(xp3UriDoc, (int) strlen(xp3UriDoc),
+                                  URI_DOC, NULL, 0);
+    xmlDocPtr noUrl = xmlReadMemory(noUrlXml, (int) strlen(noUrlXml), NULL,
+                                    NULL, 0);
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr text = xmlNewText(BAD_CAST "t");
+    xmlNodePtr owned = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        owned = xmlNewDocNode(doc, NULL, BAD_CAST "o", NULL);
+    if ((doc == NULL) || (noUrl == NULL) || (detached == NULL) ||
+        (text == NULL) || (owned == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "URI test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "URI context node set");
+    checkPathCases(sctx, plain, ctx, xp3UriCases,
+                   sizeof(xp3UriCases) / sizeof(xp3UriCases[0]));
+    /* fn:document-uri#0 comes with XPath 3.0 */
+    checkEval(level20, ctx, "base-uri(), base-uri(e), document-uri(/)",
+              "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml "
+              "anyURI:" URI_DOC);
+    checkEval(level20, ctx, "document-uri()", "error:XPST0017");
+
+    /* Without a URL, the document has neither, and xml:base stays
+     * relative */
+    check(xp3SetContextNode(ctx, (xmlNodePtr) noUrl) == 0,
+          "document without a URL set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri()), "
+              "base-uri(r), base-uri(r/e)",
+              "integer:0 integer:0 anyURI:sub/ anyURI:sub/");
+
+    /* Without a parent or a document, there is no base */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    check(xp3SetContextNode(ctx, text) == 0, "detached text set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    /* An element without a parent has the URL of the document that
+     * owns it, as libxml2 gives it */
+    check(xp3SetContextNode(ctx, owned) == 0, "unlinked element set");
+    checkEval(sctx, ctx, "base-uri(), count(document-uri())",
+              "anyURI:" URI_DOC " integer:0");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(owned);
+    xmlFreeNode(text);
+    xmlFreeNode(detached);
+    xmlFreeDoc(noUrl);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:generate-id (F&O 3.1, 14.5.4): a text node of three libxml2
+ * nodes, attributes and the other kinds of nodes. The ids are the
+ * positions in document order from 1: / is id1, r id2, @a id3, e id4,
+ * @b id5, the text id6, the comment id7, the PI id8 and f id9.
+ */
+static const char xp3IdDoc[] =
+    "<r a='1'><e b='2'>a<![CDATA[b]]>c</e><!--c--><?p v?><f/></r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3IdCases[] = {
+    { "generate-id(/), generate-id(.), generate-id(@a), generate-id(e)",
+      "string:id1 string:id2 string:id3 string:id4" },
+    /* The same node the same id, whatever order the calls come in */
+    { "generate-id(e), generate-id(.), generate-id(e)",
+      "string:id4 string:id2 string:id4" },
+    { "(f, e/@b, ., e/text(), f) ! generate-id(.)",
+      "string:id9 string:id5 string:id2 string:id6 string:id9" },
+    /* A text node by any path is the same node */
+    { "generate-id(e/text()) eq generate-id(e/node()[1]), "
+      "generate-id(e/text()) eq generate-id((//text())[1])",
+      "boolean:true boolean:true" },
+    /* An attribute is not its element */
+    { "generate-id(@a) eq generate-id(.), generate-id(e/@b) eq generate-id(e)",
+      "boolean:false boolean:false" },
+    /* Different nodes, different ids */
+    { "let $n := (/, //node(), //@*) "
+      "return count($n) eq count(distinct-values($n ! generate-id(.)))",
+      "boolean:true" },
+    { "generate-id(()), generate-id(.) instance of xs:string",
+      "string: boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "generate-id(), generate-id() eq generate-id(.), "
+      "(e, comment(), /) ! generate-id()",
+      "string:id2 boolean:true string:id4 string:id7 string:id1" },
+    { "1 ! generate-id()", "error:XPTY0004" },
+    { "generate-id(1)", "error:XPTY0004" }
+};
+
+/*
+ * Evaluated with the document as the context node, in
+ * <r><a id='1'><a id='2'/></a><a id='3'/></r>: the //a rewrite visits
+ * the a elements in another order, and pruning skips the call on r, so
+ * ids numbered in the order of the calls would differ when optimized.
+ * In document order, a#1 is id3 and a#2 id5.
+ */
+static const xp3EvalCase xp3IdOptimizedCases[] = {
+    { "//a[generate-id() = 'id5']/string(@id)", "string:2" },
+    { "(generate-id(r) = '' and 0, generate-id(r/a[1]))",
+      "boolean:false string:id3" }
+};
+
+/* Whether an id is an ASCII name, [A-Za-z][A-Za-z0-9]*, as F&O 3.1,
+ * 14.5.4 requires */
+static int
+isAsciiName(const xmlChar *id) {
+    size_t i;
+
+    if ((id == NULL) || (id[0] == 0))
+        return(0);
+    for (i = 0; id[i] != 0; i++) {
+        int letter = ((id[i] >= 'A') && (id[i] <= 'Z')) ||
+                     ((id[i] >= 'a') && (id[i] <= 'z'));
+        int digit = (id[i] >= '0') && (id[i] <= '9');
+
+        if (letter)
+            continue;
+        if (i == 0)
+            return(0);
+        if (!digit)
+            return(0);
+    }
+    return(1);
+}
+
+/* The ids of every node but the document, r to f, are id2 to id9 in
+ * each evaluation of the unchanged document */
+static void
+checkIdsAgain(const xp3StaticContext *sctx, xp3DynamicContext *ctx) {
+    xp3Expr *expr = xp3Compile(sctx, BAD_CAST "(//node() | //@*) ! "
+                               "generate-id(.)", NULL);
+    xp3Sequence *ids;
+    size_t i;
+    size_t j;
+
+    check(expr != NULL, "generate-id expression compiled");
+    for (i = 0; (expr != NULL) && (i < 2); i++) {
+        ids = xp3Evaluate(expr, ctx, NULL);
+        check((ids != NULL) && (xp3SequenceLength(ids) == 8),
+              "an id for each node");
+        for (j = 0; (ids != NULL) && (j < xp3SequenceLength(ids)); j++) {
+            xmlChar *id = xp3SequenceStringValue(ids, j);
+            char expected[32];
+
+            snprintf(expected, sizeof(expected), "id%lu",
+                     (unsigned long) j + 2);
+            check(isAsciiName(id), "an id is an ASCII name");
+            check(xmlStrEqual(id, BAD_CAST expected),
+                  "an unchanged document gets the same ids again");
+            xmlFree(id);
+        }
+        xp3FreeSequence(ids);
+    }
+    xp3FreeExpr(expr);
+}
+
+static void
+testGenerateId(void) {
+    xmlDocPtr doc = parseDoc(xp3IdDoc);
+    xmlDocPtr nested = parseDoc("<r><a id='1'><a id='2'/></a><a id='3'/>"
+                                "</r>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr root = NULL;
+    xmlNodePtr cdata;
+
+    if (doc != NULL)
+        root = xmlDocGetRootElement(doc);
+    if ((root == NULL) || (nested == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "v") < 0)) {
+        check(0, "generate-id test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    /* The CDATA section in the middle of the text run of e */
+    cdata = root->children->children->next;
+    bound = xp3NewNodeSequence(&cdata, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound) < 0) ||
+        (xp3SetContextNode(ctx, root) < 0)) {
+        check(0, "generate-id context set");
+        goto done;
+    }
+    checkPathCases(sctx, plain, ctx, xp3IdCases,
+                   sizeof(xp3IdCases) / sizeof(xp3IdCases[0]));
+    checkEval(sctx, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(plain, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(level20, ctx, "generate-id(.)", "error:XPST0017");
+    checkIdsAgain(sctx, ctx);
+    checkIdsAgain(plain, ctx);
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) nested) == 0,
+          "nested document set");
+    checkPathCases(sctx, plain, ctx, xp3IdOptimizedCases,
+                   sizeof(xp3IdOptimizedCases) /
+                   sizeof(xp3IdOptimizedCases[0]));
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(nested);
+    xmlFreeDoc(doc);
+}
+
 /* A document of one chain of elements, the innermost with a text */
 static xmlDocPtr
 chainDoc(int depth, const char *leaf) {
@@ -1981,6 +2902,167 @@ done:
     xmlFreeDoc(doc);
     xmlFreeDoc(same);
     xmlFreeDoc(other);
+}
+
+/*
+ * fn:innermost and fn:outermost count a step per parent they visit. On
+ * a chain, outermost walks from each node up to the top, while
+ * innermost only walks to the parent of the next node.
+ */
+static void
+testTreeShapeSteps(void) {
+    xmlDocPtr doc = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((doc == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) doc) < 0)) {
+        check(0, "tree shape step test set up");
+    } else {
+        checkEval(NULL, ctx, "outermost(//*)", "e:a");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*)", "integer:1001");
+        checkEval(NULL, ctx, "innermost(//*)", "e:b");
+        checkEval(NULL, ctx, "count(outermost(//*))", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:path counts a step per ancestor and per preceding sibling it
+ * visits: on a chain the path of each node costs its depth, and among
+ * siblings of the same name its position.
+ */
+static void
+testPathSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr root = NULL;
+    int i;
+
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        if (xmlNewChild(root, NULL, BAD_CAST "a", NULL) == NULL)
+            root = NULL;
+    }
+    if ((chain == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "path step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! path())", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(//*)", "integer:1001");
+    /* 1,000 steps of "/Q{}a[1]" and one of "/Q{}b[1]" */
+    checkEval(NULL, ctx, "string-length(path(//b))", "integer:8008");
+    checkEval(NULL, ctx, "count(//* ! path())", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "siblings set as the context");
+    checkEval(NULL, ctx, "count(r/a ! path())", "integer:1000");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(r/a)", "integer:1000");
+    checkEval(NULL, ctx, "path(r/a[last()])", "string:/Q{}r[1]/Q{}a[1000]");
+    checkEval(NULL, ctx, "count(r/a ! path())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * The namespace functions and fn:lang count a step per ancestor and per
+ * declaration they visit: on a chain with the declaration and xml:lang
+ * at the top, each node costs its depth. fn:in-scope-prefixes walks up
+ * again for each declaration, so many declarations on one element cost
+ * their number squared.
+ */
+static void
+testNamespaceSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr top = NULL;
+    xmlNodePtr root = NULL;
+    char name[32];
+    int i;
+
+    if (chain != NULL)
+        top = xmlDocGetRootElement(chain);
+    if ((top != NULL) &&
+        ((xmlNewNs(top, BAD_CAST "urn:p", BAD_CAST "p") == NULL) ||
+         (xmlSetProp(top, BAD_CAST "xml:lang", BAD_CAST "en") == NULL)))
+        top = NULL;
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        snprintf(name, sizeof(name), "p%d", i);
+        if (xmlNewNs(root, BAD_CAST "urn:p", BAD_CAST name) == NULL)
+            root = NULL;
+    }
+    if ((top == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "namespace step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p', //b), "
+              "in-scope-prefixes(//b), lang('en', //b)",
+              "anyURI:urn:p string:p string:xml boolean:true");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "error:LIMIT");
+    checkEval(NULL, ctx, "count(//* ! in-scope-prefixes(.))", "error:LIMIT");
+    checkEval(NULL, ctx, "count(//*[lang('en')])", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "declarations set as the context");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p999', r)",
+              "anyURI:urn:p");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * fn:base-uri counts a step per node from the one whose base it gives
+ * up to the root, as libxml2 may read the xml:base of each: on a
+ * chain, each node costs its depth.
+ */
+static void
+testBaseUriSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (chain != NULL)
+        chain->URL = xmlStrdup(BAD_CAST URI_DOC);
+    if ((chain == NULL) || (chain->URL == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) chain) < 0)) {
+        check(0, "base URI step test set up");
+    } else {
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "integer:1001");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*), base-uri(//b)",
+                  "integer:1001 anyURI:" URI_DOC);
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(chain);
 }
 
 /*
@@ -3505,6 +4587,70 @@ static const char *const xp3AllocCompareExpected =
     "integer:1 integer:3 boolean:true boolean:true boolean:true "
     "string:a string:b string:B";
 
+/* The names of nodes, on xp3NameDoc */
+static const char *const xp3AllocNames =
+    "(name(*[1]), local-name(@*[1]), namespace-uri(*[4]), node-name(*[1]), "
+    "node-name(processing-instruction()), name(), node-name(), "
+    "name(text()), namespace-uri(()))";
+
+static const char *const xp3AllocNamesExpected =
+    "string:p:e string:a anyURI:urn:d QName:p:e QName:t string:r QName:r "
+    "string: anyURI:";
+
+/* The shape of trees, on xp3TreeDoc */
+static const char *const xp3AllocTree =
+    "(root(), root(@a), has-children(), has-children(y[1]), "
+    "innermost(reverse(.//x)), outermost((x//x, x/@b, .)), "
+    "innermost((x/@b, x)))";
+
+static const char *const xp3AllocTreeExpected =
+    "d d boolean:true boolean:false e:x#x3 e:r a:b";
+
+/* fn:path, on xp3PathDoc */
+static const char *const xp3AllocPath =
+    "(path(/), path(), path(@Q{urn:p}a), path(e[2]), path(text()[3]), "
+    "comment() ! path(), path(processing-instruction('t')[2]), "
+    "path(()))";
+
+static const char *const xp3AllocPathExpected =
+    "string:/ string:/Q{}r[1] string:/Q{}r[1]/@Q{urn:p}a "
+    "string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/text()[3] "
+    "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2] "
+    "string:/Q{}r[1]/processing-instruction(t)[2]";
+
+/* The namespaces of elements and fn:lang, on xp3NamespaceDoc */
+static const char *const xp3AllocNamespaces =
+    "(in-scope-prefixes(*:e/f), namespace-uri-for-prefix('p', *:e), "
+    "namespace-uri-for-prefix((), .), lang('en'), lang('de', *:e/f/@a), "
+    "lang('x', /))";
+
+static const char *const xp3AllocNamespacesExpected =
+    "string:s string:p string:xml anyURI:urn:q anyURI:urn:d boolean:true "
+    "boolean:true boolean:false";
+
+/*
+ * fn:base-uri, on xp3UriDoc read from test.xml. Before libxml2 2.13 a
+ * failed allocation in xmlNodeGetBase() can't be told from no base, so
+ * it gives the empty sequence and this loop runs from 2.13 on only.
+ */
+static const char *const xp3AllocBaseUri =
+    "(base-uri(/), base-uri(), base-uri(e/@b), base-uri(f/g), "
+    "base-uri(()))";
+
+static const char *const xp3AllocBaseUriExpected =
+    "anyURI:test.xml anyURI:sub/ anyURI:sub/x/y.xml "
+    "anyURI:http://example.com/abs/rel/";
+
+/* fn:document-uri and fn:generate-id, on xp3UriDoc read from
+ * test.xml */
+static const char *const xp3AllocIds =
+    "(document-uri(/), document-uri(), generate-id(e), generate-id(), "
+    "generate-id(e), generate-id(()), (e/node(), @a) ! generate-id(.))";
+
+static const char *const xp3AllocIdsExpected =
+    "anyURI:test.xml string:id5 string:id2 string:id5 string: string:id8 "
+    "string:id9 string:id10 string:id3";
+
 /* The functions on numeric values */
 static const char *const xp3AllocNumeric =
     "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
@@ -4528,7 +5674,17 @@ main(void) {
     testAggregateLevels();
     testStringLevels();
     testDeepEqual();
+    testNodeNames();
+    testTreeShape();
+    testPath();
+    testNamespaces();
+    testUris();
+    testGenerateId();
     testDeepTrees();
+    testTreeShapeSteps();
+    testPathSteps();
+    testNamespaceSteps();
+    testBaseUriSteps();
     testUserErrors();
     testTreeChange();
     testInvalidUtf8();
@@ -4557,6 +5713,17 @@ main(void) {
     testAllocationFailures("error((), 'boom')", "error:FOER0000");
     testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
                              xp3AllocCompareExpected);
+    testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
+                             xp3AllocNamesExpected);
+    testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
+    testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
+    testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
+                             xp3AllocNamespacesExpected);
+#if LIBXML_VERSION >= 21300
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
+                             xp3AllocBaseUriExpected);
+#endif
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
     testExtensionFunctions();
     testExtensionErrors();
     testExtensionUserData();

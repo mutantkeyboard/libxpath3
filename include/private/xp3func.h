@@ -97,7 +97,9 @@ struct _xp3FuncInfo {
 typedef struct _xp3ExtFunction xp3ExtFunction;
 
 struct _xp3ExtFunction {
-    xp3FuncInfo info;
+    xp3FuncInfo info;           /* first, so that the info of an
+                                 * extension function can be cast to
+                                 * its entry (evalCall()) */
     const xmlChar *uri;
     xp3FunctionImpl impl;
     void *userData;
@@ -136,7 +138,8 @@ xp3FuncAt(size_t index);
  *
  * Everything else an implementation needs from the evaluation goes
  * through the call, which stays opaque: the focus, errors with their
- * position, the step counter and the limits on sequences. Results with
+ * position, the step counter, the limits on sequences and the document
+ * order of the evaluation. Results with
  * more than one item are built with xp3FuncBuilderInit() and its
  * companions, so that limits and allocation failures behave as for
  * every other expression. Work on strings counts a step per
@@ -187,6 +190,12 @@ xp3FuncBuilderInit(xp3FuncCall *call, xp3SeqBuilder *builder);
 int
 xp3FuncBuilderAdd(xp3FuncCall *call, xp3SeqBuilder *builder, xp3Item item);
 
+int
+xp3FuncSortNodes(xp3FuncCall *call, xp3SeqBuilder *builder);
+
+int
+xp3FuncNodePosition(xp3FuncCall *call, xmlNodePtr node, size_t *position);
+
 xp3Value *
 xp3FuncBuilderFinish(xp3FuncCall *call, xp3SeqBuilder *builder);
 
@@ -195,6 +204,9 @@ xp3FuncAtomic(xp3FuncCall *call, xp3Atomic *atomic);
 
 xp3Value *
 xp3FuncAtomize(xp3FuncCall *call, xp3Value *value);
+
+const xmlChar *
+xp3FuncString(const xp3Value *value);
 
 /*
  * Collations (F&O 3.1, 5.3), in xp3fnstring.c. The Unicode codepoint
@@ -375,6 +387,52 @@ xp3FnIriToUri(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnEscapeHtmlUri(xp3FuncCall *call, xp3Value **args, int count);
+
+/* Implementations in xp3fnnode.c */
+xp3Value *
+xp3FnNodeName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLocalName(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNamespaceUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnRoot(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnPath(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHasChildren(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnInnermost(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnOutermost(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnInScopePrefixes(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnNamespaceUriForPrefix(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLang(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnBaseUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDocumentUri(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnGenerateId(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnumeric.c */
 xp3Value *

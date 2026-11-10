@@ -134,6 +134,11 @@ typedef struct {
 /*
  * Atomic values
  */
+
+/* The longest string, in bytes, of an atomic value
+ * (xp3AtomicNewString()) */
+#define XP3_STRING_MAX ((size_t) INT32_MAX)
+
 xp3Atomic *
 xp3AtomicNewString(xp3TypeId type, const xmlChar *str, size_t len);
 

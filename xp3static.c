@@ -1773,11 +1773,15 @@ signatureType(xp3Analysis *st, xp3AstNode *node, xp3FuncType *type) {
                     /* element(*) is element() */
                     if ((child != NULL) &&
                         ((child->op != XP3_NAMETEST_ANY) ||
-                         (child->next != NULL)))
-                        return(unsupportedType(st, item,
-                            (item->op == XP3_KIND_ELEMENT) ?
-                            "element() with a name or type" :
-                            "attribute() with a name or type"));
+                         (child->next != NULL))) {
+                        const char *what;
+
+                        if (item->op == XP3_KIND_ELEMENT)
+                            what = "element() with a name or type";
+                        else
+                            what = "attribute() with a name or type";
+                        return(unsupportedType(st, item, what));
+                    }
                     break;
                 case XP3_KIND_SCHEMA_ELEMENT:
                     return(unsupportedType(st, item, "schema-element()"));
@@ -1800,14 +1804,17 @@ signatureType(xp3Analysis *st, xp3AstNode *node, xp3FuncType *type) {
             type->type = item->op;
             return(0);
         case XP3_AST_FUNCTION_TEST:
-            return((item->op != 0) ?
-                   unsupportedType(st, item, "a typed function test") : 0);
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed function test"));
+            return(0);
         case XP3_AST_MAP_TEST:
-            return((item->op != 0) ?
-                   unsupportedType(st, item, "a typed map test") : 0);
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed map test"));
+            return(0);
         case XP3_AST_ARRAY_TEST:
-            return((item->op != 0) ?
-                   unsupportedType(st, item, "a typed array test") : 0);
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed array test"));
+            return(0);
         default:
             return(0);
     }
@@ -1842,6 +1849,17 @@ signatureName(xp3Analysis *st, xp3AstNode *func, int arity) {
                                "%s#%d is registered already", name, arity));
     }
     return(0);
+}
+
+/* Copy a string of len bytes and its NUL to *dest, and move *dest past
+ * the copy. Returns the copy. */
+static const xmlChar *
+packString(xmlChar **dest, const xmlChar *str, size_t len) {
+    xmlChar *copy = *dest;
+
+    memcpy(copy, str, len + 1);
+    *dest = copy + len + 1;
+    return(copy);
 }
 
 /**
@@ -1895,7 +1913,7 @@ xp3CompileSignature(const xp3StaticContext *ctx, const xmlChar *signature,
         goto error;
 
     /* One allocation: the entry, the parameter types, then the URI,
-     * the local name and the signature */
+     * the local name and the signature, each with its NUL (the + 3) */
     uriLen = strlen((const char *) root->uri);
     nameLen = strlen((const char *) root->text);
     func = xmlMalloc(sizeof(*func) + (size_t) arity * sizeof(xp3FuncType) +
@@ -1926,14 +1944,9 @@ xp3CompileSignature(const xp3StaticContext *ctx, const xmlChar *signature,
         goto error;
 
     str = (xmlChar *) (params + arity);
-    memcpy(str, root->uri, uriLen + 1);
-    func->uri = str;
-    str += uriLen + 1;
-    memcpy(str, root->text, nameLen + 1);
-    func->info.name = (const char *) str;
-    str += nameLen + 1;
-    memcpy(str, signature, sigLen + 1);
-    func->info.signature = (const char *) str;
+    func->uri = packString(&str, root->uri, uriLen);
+    func->info.name = (const char *) packString(&str, root->text, nameLen);
+    func->info.signature = (const char *) packString(&str, signature, sigLen);
 
     func->info.arity = arity;
     func->info.level = XP3_XPATH_20;

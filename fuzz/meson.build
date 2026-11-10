@@ -56,6 +56,7 @@ fuzz_eval_seed = files(
     'seed-eval/flwor',
     'seed-eval/functions',
     'seed-eval/functions_inject',
+    'seed-eval/generate_id',
     'seed-eval/inject',
     'seed-eval/inject_late',
     'seed-eval/level20',

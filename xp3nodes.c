@@ -513,13 +513,19 @@ xp3NodePrefix(const xmlNode *node) {
  * Values
  */
 
-/*
- * The string values are built in two passes over the text, first
- * counting the bytes and then copying them, so they are allocated
- * once. out is NULL in the first pass.
+/**
+ * Add text to a string that is built in two passes, first measuring
+ * it and then copying it, so that it is allocated once. String values
+ * and fn:path are built so.
+ *
+ * @param out     the string, NULL in the first pass
+ * @param length  its length so far
+ * @param text    the text to add; NULL adds nothing
+ * @returns the new length; a length that would overflow stays at
+ *          SIZE_MAX
  */
-static size_t
-addText(xmlChar *out, size_t length, const xmlChar *text) {
+size_t
+xp3NodeAddText(xmlChar *out, size_t length, const xmlChar *text) {
     size_t size;
 
     if (text == NULL)
@@ -537,7 +543,7 @@ static size_t
 addRunText(xmlChar *out, size_t length, const xmlNode *node) {
     for (; (node != NULL) && inTextRun(node); node = node->next) {
         if (isText(node))
-            length = addText(out, length, node->content);
+            length = xp3NodeAddText(out, length, node->content);
     }
     return(length);
 }
@@ -549,7 +555,7 @@ addSubtreeText(xmlChar *out, size_t length, const xmlNode *top) {
 
     while (node != NULL) {
         if (isText(node)) {
-            length = addText(out, length, node->content);
+            length = xp3NodeAddText(out, length, node->content);
         } else if ((node->type == XML_ELEMENT_NODE) &&
                    (node->children != NULL)) {
             node = node->children;
@@ -572,7 +578,7 @@ addAttributeText(xmlChar *out, size_t length, const xmlNode *attr) {
 
     for (node = attr->children; node != NULL; node = node->next) {
         if (isText(node))
-            length = addText(out, length, node->content);
+            length = xp3NodeAddText(out, length, node->content);
     }
     return(length);
 }
@@ -587,12 +593,12 @@ addStringValue(xmlChar *out, const xmlNode *node) {
             return(addAttributeText(out, 0, node));
         case XP3_NODE_TEXT:
             if (node->parent == NULL)
-                return(addText(out, 0, node->content));
+                return(xp3NodeAddText(out, 0, node->content));
             node = xp3NodeCanonical((xmlNodePtr) node);
             return((node != NULL) ? addRunText(out, 0, node) : 0);
         case XP3_NODE_COMMENT:
         case XP3_NODE_PI:
-            return(addText(out, 0, node->content));
+            return(xp3NodeAddText(out, 0, node->content));
         default:
             return(0);
     }
@@ -861,6 +867,25 @@ orderPosition(xp3DocOrder *order, xmlNodePtr *node, size_t *position) {
     if (!orderLookup(order, canonical, position))
         return(XP3_ERR_XPTY0004);
     return(XP3_ERR_OK);
+}
+
+/**
+ * Get the position of a node in document order, indexing its tree
+ * first if needed: from 0 for the first node of the first tree the
+ * table indexed, and on through the trees indexed after it, so the
+ * nodes of all trees have different positions. fn:generate-id makes
+ * its ids from them.
+ *
+ * @param order     the table
+ * @param node      the node
+ * @param position  set to its position
+ * @returns XP3_ERR_OK, XP3_ERR_NO_MEMORY, or XP3_ERR_XPTY0004 if the
+ *          node is not an XDM node or its tree changed after the table
+ *          indexed it
+ */
+xp3ErrCode
+xp3DocOrderPosition(xp3DocOrder *order, xmlNodePtr node, size_t *position) {
+    return(orderPosition(order, &node, position));
 }
 
 /**
