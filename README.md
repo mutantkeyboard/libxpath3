@@ -5,7 +5,7 @@
 
 libxpath3 is an XPath 3.1 engine in C for documents parsed with [libxml2](https://gitlab.gnome.org/GNOME/libxml2). It evaluates expressions directly on libxml2's tree, so existing libxml2 code can use it without converting documents.
 
-> **Early release.** libxpath3 0.1 evaluates paths and operators, but no function calls yet. The API may still change before 1.0.
+> **Early release.** libxpath3 evaluates paths, operators and the core of the function library: the string, sequence, numeric and node functions, and functions the application registers. Regular expressions, dates and times, and maps, arrays and higher-order functions are not implemented yet. The API may still change before 1.0.
 
 ## Features and scope
 

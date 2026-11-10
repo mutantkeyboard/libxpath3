@@ -327,6 +327,7 @@ Library name `libxpath3`, API prefix `xp3`. Compiling and evaluating exist since
 ```c
 /* Static context and compilation */
 xp3StaticContext *xp3NewStaticContext(void);
+void xp3FreeStaticContext(xp3StaticContext *sctx);  /* expressions don't need it after compiling */
 int  xp3DeclareNamespace(xp3StaticContext *sctx, const xmlChar *prefix, const xmlChar *uri);
 int  xp3DeclareVariable(xp3StaticContext *sctx, const xmlChar *uri, const xmlChar *localName);
 int  xp3SetDefaultElementNamespace(xp3StaticContext *sctx, const xmlChar *uri);
@@ -383,8 +384,15 @@ int            xp3AtomicTypeDerivesFrom(xp3AtomicType type, xp3AtomicType ancest
 
 /* Errors */
 const xmlChar *xp3ErrorCode(const xp3Error *err);      /* e.g. "FOAR0001" */
+const xmlChar *xp3ErrorNamespace(const xp3Error *err); /* the namespace of the code */
 const xmlChar *xp3ErrorMessage(const xp3Error *err);
+int            xp3ErrorLine(const xp3Error *err);      /* 1-based position in the expression, 0 if unknown */
+int            xp3ErrorColumn(const xp3Error *err);
 void           xp3ErrorFree(xp3Error *err);
+
+/* Version */
+const char *xp3GetVersion(void);        /* "0.1.0" */
+int         xp3GetVersionNumber(void);  /* 100 */
 ```
 
 Schematron-style use: compile each rule once at startup, then evaluate it against each document with a fresh dynamic context. Bindings for Ruby (Nokogiri), Python (lxml) and PHP can be thin, because the API works on the `xmlNode *` they already hold.
