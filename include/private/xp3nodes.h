@@ -74,6 +74,9 @@ xp3NodeStringValue(xmlNodePtr node, xmlChar **value, size_t *length);
 xp3ErrCode
 xp3NodeTypedValue(xmlNodePtr node, xp3Atomic **value);
 
+size_t
+xp3NodeAddText(xmlChar *out, size_t length, const xmlChar *text);
+
 /*
  * Document order
  */
@@ -82,6 +85,9 @@ xp3DocOrderNew(void);
 
 void
 xp3DocOrderFree(xp3DocOrder *order);
+
+xp3ErrCode
+xp3DocOrderPosition(xp3DocOrder *order, xmlNodePtr node, size_t *position);
 
 xp3ErrCode
 xp3DocOrderCompare(xp3DocOrder *order, xmlNodePtr first,

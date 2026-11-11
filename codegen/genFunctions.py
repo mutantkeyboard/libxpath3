@@ -3,7 +3,7 @@
 # genFunctions.py: generate codegen/functions.inc, the table of
 # built-in functions, from the W3C specifications
 #
-# Usage:
+# Usage, to regenerate the table after downloading the three files:
 #
 #   python3 codegen/genFunctions.py CATALOG FO20 FO30 > codegen/functions.inc
 #
@@ -15,10 +15,28 @@
 # FO30     F&O 3.0:
 #          https://www.w3.org/TR/2014/REC-xpath-functions-30-20140408/
 #
+# The output is committed, so building needs no Python.
+#
 # The catalog gives every function of XPath 3.1 with its signatures
 # and properties. The language level of a signature is the first of
 # the three specifications that has the same name and arity, so for
 # example fn:round#1 is XPath 2.0 and fn:round#2 is XPath 3.0.
+#
+# The output has three parts, all in the order of the table:
+#
+# - xp3FuncId, an id per signature, such as XP3_FN_ABS_1 for fn:abs#1
+#   or XP3_FN_MATH_PI_0 for math:pi#0, which xp3func.c uses to bind
+#   implementations to signatures by designated initializer
+# - xp3FuncParams, the type of each parameter
+# - xp3Functions, the table, with the type of the result and a pointer
+#   to the parameter types of each signature
+#
+# A type is the kind of a SequenceType node of the parse tree
+# (xp3ast.h) with its op and occurrence: an atomic type or xs:numeric,
+# item(), a kind test such as node() or element(), or function(*),
+# map(*) and array(*), which keep only their kind. "none", the result
+# of fn:error, is XP3_AST_NONE. The variadic fn:concat lists its two
+# declared parameters; further arguments have the type of the last.
 #
 # The catalog has a few mistakes, corrected here:
 #
@@ -62,7 +80,57 @@ NAMESPACES = ['fn', 'math', 'map', 'array']
 
 # One entry of the generated table
 Signature = collections.namedtuple(
-    'Signature', 'namespace name arity level flags text')
+    'Signature', 'namespace name arity level flags text result params')
+
+# The atomic types of the signatures, by the names of xp3TypeId and
+# xp3SchemaType
+ATOMIC_TYPES = {
+    'anyAtomicType': 'XP3_TYPE_ANY_ATOMIC',
+    'anyURI': 'XP3_TYPE_ANY_URI',
+    'base64Binary': 'XP3_TYPE_BASE64_BINARY',
+    'boolean': 'XP3_TYPE_BOOLEAN',
+    'date': 'XP3_TYPE_DATE',
+    'dateTime': 'XP3_TYPE_DATE_TIME',
+    'dateTimeStamp': 'XP3_TYPE_DATE_TIME_STAMP',
+    'dayTimeDuration': 'XP3_TYPE_DAY_TIME_DURATION',
+    'decimal': 'XP3_TYPE_DECIMAL',
+    'double': 'XP3_TYPE_DOUBLE',
+    'duration': 'XP3_TYPE_DURATION',
+    'integer': 'XP3_TYPE_INTEGER',
+    'language': 'XP3_TYPE_LANGUAGE',
+    'NCName': 'XP3_TYPE_NCNAME',
+    'numeric': 'XP3_SCHEMA_NUMERIC',
+    'QName': 'XP3_TYPE_QNAME',
+    'string': 'XP3_TYPE_STRING',
+    'time': 'XP3_TYPE_TIME',
+}
+
+# Kind tests, by the names of xp3KindTestKind
+KIND_TESTS = {
+    'node': 'XP3_KIND_ANY',
+    'document-node': 'XP3_KIND_DOCUMENT',
+    'element': 'XP3_KIND_ELEMENT',
+    'attribute': 'XP3_KIND_ATTRIBUTE',
+    'text': 'XP3_KIND_TEXT',
+    'comment': 'XP3_KIND_COMMENT',
+    'processing-instruction': 'XP3_KIND_PI',
+    'namespace-node': 'XP3_KIND_NAMESPACE_NODE',
+}
+
+# Other item types, by their kind of node
+ITEM_TESTS = {
+    'item': 'XP3_AST_ANY_ITEM_TYPE',
+    'function': 'XP3_AST_FUNCTION_TEST',
+    'map': 'XP3_AST_MAP_TEST',
+    'array': 'XP3_AST_ARRAY_TEST',
+}
+
+OCCURRENCES = {
+    '': 'XP3_OCC_ONE',
+    '?': 'XP3_OCC_OPTIONAL',
+    '*': 'XP3_OCC_ZERO_OR_MORE',
+    '+': 'XP3_OCC_ONE_OR_MORE',
+}
 
 PROPERTY_FLAGS = [
     ('focus-dependent', 'XP3_FUNC_FOCUS'),
@@ -128,6 +196,61 @@ def c_string(text, indent):
     return ('\n' + ' ' * indent).join('"%s"' % part for part in parts)
 
 
+def sequence_type(text):
+    """The (kind, op, occurrence) of a type in a signature."""
+    if text == 'none':
+        return ('XP3_AST_NONE', '0', 'XP3_OCC_ONE')
+    if text == 'empty-sequence()':
+        return ('XP3_AST_EMPTY_SEQUENCE_TYPE', '0', 'XP3_OCC_ONE')
+    if text.startswith('xs:'):
+        name = text[3:].rstrip('?*+')
+        if name not in ATOMIC_TYPES:
+            sys.exit('unknown type %s' % text)
+        return ('XP3_AST_ATOMIC_TYPE', ATOMIC_TYPES[name],
+                OCCURRENCES[text[3 + len(name):]])
+    name, paren, _ = text.partition('(')
+    if not paren:
+        sys.exit('unknown type %s' % text)
+    depth = 0
+    for end, char in enumerate(text):
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth == 0:
+                break
+    rest = text[end + 1:]
+    # function(...) as T: an occurrence after T belongs to T
+    if rest.startswith(' as '):
+        rest = ''
+    if rest not in OCCURRENCES:
+        sys.exit('unknown type %s' % text)
+    if name in KIND_TESTS:
+        return ('XP3_AST_KIND_TEST', KIND_TESTS[name], OCCURRENCES[rest])
+    if name in ITEM_TESTS:
+        return (ITEM_TESTS[name], '0', OCCURRENCES[rest])
+    sys.exit('unknown type %s' % text)
+
+
+def c_type(fields, indent, end):
+    """A type as a C initializer, on two lines if it is too long."""
+    text = '{ %s, %s, %s }%s' % (fields + (end,))
+    if indent + len(text) <= 79:
+        return ' ' * indent + text
+    return '%s{ %s, %s,\n%s  %s }%s' % ((' ' * indent,) + fields[:2] +
+                                        (' ' * indent, fields[2], end))
+
+
+def c_id(row):
+    """The id of a signature: XP3_FN_, the namespace unless it is fn,
+    the local name and the arity."""
+    prefix = 'XP3_FN_'
+    if row.namespace != 0:
+        prefix += NAMESPACES[row.namespace].upper() + '_'
+    return '%s%s_%d' % (prefix, re.sub(r'\W', '_', row.name).upper(),
+                        row.arity)
+
+
 def main():
     if len(sys.argv) != 4:
         sys.exit('usage: genFunctions.py CATALOG FO20 FO30')
@@ -163,8 +286,12 @@ def main():
                 flags.insert(0, 'XP3_FUNC_VARIADIC')
             signature = '%s(%s) as %s' % (qname, ', '.join(params),
                                           proto.get('return-type'))
+            types = [sequence_type(arg.get('type')) for arg in args
+                     if arg.get('name') != '...']
             rows.append(Signature(NAMESPACES.index(prefix), func.get('name'),
-                                  arity, level, flags, signature))
+                                  arity, level, flags, signature,
+                                  sequence_type(proto.get('return-type')),
+                                  types))
 
     # Sorted for binary search, as xp3FuncLookup() expects
     rows.sort(key=lambda row: (row.namespace, row.name.encode('utf-8'),
@@ -173,6 +300,9 @@ def main():
         if ((previous.namespace, previous.name, previous.arity) ==
                 (row.namespace, row.name, row.arity)):
             sys.exit('duplicate signature %s' % row.text)
+    ids = [c_id(row) for row in rows]
+    if len(set(ids)) != len(ids):
+        sys.exit('duplicate ids')
 
     print('/*')
     print(' * Built-in functions of XPath 3.1, generated by')
@@ -180,7 +310,26 @@ def main():
     print(' * Do not edit.')
     print(' */')
     print()
+    print('/* Ids of the signatures, in the order of xp3Functions */')
+    print('typedef enum {')
+    for index, name in enumerate(ids):
+        print('    %s%s,' % (name, ' = 0' if index == 0 else ''))
+    print('    XP3_FUNC_ID_COUNT       /* the number of ids, not an id */')
+    print('} xp3FuncId;')
+    print()
+    print('/* Types of the parameters, the signatures\' in turn */')
+    print('static const xp3FuncType xp3FuncParams[] = {')
+    for row in rows:
+        if not row.params:
+            continue
+        print('    /* %s:%s#%d */' % (NAMESPACES[row.namespace], row.name,
+                                      row.arity))
+        for param in row.params:
+            print(c_type(param, 4, ','))
+    print('};')
+    print()
     print('static const xp3FuncInfo xp3Functions[] = {')
+    offset = 0
     for row in rows:
         head = '    { %s, "%s", %d, %s,' % (
             'XP3_FUNC_NS_' + NAMESPACES[row.namespace].upper(), row.name,
@@ -191,7 +340,13 @@ def main():
         else:
             print(head)
             print('      %s,' % flags)
-        print('      %s },' % c_string(row.text, 6))
+        print('      %s,' % c_string(row.text, 6))
+        print(c_type(row.result, 6, ','))
+        if row.params:
+            print('      xp3FuncParams + %d },' % offset)
+            offset += len(row.params)
+        else:
+            print('      NULL },')
     print('};')
 
 

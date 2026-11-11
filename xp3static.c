@@ -13,8 +13,9 @@
  *   binding gets a slot number, so evaluation can keep variables in an
  *   array instead of looking them up by name.
  * - function calls and named function references, against the built-in
- *   functions of the language level (xp3func.c) and the constructor
- *   functions [err:XPST0017]
+ *   functions of the language level (xp3func.c), the constructor
+ *   functions and the extension functions of the static context
+ *   [err:XPST0017]
  * - type names in sequence types [err:XPST0051], in cast and castable
  *   [err:XQST0052, err:XPST0080] and in element and attribute tests
  *   [err:XPST0008]
@@ -25,6 +26,9 @@
  * The results are stored in the tree itself (xp3ast.h says which
  * fields). A constructor function call such as xs:integer($x) becomes
  * ($x cast as xs:integer?), which is how XPath 3.1, 3.14.4 defines it.
+ *
+ * The signatures of extension functions are resolved with the same
+ * rules, once, when they are registered (xp3CompileSignature()).
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -54,6 +58,10 @@
 
 /* URIs copied into the tree that are remembered, see staticUri() */
 #define XP3_URI_CACHE 8
+
+/* Extension functions copied into the tree that are remembered, see
+ * staticExtension() */
+#define XP3_FUNC_CACHE 8
 
 /* Which default namespace an unprefixed name gets */
 typedef enum {
@@ -95,6 +103,11 @@ typedef struct {
         const xmlChar *copy;        /* its copy in the tree */
     } uris[XP3_URI_CACHE];
     int uriCount;
+    struct {
+        const xp3ExtFunction *from; /* in the static context */
+        const xp3ExtFunction *copy; /* in the tree */
+    } funcs[XP3_FUNC_CACHE];
+    int funcCount;
 } xp3Analysis;
 
 /* The built-in schema types that are not atomic, see xp3SchemaType */
@@ -666,6 +679,71 @@ rewriteConstructor(xp3Analysis *st, xp3AstNode *node, int type) {
     return(0);
 }
 
+/*
+ * The extension function of a name and arity in the static context,
+ * or NULL
+ */
+static const xp3ExtFunction *
+lookupExtension(const xp3Analysis *st, const xmlChar *uri,
+                const xmlChar *localName, int arity) {
+    const xp3ExtFunction *func;
+
+    for (func = xp3StaticContextFunctions(st->ctx, uri, localName);
+         func != NULL; func = func->next) {
+        if (func->info.arity == arity)
+            return(func);
+    }
+    return(NULL);
+}
+
+/*
+ * A copy in the tree of an extension function from the static context,
+ * so that node->func never points into the context (D13). Each entry
+ * is copied once per expression, as long as the cache has room, as
+ * URIs are (staticUri()).
+ */
+static const xp3FuncInfo *
+staticExtension(xp3Analysis *st, const xp3ExtFunction *from) {
+    xp3ExtFunction *copy;
+    xp3FuncType *params = NULL;
+    const char *signature = from->info.signature;
+    int i;
+
+    for (i = 0; i < st->funcCount; i++) {
+        if (st->funcs[i].from == from)
+            return(&st->funcs[i].copy->info);
+    }
+    copy = xp3AstAlloc(st->ast, sizeof(*copy));
+    if (copy == NULL)
+        return(NULL);
+    *copy = *from;
+    copy->next = NULL;
+    if (from->info.arity > 0) {
+        params = xp3AstAlloc(st->ast, (size_t) from->info.arity *
+                                      sizeof(xp3FuncType));
+        if (params == NULL)
+            return(NULL);
+        memcpy(params, from->info.params,
+               (size_t) from->info.arity * sizeof(xp3FuncType));
+    }
+    copy->info.params = params;
+    copy->uri = xp3AstStrndup(st->ast, from->uri,
+                              strlen((const char *) from->uri));
+    copy->info.name = (const char *) xp3AstStrndup(st->ast,
+        BAD_CAST from->info.name, strlen(from->info.name));
+    copy->info.signature = (const char *) xp3AstStrndup(st->ast,
+        BAD_CAST signature, strlen(signature));
+    if ((copy->uri == NULL) || (copy->info.name == NULL) ||
+        (copy->info.signature == NULL))
+        return(NULL);
+    if (st->funcCount < XP3_FUNC_CACHE) {
+        st->funcs[st->funcCount].from = from;
+        st->funcs[st->funcCount].copy = copy;
+        st->funcCount++;
+    }
+    return(&copy->info);
+}
+
 /* Whether a call has an argument placeholder, making it a partial
  * function application. */
 static int
@@ -681,10 +759,12 @@ hasPlaceholder(const xp3AstNode *node) {
 
 /*
  * Resolve the function of a FUNCTION_CALL, NAMED_FUNCTION_REF or
- * ARROW with a name [err:XPST0017].
+ * ARROW with a name [err:XPST0017]: a built-in function, then an
+ * extension function, which exists at every level.
  */
 static int
 resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
+    const xp3ExtFunction *ext;
     const xp3FuncInfo *info;
     char name[XP3_NAME_BUF];
     int type;
@@ -696,6 +776,11 @@ resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
     if (info != NULL) {
         node->func = info;
         return(0);
+    }
+    ext = lookupExtension(st, node->uri, node->text, arity);
+    if (ext != NULL) {
+        node->func = staticExtension(st, ext);
+        return((node->func == NULL) ? staticNoMemory(st) : 0);
     }
 
     type = schemaType(st, node);
@@ -713,7 +798,8 @@ resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
     if (type >= 0)
         return(staticError(st, XP3_ERR_XPST0017, node,
                            "%s has no constructor function", name));
-    if (xp3FuncNameExists(node->uri, node->text, st->level))
+    if (xp3FuncNameExists(node->uri, node->text, st->level) ||
+        (xp3StaticContextFunctions(st->ctx, node->uri, node->text) != NULL))
         return(staticError(st, XP3_ERR_XPST0017, node,
                            "function %s does not take %d argument%s",
                            name, arity, (arity == 1) ? "" : "s"));
@@ -834,7 +920,8 @@ analyzeNode(xp3Analysis *st, xp3AstNode *node) {
  *
  * A subexpression is closed if it needs nothing from outside itself:
  * no focus (an inner focus, as in a predicate, doesn't count), no
- * variable bound outside it, and no function call. Each largest closed
+ * variable bound outside it, and no call of a function that depends on
+ * the context or isn't implemented (foldableCall()). Each largest closed
  * subexpression is evaluated once, here, and replaced by a CONSTANT
  * node. A fold that raises an error, or needs more than its budget, is
  * dropped and the subexpression kept, so dynamic errors are still
@@ -911,10 +998,29 @@ isFoldable(xp3AstKind kind) {
         case XP3_AST_CAST_AS:
         case XP3_AST_PATH:
         case XP3_AST_FILTER:
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
             return(1);
         default:
             return(0);
     }
+}
+
+/*
+ * Whether a call can be folded once its arguments are: the function
+ * is implemented, and is neither focus-dependent, context-dependent,
+ * nondeterministic nor higher-order (F&O 3.1, 1.7.4). An extension
+ * function is nondeterministic unless registered as deterministic. An
+ * arrow to a function expression has no func.
+ */
+static int
+foldableCall(const xp3AstNode *node) {
+    return((node->func != NULL) &&
+           !(node->func->flags & (XP3_FUNC_FOCUS | XP3_FUNC_CONTEXT |
+                                  XP3_FUNC_NONDETERMINISTIC |
+                                  XP3_FUNC_HIGHER_ORDER)) &&
+           ((node->func->flags & XP3_FUNC_EXTENSION) ||
+            (xp3FuncImplementation(node->func) != NULL)));
 }
 
 /* Turn a node into a CONSTANT node holding a constant value */
@@ -958,17 +1064,23 @@ keepConstant(xp3Analysis *st, xp3Value *constant) {
     return(0);
 }
 
-/* Replace a node by a value, made constant. If memory runs out, the
- * optimizer stops. */
-static void
+/* Replace a node by a value, made constant. A value with nodes or
+ * function items can't be a constant, and the node stays. If memory
+ * runs out, the optimizer stops. Returns whether the node was
+ * replaced. */
+static int
 replaceByValue(xp3Optimizer *opt, xp3AstNode *node, const xp3Value *value) {
-    xp3Value *constant = xp3ValueMakeConstant(value);
+    xp3Value *constant;
 
+    if (!xp3ValueIsAtomic(value))
+        return(0);
+    constant = xp3ValueMakeConstant(value);
     if ((constant == NULL) || (keepConstant(opt->st, constant) < 0)) {
         opt->noMemory = 1;
-        return;
+        return(0);
     }
     makeConstantNode(node, constant);
+    return(1);
 }
 
 /* The size of a value, the sum of its items' xp3AtomicSize(), counted
@@ -1018,10 +1130,14 @@ tryFold(xp3Optimizer *opt, xp3AstNode *node) {
             return;
         }
         if (err == XP3_ERR_OK) {
-            opt->bytes -= valueSize(value, opt->bytes);
-            replaceByValue(opt, node, value);
+            size_t size = valueSize(value, opt->bytes);
+            int replaced = replaceByValue(opt, node, value);
+
             xp3ValueUnref(value);
-            return;
+            if (replaced)
+                opt->bytes -= size;
+            if (replaced || opt->noMemory)
+                return;
         }
     }
     for (child = node->first; child != NULL; child = child->next)
@@ -1029,13 +1145,17 @@ tryFold(xp3Optimizer *opt, xp3AstNode *node) {
 }
 
 /* Whether the focus of a child is the focus of its parent: not for
- * the steps of a path after the first, nor for predicates */
+ * the steps of a path after the first, predicates, or the right side
+ * of ! */
 static int
 sharesFocus(const xp3AstNode *parent, const xp3AstNode *child) {
     switch (parent->kind) {
         case XP3_AST_PATH:
         case XP3_AST_FILTER:
             return(child == parent->first);
+        case XP3_AST_BINARY:
+            return((parent->op != XP3_OP_SIMPLE_MAP) ||
+                   (child == parent->first));
         case XP3_AST_STEP:
             return(0);
         default:
@@ -1071,17 +1191,14 @@ nodeInfo(const xp3Optimizer *opt, const xp3AstNode *node,
         case XP3_AST_PARAM:
             info->minBind = node->op;
             break;
-        case XP3_AST_BINARY:
-            /* || and ! come with Part 12 */
-            info->hasCall = (node->op == XP3_OP_CONCAT) ||
-                            (node->op == XP3_OP_SIMPLE_MAP);
-            break;
         case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
+            info->hasCall = !foldableCall(node);
+            break;
         case XP3_AST_ARG_PLACEHOLDER:
         case XP3_AST_DYNAMIC_CALL:
         case XP3_AST_NAMED_FUNCTION_REF:
         case XP3_AST_INLINE_FUNCTION:
-        case XP3_AST_ARROW:
         case XP3_AST_LOOKUP:
         case XP3_AST_UNARY_LOOKUP:
         case XP3_AST_MAP:
@@ -1263,6 +1380,13 @@ isBooleanOrNodes(const xp3AstNode *expr) {
         case XP3_AST_PATH:
             return((expr->last != NULL) &&
                    (expr->last->kind == XP3_AST_STEP));
+        case XP3_AST_FUNCTION_CALL:
+        case XP3_AST_ARROW:
+            /* By the result type of the signature, as fn:not() */
+            return((expr->func != NULL) &&
+                   (((expr->func->result.kind == XP3_AST_ATOMIC_TYPE) &&
+                     (expr->func->result.type == XP3_TYPE_BOOLEAN)) ||
+                    (expr->func->result.kind == XP3_AST_KIND_TEST)));
         case XP3_AST_CONSTANT: {
             xp3Item item;
             int ret = 0;
@@ -1298,7 +1422,8 @@ readsPosition(const xp3AstNode *expr) {
     if (((expr->kind == XP3_AST_FUNCTION_CALL) ||
          (expr->kind == XP3_AST_ARROW) ||
          (expr->kind == XP3_AST_NAMED_FUNCTION_REF)) &&
-        (expr->func != NULL) && (expr->func->ns == XP3_FUNC_NS_FN) &&
+        (expr->func != NULL) && !(expr->func->flags & XP3_FUNC_EXTENSION) &&
+        (expr->func->ns == XP3_FUNC_NS_FN) &&
         ((strcmp(expr->func->name, "position") == 0) ||
          (strcmp(expr->func->name, "last") == 0) ||
          (strcmp(expr->func->name, "function-lookup") == 0)))
@@ -1582,4 +1707,261 @@ xp3FreeExpr(xp3Expr *expr) {
     freeConstants(expr->constants, expr->constantCount);
     xp3AstFree(expr->ast);
     xmlFree(expr);
+}
+
+/*
+ * Signatures of extension functions
+ */
+
+/* The namespaces no extension function can be in (XQuery 3.1, 4.18) */
+static const char *const xp3ReservedNs[] = {
+    XP3_NS_XML,
+    XP3_NS_XS,
+    XP3_NS_XSI,
+    XP3_NS_FN,
+    XP3_NS_MATH,
+    XP3_NS_MAP,
+    XP3_NS_ARRAY,
+    XP3_NS_XQUERY
+};
+
+static int
+unsupportedType(xp3Analysis *st, const xp3AstNode *node, const char *what) {
+    return(staticError(st, XP3_ERR_UNSUPPORTED, node, "%s is not supported "
+                       "in function signatures yet", what));
+}
+
+/*
+ * The xp3FuncType of a parameter or result type: a SEQUENCE_TYPE or
+ * EMPTY_SEQUENCE_TYPE node, or NULL for none, which is item()*. An
+ * item type that xp3FuncType would keep only by its kind is rejected,
+ * as the conversion rules would check it loosely [err:UNSUPPORTED].
+ */
+static int
+signatureType(xp3Analysis *st, xp3AstNode *node, xp3FuncType *type) {
+    xp3AstNode *item;
+    const xp3AstNode *child;
+
+    type->type = 0;
+    type->occurrence = XP3_OCC_ONE;
+    if (node == NULL) {
+        type->kind = XP3_AST_ANY_ITEM_TYPE;
+        type->occurrence = XP3_OCC_ZERO_OR_MORE;
+        return(0);
+    }
+    if (node->kind == XP3_AST_EMPTY_SEQUENCE_TYPE) {
+        type->kind = XP3_AST_EMPTY_SEQUENCE_TYPE;
+        return(0);
+    }
+    item = node->first;
+    type->kind = item->kind;
+    type->occurrence = (xp3Occurrence) node->op;
+
+    switch (item->kind) {
+        case XP3_AST_ATOMIC_TYPE:
+            if (analyzeAtomicType(st, item) < 0)
+                return(-1);
+            if (item->op == XP3_SCHEMA_ERROR)
+                return(unsupportedType(st, item, "xs:error"));
+            type->type = item->op;
+            return(0);
+        case XP3_AST_KIND_TEST:
+            child = item->first;
+            switch (item->op) {
+                case XP3_KIND_ELEMENT:
+                case XP3_KIND_ATTRIBUTE:
+                    /* element(*) is element() */
+                    if ((child != NULL) &&
+                        ((child->op != XP3_NAMETEST_ANY) ||
+                         (child->next != NULL))) {
+                        const char *what;
+
+                        if (item->op == XP3_KIND_ELEMENT)
+                            what = "element() with a name or type";
+                        else
+                            what = "attribute() with a name or type";
+                        return(unsupportedType(st, item, what));
+                    }
+                    break;
+                case XP3_KIND_SCHEMA_ELEMENT:
+                    return(unsupportedType(st, item, "schema-element()"));
+                case XP3_KIND_SCHEMA_ATTRIBUTE:
+                    return(unsupportedType(st, item, "schema-attribute()"));
+                case XP3_KIND_DOCUMENT:
+                    if (child != NULL)
+                        return(unsupportedType(st, item, "document-node() "
+                                               "with an element test"));
+                    break;
+                case XP3_KIND_PI:
+                    if (item->text != NULL)
+                        return(unsupportedType(st, item,
+                                               "processing-instruction() "
+                                               "with a name"));
+                    break;
+                default:
+                    break;
+            }
+            type->type = item->op;
+            return(0);
+        case XP3_AST_FUNCTION_TEST:
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed function test"));
+            return(0);
+        case XP3_AST_MAP_TEST:
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed map test"));
+            return(0);
+        case XP3_AST_ARRAY_TEST:
+            if (item->op != 0)
+                return(unsupportedType(st, item, "a typed array test"));
+            return(0);
+        default:
+            return(0);
+    }
+}
+
+/*
+ * Check the name of a signature: in a namespace [err:XQST0060], not a
+ * reserved one [err:XQST0045], and with a new arity [err:XQST0034].
+ */
+static int
+signatureName(xp3Analysis *st, xp3AstNode *func, int arity) {
+    const xp3ExtFunction *other;
+    char name[XP3_NAME_BUF];
+    size_t i;
+
+    displayName(func, name, sizeof(name));
+    if (resolveName(st, func, XP3_DEFAULT_FUNCTION) < 0)
+        return(-1);
+    if (func->uri == NULL)
+        return(staticError(st, XP3_ERR_XQST0060, func, "the function %s is "
+                           "in no namespace", name));
+    for (i = 0; i < sizeof(xp3ReservedNs) / sizeof(xp3ReservedNs[0]); i++) {
+        if (xmlStrEqual(func->uri, BAD_CAST xp3ReservedNs[i]))
+            return(staticError(st, XP3_ERR_XQST0045, func, "the function %s "
+                               "is in the namespace %s, which is reserved",
+                               name, xp3ReservedNs[i]));
+    }
+    for (other = xp3StaticContextFunctions(st->ctx, func->uri, func->text);
+         other != NULL; other = other->next) {
+        if (other->info.arity == arity)
+            return(staticError(st, XP3_ERR_XQST0034, func, "the function "
+                               "%s#%d is registered already", name, arity));
+    }
+    return(0);
+}
+
+/* Copy a string of len bytes and its NUL to *dest, and move *dest past
+ * the copy. Returns the copy. */
+static const xmlChar *
+packString(xmlChar **dest, const xmlChar *str, size_t len) {
+    xmlChar *copy = *dest;
+
+    memcpy(copy, str, len + 1);
+    *dest = copy + len + 1;
+    return(copy);
+}
+
+/**
+ * Make the entry of an extension function from its signature, for
+ * xp3RegisterFunction(): parse it, resolve its names against the
+ * static context, and turn its types into xp3FuncType data, as the
+ * generated table has them (doc/DESIGN.md 6.3). Errors are positioned
+ * in the signature.
+ *
+ * @param ctx        the static context
+ * @param signature  the signature, a NUL-terminated UTF-8 string
+ * @param error      where to store the error, or NULL
+ * @returns the entry, with impl, userData and next not set yet, to be
+ *          freed with xmlFree(), or NULL on error
+ */
+xp3ExtFunction *
+xp3CompileSignature(const xp3StaticContext *ctx, const xmlChar *signature,
+                    xp3Error **error) {
+    xp3Analysis st;
+    xp3ExtFunction *func = NULL;
+    xp3FuncType *params;
+    xp3AstNode *root;
+    xp3AstNode *child;
+    xp3AstNode *other;
+    xp3AstNode *result = NULL;
+    xmlChar *str;
+    size_t sigLen = strlen((const char *) signature);
+    size_t uriLen;
+    size_t nameLen;
+    char name[XP3_NAME_BUF];
+    int arity = 0;
+    int i;
+
+    if (error != NULL)
+        *error = NULL;
+    memset(&st, 0, sizeof(st));
+    st.ast = xp3ParseSignature(ctx, signature, sigLen, &st.err);
+    if (st.ast == NULL)
+        goto error;
+    st.ctx = ctx;
+    st.level = XP3_XPATH_31;
+    root = st.ast->root;
+
+    for (child = root->first; child != NULL; child = child->next) {
+        if (child->kind == XP3_AST_PARAM)
+            arity++;
+        else
+            result = child;
+    }
+    if (signatureName(&st, root, arity) < 0)
+        goto error;
+
+    /* One allocation: the entry, the parameter types, then the URI,
+     * the local name and the signature, each with its NUL (the + 3) */
+    uriLen = strlen((const char *) root->uri);
+    nameLen = strlen((const char *) root->text);
+    func = xmlMalloc(sizeof(*func) + (size_t) arity * sizeof(xp3FuncType) +
+                     uriLen + nameLen + sigLen + 3);
+    if (func == NULL) {
+        staticNoMemory(&st);
+        goto error;
+    }
+    memset(func, 0, sizeof(*func));
+    params = (xp3FuncType *) (func + 1);
+
+    i = 0;
+    for (child = root->first; child != result; child = child->next) {
+        displayName(child, name, sizeof(name));
+        if (resolveName(&st, child, XP3_DEFAULT_NONE) < 0)
+            goto error;
+        for (other = root->first; other != child; other = other->next) {
+            if (sameName(other->uri, other->text, child->uri, child->text)) {
+                staticError(&st, XP3_ERR_XQST0039, child,
+                            "duplicate parameter $%s", name);
+                goto error;
+            }
+        }
+        if (signatureType(&st, child->first, &params[i++]) < 0)
+            goto error;
+    }
+    if (signatureType(&st, result, &func->info.result) < 0)
+        goto error;
+
+    str = (xmlChar *) (params + arity);
+    func->uri = packString(&str, root->uri, uriLen);
+    func->info.name = (const char *) packString(&str, root->text, nameLen);
+    func->info.signature = (const char *) packString(&str, signature, sigLen);
+
+    func->info.arity = arity;
+    func->info.level = XP3_XPATH_20;
+    func->info.flags = XP3_FUNC_EXTENSION;
+    func->info.params = (arity > 0) ? params : NULL;
+
+    xp3AstFree(st.ast);
+    return(func);
+
+error:
+    xmlFree(func);
+    xp3AstFree(st.ast);
+    if (error != NULL)
+        *error = st.err;
+    else
+        xp3ErrorFree(st.err);
+    return(NULL);
 }

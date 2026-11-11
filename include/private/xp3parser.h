@@ -24,4 +24,8 @@ xp3Ast *
 xp3Parse(const xp3StaticContext *ctx, const xmlChar *expr, size_t length,
          xp3Error **err);
 
+xp3Ast *
+xp3ParseSignature(const xp3StaticContext *ctx, const xmlChar *signature,
+                  size_t length, xp3Error **err);
+
 #endif /* XP3_XP3PARSER_H */

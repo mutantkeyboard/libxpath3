@@ -1068,9 +1068,56 @@ parseNamedFunctionRef(xp3Parser *p) {
 }
 
 /*
+ * ParamList? ")" ("as" SequenceType)?, after the "(" of an inline
+ * function or a function signature
+ *
+ * ParamList ::= Param ("," Param)*
+ * Param     ::= "$" EQName ("as" SequenceType)?
+ *
+ * Appends the PARAM nodes and the return type to func.
+ */
+static int
+parseParamList(xp3Parser *p, xp3AstNode *func) {
+    xp3AstNode *type;
+
+    if (p->tok.kind != XP3_TOK_RPAREN) {
+        for (;;) {
+            xp3AstNode *param = parseDollarName(p, XP3_AST_PARAM);
+
+            if (param == NULL)
+                return(-1);
+            if (tokIsName(p, &p->tok, "as")) {
+                if (parserAdvance(p) < 0)
+                    return(-1);
+                type = parseSequenceType(p);
+                if (type == NULL)
+                    return(-1);
+                xp3AstAppend(param, type);
+            }
+            xp3AstAppend(func, param);
+            if (p->tok.kind != XP3_TOK_COMMA)
+                break;
+            if (parserAdvance(p) < 0)
+                return(-1);
+        }
+    }
+    if (parserExpect(p, XP3_TOK_RPAREN, "',' or ')'") < 0)
+        return(-1);
+
+    if (tokIsName(p, &p->tok, "as")) {
+        if (parserAdvance(p) < 0)
+            return(-1);
+        type = parseSequenceType(p);
+        if (type == NULL)
+            return(-1);
+        xp3AstAppend(func, type);
+    }
+    return(0);
+}
+
+/*
  * InlineFunctionExpr ::= "function" "(" ParamList? ")"
  *                        ("as" SequenceType)? FunctionBody
- * Param              ::= "$" EQName ("as" SequenceType)?
  * FunctionBody       ::= EnclosedExpr
  *
  * An empty body "{}" is stored as an EMPTY_SEQUENCE node.
@@ -1078,47 +1125,14 @@ parseNamedFunctionRef(xp3Parser *p) {
 static xp3AstNode *
 parseInlineFunction(xp3Parser *p) {
     xp3AstNode *func;
-    xp3AstNode *type;
     xp3AstNode *body;
     xp3Token brace;
 
     func = parserTokNode(p, XP3_AST_INLINE_FUNCTION, 0, &p->tok);
     if ((func == NULL) || (parserAdvance(p) < 0) ||
-        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0))
+        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0) ||
+        (parseParamList(p, func) < 0))
         return(NULL);
-
-    if (p->tok.kind != XP3_TOK_RPAREN) {
-        for (;;) {
-            xp3AstNode *param = parseDollarName(p, XP3_AST_PARAM);
-
-            if (param == NULL)
-                return(NULL);
-            if (tokIsName(p, &p->tok, "as")) {
-                if (parserAdvance(p) < 0)
-                    return(NULL);
-                type = parseSequenceType(p);
-                if (type == NULL)
-                    return(NULL);
-                xp3AstAppend(param, type);
-            }
-            xp3AstAppend(func, param);
-            if (p->tok.kind != XP3_TOK_COMMA)
-                break;
-            if (parserAdvance(p) < 0)
-                return(NULL);
-        }
-    }
-    if (parserExpect(p, XP3_TOK_RPAREN, "',' or ')'") < 0)
-        return(NULL);
-
-    if (tokIsName(p, &p->tok, "as")) {
-        if (parserAdvance(p) < 0)
-            return(NULL);
-        type = parseSequenceType(p);
-        if (type == NULL)
-            return(NULL);
-        xp3AstAppend(func, type);
-    }
 
     brace = p->tok;
     if (parseEnclosedExpr(p, &body) < 0)
@@ -2181,31 +2195,42 @@ parseExpr(xp3Parser *p) {
     return(seq);
 }
 
-/**
- * Parse an expression into a syntax tree.
+/*
+ * A function signature, as F&O writes them:
  *
- * Prefixes, variables and function names are not resolved here. That
- * is left to static analysis, so the tree keeps names as written.
+ *   EQName "(" ParamList? ")" ("as" SequenceType)?
  *
- * @param ctx     the static context with the language level and the
- *                limits, or NULL for the defaults
- * @param expr    the expression in UTF-8, or NULL for an empty one
- * @param length  length of the expression in bytes
- * @param err     where to store an error, or NULL
- * @returns the tree, to be freed with xp3AstFree(), or NULL on a
- *          syntax error (XPST0003), when a limit is exceeded (LIMIT)
- *          or when memory allocation failed (NO_MEMORY)
+ * as an INLINE_FUNCTION node without a body (xp3ParseSignature()).
  */
-xp3Ast *
-xp3Parse(const xp3StaticContext *ctx, const xmlChar *expr, size_t length,
-         xp3Error **err) {
+static xp3AstNode *
+parseSignature(xp3Parser *p) {
+    xp3AstNode *func;
+
+    if (!tokIsEQName(&p->tok))
+        return(parserExpected(p, "a function name"));
+    if (parserCheckFunctionName(p) < 0)
+        return(NULL);
+    func = parserTokNode(p, XP3_AST_INLINE_FUNCTION, 0, &p->tok);
+    if ((func == NULL) || (parserSetName(p, func, &p->tok) < 0) ||
+        (parserAdvance(p) < 0) ||
+        (parserExpect(p, XP3_TOK_LPAREN, "'('") < 0) ||
+        (parseParamList(p, func) < 0))
+        return(NULL);
+    return(func);
+}
+
+/* Parse the whole input with one rule, the root of the tree. */
+static xp3Ast *
+parseInput(const xp3StaticContext *ctx, xp3LanguageLevel level,
+           xp3ParseFunc rule, const xmlChar *expr, size_t length,
+           xp3Error **err) {
     xp3Parser p;
     xp3AstNode *root;
 
     if (err != NULL)
         *err = NULL;
     memset(&p, 0, sizeof(p));
-    p.level = (ctx != NULL) ? ctx->level : XP3_DEFAULT_LANGUAGE_LEVEL;
+    p.level = level;
     p.maxDepth = (ctx != NULL) ? ctx->maxParseDepth :
                                  XP3_DEFAULT_MAX_PARSE_DEPTH;
 
@@ -2219,7 +2244,7 @@ xp3Parse(const xp3StaticContext *ctx, const xmlChar *expr, size_t length,
     if (parserAdvance(&p) < 0)
         goto error;
 
-    root = parseExpr(&p);
+    root = rule(&p);
     if (root == NULL)
         goto error;
     if (p.tok.kind != XP3_TOK_EOF) {
@@ -2240,4 +2265,53 @@ error:
     else
         xp3ErrorFree(p.err);
     return(NULL);
+}
+
+/**
+ * Parse an expression into a syntax tree.
+ *
+ * Prefixes, variables and function names are not resolved here. That
+ * is left to static analysis, so the tree keeps names as written.
+ *
+ * @param ctx     the static context with the language level and the
+ *                limits, or NULL for the defaults
+ * @param expr    the expression in UTF-8, or NULL for an empty one
+ * @param length  length of the expression in bytes
+ * @param err     where to store an error, or NULL
+ * @returns the tree, to be freed with xp3AstFree(), or NULL on a
+ *          syntax error (XPST0003), when a limit is exceeded (LIMIT)
+ *          or when memory allocation failed (NO_MEMORY)
+ */
+xp3Ast *
+xp3Parse(const xp3StaticContext *ctx, const xmlChar *expr, size_t length,
+         xp3Error **err) {
+    return(parseInput(ctx, (ctx != NULL) ? ctx->level :
+                                           XP3_DEFAULT_LANGUAGE_LEVEL,
+                      parseExpr, expr, length, err));
+}
+
+/**
+ * Parse the signature of an extension function, such as
+ * "ex:f($a as xs:string?, $b) as item()*", into a syntax tree whose
+ * root is an INLINE_FUNCTION node without a body: the name, a PARAM
+ * child per parameter, and the result type if there is one.
+ *
+ * The syntax is that of XPath 3.1 at every language level: a
+ * signature is parsed once, and the function exists at every level.
+ * Names are not resolved here, as for xp3Parse().
+ *
+ * @param ctx        the static context with the limits, or NULL for
+ *                   the defaults
+ * @param signature  the signature in UTF-8, or NULL for an empty one
+ * @param length     length of the signature in bytes
+ * @param err        where to store an error, or NULL
+ * @returns the tree, to be freed with xp3AstFree(), or NULL on a
+ *          syntax error (XPST0003), when a limit is exceeded (LIMIT)
+ *          or when memory allocation failed (NO_MEMORY)
+ */
+xp3Ast *
+xp3ParseSignature(const xp3StaticContext *ctx, const xmlChar *signature,
+                  size_t length, xp3Error **err) {
+    return(parseInput(ctx, XP3_XPATH_31, parseSignature, signature, length,
+                      err));
 }

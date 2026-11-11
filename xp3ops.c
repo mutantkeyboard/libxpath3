@@ -556,8 +556,10 @@ valueOperator(xp3AstOp op) {
  * Compare two atomic values with a value comparison operator (XPath
  * 3.1, 3.7.1), or the value comparison a general comparison operator
  * stands for. Untyped values compare as strings; the caller converts
- * them first where a general comparison needs another type. Numbers
- * are promoted to a common type, and NaN is unequal to everything.
+ * them first where a general comparison needs another type. Strings
+ * compare by code point, with each byte that isn't UTF-8 as U+FFFD.
+ * Numbers are promoted to a common type, and NaN is unequal to
+ * everything.
  *
  * @param op      the operator: eq, ne, lt, le, gt, ge, or =, != ...
  * @param left    the first value
@@ -590,9 +592,8 @@ xp3CompareAtomics(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
                 return(err);
             break;
         case XP3_CMP_STRING:
-            cmp = strcmp((const char *) left->u.str,
-                         (const char *) right->u.str);
-            cmp = (cmp < 0) ? -1 : (cmp > 0) ? 1 : 0;
+            /* By code point, a byte that isn't UTF-8 as U+FFFD */
+            cmp = xp3CompareChars(left->u.str, right->u.str, 0);
             break;
         case XP3_CMP_BOOLEAN:
             cmp = (left->u.boolean != 0) - (right->u.boolean != 0);

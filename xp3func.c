@@ -9,9 +9,14 @@
  * static context of that version.
  *
  * The table itself is codegen/functions.inc, generated from the W3C
- * specifications by codegen/genFunctions.py. Constructor functions
- * such as xs:integer() (F&O 3.1, 18) are not in it: they follow from
- * the atomic types in xp3types.c.
+ * specifications by codegen/genFunctions.py, with the types of the
+ * parameters and results that the function conversion rules need.
+ * Constructor functions such as xs:integer() (F&O 3.1, 18) are not in
+ * it: they follow from the atomic types in xp3types.c.
+ *
+ * The implementations are bound below, by the ids the generator gives
+ * the signatures. A signature without one compiles, and raises
+ * UNSUPPORTED when it is called (doc/DESIGN.md 7.2).
  *
  * The signature text is the one of F&O 3.1 at every level. Where a
  * type changed between the versions, as the argument of
@@ -32,10 +37,148 @@
 
 #include "private/xp3context.h"
 #include "private/xp3func.h"
+#include "private/xp3static.h"
 
 #include "codegen/functions.inc"
 
 #define XP3_TABLE_SIZE(t) (sizeof(t) / sizeof((t)[0]))
+
+/* The implementations, by signature; NULL for not implemented yet */
+static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
+    /* Accessors (F&O 3.1, 2) */
+    [XP3_FN_NODE_NAME_0] = xp3FnNodeName,
+    [XP3_FN_NODE_NAME_1] = xp3FnNodeName,
+    [XP3_FN_STRING_0] = xp3FnString,
+    [XP3_FN_STRING_1] = xp3FnString,
+    [XP3_FN_DATA_0] = xp3FnData,
+    [XP3_FN_DATA_1] = xp3FnData,
+    [XP3_FN_BASE_URI_0] = xp3FnBaseUri,
+    [XP3_FN_BASE_URI_1] = xp3FnBaseUri,
+    [XP3_FN_DOCUMENT_URI_0] = xp3FnDocumentUri,
+    [XP3_FN_DOCUMENT_URI_1] = xp3FnDocumentUri,
+    /* Errors (3) */
+    [XP3_FN_ERROR_0] = xp3FnError,
+    [XP3_FN_ERROR_1] = xp3FnError,
+    [XP3_FN_ERROR_2] = xp3FnError,
+    [XP3_FN_ERROR_3] = xp3FnError,
+    /* Numbers (4) */
+    [XP3_FN_NUMBER_0] = xp3FnNumber,
+    [XP3_FN_NUMBER_1] = xp3FnNumber,
+    [XP3_FN_ABS_1] = xp3FnAbs,
+    [XP3_FN_CEILING_1] = xp3FnCeiling,
+    [XP3_FN_FLOOR_1] = xp3FnFloor,
+    [XP3_FN_ROUND_1] = xp3FnRound,
+    [XP3_FN_ROUND_2] = xp3FnRound,
+    [XP3_FN_ROUND_HALF_TO_EVEN_1] = xp3FnRoundHalfToEven,
+    [XP3_FN_ROUND_HALF_TO_EVEN_2] = xp3FnRoundHalfToEven,
+    /* Trigonometric and exponential functions (4.8) */
+    [XP3_FN_MATH_PI_0] = xp3MathPi,
+    [XP3_FN_MATH_EXP_1] = xp3MathExp,
+    [XP3_FN_MATH_EXP10_1] = xp3MathExp10,
+    [XP3_FN_MATH_LOG_1] = xp3MathLog,
+    [XP3_FN_MATH_LOG10_1] = xp3MathLog10,
+    [XP3_FN_MATH_POW_2] = xp3MathPow,
+    [XP3_FN_MATH_SQRT_1] = xp3MathSqrt,
+    [XP3_FN_MATH_SIN_1] = xp3MathSin,
+    [XP3_FN_MATH_COS_1] = xp3MathCos,
+    [XP3_FN_MATH_TAN_1] = xp3MathTan,
+    [XP3_FN_MATH_ASIN_1] = xp3MathAsin,
+    [XP3_FN_MATH_ACOS_1] = xp3MathAcos,
+    [XP3_FN_MATH_ATAN_1] = xp3MathAtan,
+    [XP3_FN_MATH_ATAN2_2] = xp3MathAtan2,
+    /* Strings (5) */
+    [XP3_FN_CODEPOINTS_TO_STRING_1] = xp3FnCodepointsToString,
+    [XP3_FN_STRING_TO_CODEPOINTS_1] = xp3FnStringToCodepoints,
+    [XP3_FN_COMPARE_2] = xp3FnCompare,
+    [XP3_FN_COMPARE_3] = xp3FnCompare,
+    [XP3_FN_CODEPOINT_EQUAL_2] = xp3FnCodepointEqual,
+    [XP3_FN_CONTAINS_TOKEN_2] = xp3FnContainsToken,
+    [XP3_FN_CONTAINS_TOKEN_3] = xp3FnContainsToken,
+    [XP3_FN_CONCAT_2] = xp3FnConcat,
+    [XP3_FN_STRING_JOIN_1] = xp3FnStringJoin,
+    [XP3_FN_STRING_JOIN_2] = xp3FnStringJoin,
+    [XP3_FN_SUBSTRING_2] = xp3FnSubstring,
+    [XP3_FN_SUBSTRING_3] = xp3FnSubstring,
+    [XP3_FN_STRING_LENGTH_0] = xp3FnStringLength,
+    [XP3_FN_STRING_LENGTH_1] = xp3FnStringLength,
+    [XP3_FN_NORMALIZE_SPACE_0] = xp3FnNormalizeSpace,
+    [XP3_FN_NORMALIZE_SPACE_1] = xp3FnNormalizeSpace,
+    [XP3_FN_TRANSLATE_3] = xp3FnTranslate,
+    [XP3_FN_CONTAINS_2] = xp3FnContains,
+    [XP3_FN_CONTAINS_3] = xp3FnContains,
+    [XP3_FN_STARTS_WITH_2] = xp3FnStartsWith,
+    [XP3_FN_STARTS_WITH_3] = xp3FnStartsWith,
+    [XP3_FN_ENDS_WITH_2] = xp3FnEndsWith,
+    [XP3_FN_ENDS_WITH_3] = xp3FnEndsWith,
+    [XP3_FN_SUBSTRING_BEFORE_2] = xp3FnSubstringBefore,
+    [XP3_FN_SUBSTRING_BEFORE_3] = xp3FnSubstringBefore,
+    [XP3_FN_SUBSTRING_AFTER_2] = xp3FnSubstringAfter,
+    [XP3_FN_SUBSTRING_AFTER_3] = xp3FnSubstringAfter,
+    [XP3_FN_TOKENIZE_1] = xp3FnTokenize,
+    /* URIs (6) */
+    [XP3_FN_ENCODE_FOR_URI_1] = xp3FnEncodeForUri,
+    [XP3_FN_IRI_TO_URI_1] = xp3FnIriToUri,
+    [XP3_FN_ESCAPE_HTML_URI_1] = xp3FnEscapeHtmlUri,
+    /* Booleans (7) */
+    [XP3_FN_TRUE_0] = xp3FnTrue,
+    [XP3_FN_FALSE_0] = xp3FnFalse,
+    [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
+    [XP3_FN_NOT_1] = xp3FnNot,
+    /* Namespaces of elements (10.2) */
+    [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
+    [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,
+    /* Functions on nodes (13) */
+    [XP3_FN_NAME_0] = xp3FnName,
+    [XP3_FN_NAME_1] = xp3FnName,
+    [XP3_FN_LOCAL_NAME_0] = xp3FnLocalName,
+    [XP3_FN_LOCAL_NAME_1] = xp3FnLocalName,
+    [XP3_FN_NAMESPACE_URI_0] = xp3FnNamespaceUri,
+    [XP3_FN_NAMESPACE_URI_1] = xp3FnNamespaceUri,
+    [XP3_FN_LANG_1] = xp3FnLang,
+    [XP3_FN_LANG_2] = xp3FnLang,
+    [XP3_FN_ROOT_0] = xp3FnRoot,
+    [XP3_FN_ROOT_1] = xp3FnRoot,
+    [XP3_FN_PATH_0] = xp3FnPath,
+    [XP3_FN_PATH_1] = xp3FnPath,
+    [XP3_FN_HAS_CHILDREN_0] = xp3FnHasChildren,
+    [XP3_FN_HAS_CHILDREN_1] = xp3FnHasChildren,
+    [XP3_FN_INNERMOST_1] = xp3FnInnermost,
+    [XP3_FN_OUTERMOST_1] = xp3FnOutermost,
+    /* Sequences (14) */
+    [XP3_FN_EMPTY_1] = xp3FnEmpty,
+    [XP3_FN_EXISTS_1] = xp3FnExists,
+    [XP3_FN_HEAD_1] = xp3FnHead,
+    [XP3_FN_TAIL_1] = xp3FnTail,
+    [XP3_FN_INSERT_BEFORE_3] = xp3FnInsertBefore,
+    [XP3_FN_REMOVE_2] = xp3FnRemove,
+    [XP3_FN_REVERSE_1] = xp3FnReverse,
+    [XP3_FN_SUBSEQUENCE_2] = xp3FnSubsequence,
+    [XP3_FN_SUBSEQUENCE_3] = xp3FnSubsequence,
+    [XP3_FN_DISTINCT_VALUES_1] = xp3FnDistinctValues,
+    [XP3_FN_DISTINCT_VALUES_2] = xp3FnDistinctValues,
+    [XP3_FN_INDEX_OF_2] = xp3FnIndexOf,
+    [XP3_FN_INDEX_OF_3] = xp3FnIndexOf,
+    [XP3_FN_DEEP_EQUAL_2] = xp3FnDeepEqual,
+    [XP3_FN_DEEP_EQUAL_3] = xp3FnDeepEqual,
+    [XP3_FN_ZERO_OR_ONE_1] = xp3FnZeroOrOne,
+    [XP3_FN_ONE_OR_MORE_1] = xp3FnOneOrMore,
+    [XP3_FN_EXACTLY_ONE_1] = xp3FnExactlyOne,
+    [XP3_FN_COUNT_1] = xp3FnCount,
+    [XP3_FN_SUM_1] = xp3FnSum,
+    [XP3_FN_SUM_2] = xp3FnSum,
+    [XP3_FN_AVG_1] = xp3FnAvg,
+    [XP3_FN_MIN_1] = xp3FnMin,
+    [XP3_FN_MIN_2] = xp3FnMin,
+    [XP3_FN_MAX_1] = xp3FnMax,
+    [XP3_FN_MAX_2] = xp3FnMax,
+    /* Node identifiers (14.5) */
+    [XP3_FN_GENERATE_ID_0] = xp3FnGenerateId,
+    [XP3_FN_GENERATE_ID_1] = xp3FnGenerateId,
+    /* Context functions (15) */
+    [XP3_FN_POSITION_0] = xp3FnPosition,
+    [XP3_FN_LAST_0] = xp3FnLast,
+    [XP3_FN_DEFAULT_COLLATION_0] = xp3FnDefaultCollation
+};
 
 /* Indexed by xp3FuncNamespace */
 static const char *const xp3FuncNamespaces[] = {
@@ -177,6 +320,19 @@ xp3FuncNamespaceUri(xp3FuncNamespace ns) {
     if ((unsigned) ns >= XP3_TABLE_SIZE(xp3FuncNamespaces))
         return(NULL);
     return(BAD_CAST xp3FuncNamespaces[ns]);
+}
+
+/**
+ * Get the implementation of a signature.
+ *
+ * @param info  the signature, an entry of the table
+ * @returns the implementation, or NULL if the function is not
+ *          implemented yet
+ */
+xp3FuncImpl
+xp3FuncImplementation(const xp3FuncInfo *info) {
+    /* The ids are in the order of the table */
+    return(xp3FuncImpls[info - xp3Functions]);
 }
 
 /**

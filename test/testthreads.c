@@ -5,9 +5,12 @@
  * may evaluate it at once, each with a dynamic context and sequences of
  * its own, which are counted without locks (doc/DESIGN.md 6.2). Folded
  * constants make that worth testing: they are shared by every
- * evaluation, and their counts must never change. The test checks
- * every result; under ThreadSanitizer (the clang:tsan CI job) it also
- * checks that no two threads write the same memory.
+ * evaluation, and their counts must never change. A second expression
+ * calls extension functions: one deterministic and folded, one called
+ * on every evaluation with the user data of the thread's dynamic
+ * context. The test checks every result; under ThreadSanitizer (the
+ * clang:tsan CI job) it also checks that no two threads write the same
+ * memory.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -39,9 +42,53 @@ static const char xp3ThreadExpr[] =
     "if (1) then 'yes' else 'no', 0.1e0 cast as xs:decimal, "
     "(1 to 5)[. > 3], //a[@id = 'i2']/b, $v, c + 1)";
 
+/* Extension calls: ex:tag on every evaluation, ex:twice(21) folded */
+static const char xp3ThreadExtExpr[] =
+    "(for $i in 1 to 3 return ex:tag(string($i)), ex:twice(21))";
+
 static xmlDocPtr threadDoc;
 static xp3Expr *threadExpr;
+static xp3Expr *threadExtExpr;
 static char expected[4096];
+
+/* What one thread evaluates with and finds */
+typedef struct {
+    char label[16];             /* the user data of its dynamic context */
+    int mismatches;
+} xp3ThreadState;
+
+/* "registration:evaluation:argument", from the two user data */
+static xp3Sequence *
+threadTag(xp3FunctionCall *call, xp3Sequence **args, int count,
+          void *userData) {
+    const char *label = xp3FunctionUserData(call);
+    xmlChar *arg = xp3SequenceStringValue(args[0], 0);
+    const xmlChar *strs[1];
+    char out[64];
+
+    (void) count;
+    if (arg == NULL)
+        return(NULL);
+    snprintf(out, sizeof(out), "%s:%s:%s", (const char *) userData,
+             (label != NULL) ? label : "none", (const char *) arg);
+    xmlFree(arg);
+    strs[0] = BAD_CAST out;
+    return(xp3NewStringSequence(strs, 1));
+}
+
+static xp3Sequence *
+threadTwice(xp3FunctionCall *call, xp3Sequence **args, int count,
+            void *userData) {
+    int64_t value;
+
+    (void) call;
+    (void) count;
+    (void) userData;
+    if (xp3SequenceInteger(args[0], 0, &value) != 0)
+        return(NULL);
+    value *= 2;
+    return(xp3NewIntegerSequence(&value, 1));
+}
 
 /* The string values of a result, separated by spaces */
 static void
@@ -81,24 +128,36 @@ newThreadContext(void) {
     return(ctx);
 }
 
-/* One thread: the shared expression and document, its own context */
+/* One thread: the shared expressions and document, its own context */
 static void *
 evaluateMany(void *arg) {
-    int *mismatches = arg;
+    xp3ThreadState *state = arg;
     xp3DynamicContext *ctx = newThreadContext();
+    char extExpected[128];
     char actual[4096];
     int i;
 
-    if (ctx == NULL) {
-        (*mismatches)++;
+    if ((ctx == NULL) ||
+        (xp3SetDynamicContextUserData(ctx, state->label) < 0)) {
+        state->mismatches++;
+        xp3FreeDynamicContext(ctx);
         return(NULL);
     }
+    snprintf(extExpected, sizeof(extExpected),
+             "shared:%s:1 shared:%s:2 shared:%s:3 42", state->label,
+             state->label, state->label);
     for (i = 0; i < XP3_EVALUATIONS; i++) {
         xp3Sequence *result = xp3Evaluate(threadExpr, ctx, NULL);
 
         describe(result, actual, sizeof(actual));
         if ((result == NULL) || (strcmp(actual, expected) != 0))
-            (*mismatches)++;
+            state->mismatches++;
+        xp3FreeSequence(result);
+
+        result = xp3Evaluate(threadExtExpr, ctx, NULL);
+        describe(result, actual, sizeof(actual));
+        if ((result == NULL) || (strcmp(actual, extExpected) != 0))
+            state->mismatches++;
         xp3FreeSequence(result);
     }
     xp3FreeDynamicContext(ctx);
@@ -108,7 +167,7 @@ evaluateMany(void *arg) {
 int
 main(void) {
     pthread_t threads[XP3_THREADS];
-    int mismatches[XP3_THREADS];
+    xp3ThreadState states[XP3_THREADS];
     xp3StaticContext *sctx;
     xp3DynamicContext *ctx;
     xp3Sequence *result;
@@ -120,13 +179,22 @@ main(void) {
                               "threads.xml", NULL, 0);
     sctx = xp3NewStaticContext();
     if ((threadDoc == NULL) || (sctx == NULL) ||
-        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0)) {
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3DeclareNamespace(sctx, BAD_CAST "ex",
+                             BAD_CAST "urn:example") < 0) ||
+        (xp3RegisterFunction(sctx, BAD_CAST "ex:tag($s as xs:string) as "
+                             "xs:string", 0, threadTag, (void *) "shared",
+                             NULL) < 0) ||
+        (xp3RegisterFunction(sctx, BAD_CAST "ex:twice($a as xs:integer) as "
+                             "xs:integer", XP3_FUNCTION_DETERMINISTIC,
+                             threadTwice, NULL, NULL) < 0)) {
         fprintf(stderr, "FAIL: test set up\n");
         return(1);
     }
     threadExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExpr, NULL);
+    threadExtExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExtExpr, NULL);
     xp3FreeStaticContext(sctx);
-    if (threadExpr == NULL) {
+    if ((threadExpr == NULL) || (threadExtExpr == NULL)) {
         fprintf(stderr, "FAIL: expression compiled\n");
         return(1);
     }
@@ -155,23 +223,25 @@ main(void) {
     }
 
     for (i = 0; i < XP3_THREADS; i++) {
-        mismatches[i] = 0;
+        snprintf(states[i].label, sizeof(states[i].label), "t%d", i);
+        states[i].mismatches = 0;
         if (pthread_create(&threads[i], NULL, evaluateMany,
-                           &mismatches[i]) != 0) {
+                           &states[i]) != 0) {
             fprintf(stderr, "FAIL: thread %d not created\n", i);
             return(1);
         }
     }
     for (i = 0; i < XP3_THREADS; i++) {
         pthread_join(threads[i], NULL);
-        if (mismatches[i] > 0) {
+        if (states[i].mismatches > 0) {
             fprintf(stderr, "FAIL: thread %d got %d wrong results\n", i,
-                    mismatches[i]);
+                    states[i].mismatches);
             failures++;
         }
     }
 
     xp3FreeExpr(threadExpr);
+    xp3FreeExpr(threadExtExpr);
     xmlFreeDoc(threadDoc);
     if (failures == 0)
         printf("testthreads: OK\n");

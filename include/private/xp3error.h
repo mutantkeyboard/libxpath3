@@ -41,8 +41,11 @@ typedef enum
     XP3_ERR_XPST0051,  /* sequence type with a non-atomic type */
     XP3_ERR_XPST0080,  /* cast to an abstract type */
     XP3_ERR_XPST0081,  /* unbound namespace prefix */
+    XP3_ERR_XQST0034,  /* function name and arity registered twice */
     XP3_ERR_XQST0039,  /* duplicate parameter name */
+    XP3_ERR_XQST0045,  /* function name in a reserved namespace */
     XP3_ERR_XQST0052,  /* cast to an unknown or complex type */
+    XP3_ERR_XQST0060,  /* function name in no namespace */
     XP3_ERR_XQST0070,  /* the xmlns namespace in a name */
     XP3_ERR_XPDY0002,  /* context item or variable value absent */
     XP3_ERR_XPDY0050,  /* the root of the context node is no document */
@@ -50,13 +53,21 @@ typedef enum
     XP3_ERR_XPTY0018,  /* last step mixes nodes and other items */
     XP3_ERR_XPTY0019,  /* non-node on the left of a path step */
     XP3_ERR_XPTY0020,  /* the context item of an axis step is no node */
+    XP3_ERR_XPTY0117,  /* untyped value for a namespace-sensitive type */
     XP3_ERR_FOAR0001,  /* division by zero */
     XP3_ERR_FOAR0002,  /* number too large, such as an arity */
     XP3_ERR_FORG0001,  /* invalid value for cast */
+    XP3_ERR_FORG0003,  /* fn:zero-or-one with more than one item */
+    XP3_ERR_FORG0004,  /* fn:one-or-more with the empty sequence */
+    XP3_ERR_FORG0005,  /* fn:exactly-one without exactly one item */
     XP3_ERR_FORG0006,  /* no effective boolean value */
     XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
     XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */
+    XP3_ERR_FOCH0001,  /* code point not allowed in XML */
+    XP3_ERR_FOCH0002,  /* unsupported collation */
+    XP3_ERR_FOTY0013,  /* atomizing a function item */
+    XP3_ERR_FOTY0014,  /* the string value of a function item */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */
 } xp3ErrCode;
 

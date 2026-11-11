@@ -483,11 +483,13 @@ static const char largeExpr[] =
     "(xs:integer($q), ex:a/@xml:lang, b, err:c, xsi:d, fn:true(), "
     "math:pi(), map:size(map{}), array:size([]), $v, $ex:w, $v)";
 
-/* Folding with errors, a range, pruning and a rewritten path */
+/* Folding with errors, a range, pruning, a rewritten path and calls */
 static const char foldExpr[] =
     "for $i in 1 to 3 return $i * 2, if (0) then 1 div 0 else 1, "
     "//x[@id = 'a']/y, (1 to 5)[. > 3], $v and 0, if (1 to 1) then 2 "
-    "else 3, -(1.5e-2 + 4 idiv 2 mod 3) * (1, 2)[. castable as xs:double]";
+    "else 3, -(1.5e-2 + 4 idiv 2 mod 3) * (1, 2)[. castable as xs:double], "
+    "count((1, 2)) + 1, (1, 2) ! (. * 2), 'a' || 'b', reverse((1, 'x')), "
+    "subsequence(1 to 9, 3, 2), exactly-one(()), position()";
 
 /*
  * Compile with each allocation failing in turn: compiling must then
@@ -613,9 +615,76 @@ static const struct {
     { "for $x in $v return (for $y in 2 return $x + $y)",
       "(for (bind x (var v)) (for (bind y (constant integer:2)) "
       "(binary + (var x) (var y))))" },
-    { "count(1 + 1)",
-      "(call Q{http://www.w3.org/2005/xpath-functions}count "
-      "(constant integer:2))" },
+
+    /* Calls fold if the function is implemented and needs nothing from
+     * the context: not the focus-dependent, context-dependent,
+     * nondeterministic or higher-order ones */
+    { "count(1 + 1)", "(constant integer:1)" },
+    { "not(1 = 2), exists(())", "(constant boolean:true boolean:false)" },
+    { "(1, 2, 3) => subsequence(2)", "(constant integer:2 integer:3)" },
+    { "count($v)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}count (var v))" },
+    { "upper-case('a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}upper-case "
+      "(constant string:ab))" },
+    { "position()",
+      "(call Q{http://www.w3.org/2005/xpath-functions}position)" },
+    { "string()", "(call Q{http://www.w3.org/2005/xpath-functions}string)" },
+    { "error((), 'a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}error (empty) "
+      "(constant string:ab))" },
+    { "exactly-one(())",
+      "(call Q{http://www.w3.org/2005/xpath-functions}exactly-one "
+      "(empty))" },
+    /* Calls with a collation are context-dependent, through the
+     * default collation, so they stay calls also with constant
+     * arguments and the URI given */
+    { "contains('ab', 'a')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}contains "
+      "(constant string:ab) (constant string:a))" },
+    { "compare('a', 'b', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}compare "
+      "(constant string:a) (constant string:b) (constant "
+      "string:http://www.w3.org/2005/xpath-functions/collation/codepoint))" },
+    { "default-collation()",
+      "(call Q{http://www.w3.org/2005/xpath-functions}default-collation)" },
+    { "compare('a', 'b', default-collation())",
+      "(call Q{http://www.w3.org/2005/xpath-functions}compare "
+      "(constant string:a) (constant string:b) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}default-collation))" },
+    { "distinct-values((1, 1))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}distinct-values "
+      "(constant integer:1 integer:1))" },
+    { "index-of((1, 2), 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}index-of "
+      "(constant integer:1 integer:2) (constant integer:1))" },
+    { "deep-equal(1, 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}deep-equal "
+      "(constant integer:1) (constant integer:1))" },
+    { "min((1, 2))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}min "
+      "(constant integer:1 integer:2))" },
+    { "max(('a', 'b'))",
+      "(call Q{http://www.w3.org/2005/xpath-functions}max "
+      "(constant string:a string:b))" },
+    { "subsequence(?, 1)",
+      "(call Q{http://www.w3.org/2005/xpath-functions}subsequence "
+      "(placeholder) (constant integer:1))" },
+    { "(1, 2)[position() = last()]",
+      "(filter (constant integer:1 integer:2) (predicate (binary = "
+      "(call Q{http://www.w3.org/2005/xpath-functions}position) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}last))))" },
+
+    /* ! gives its right side a focus of its own */
+    { "(1, 2) ! (. + 1)", "(constant integer:2 integer:3)" },
+    /* A focus-dependent call is never folded, not even with an inner
+     * focus */
+    { "(1 to 3) ! position()",
+      "(binary ! (constant integer:1..3) "
+      "(call Q{http://www.w3.org/2005/xpath-functions}position))" },
+    { ". ! 1", "(binary ! (context) (constant integer:1))" },
+    { "$v ! .", "(binary ! (var v) (context))" },
 
     /* Errors stay for evaluation to raise */
     { "1 div 0", "(binary div (constant integer:1) (constant integer:0))" },
@@ -631,6 +700,10 @@ static const struct {
       "(if (var v) (constant integer:2) (constant integer:3))" },
     { "if ((1, 2)) then $v else 2",
       "(if (constant integer:1 integer:2) (var v) (constant integer:2))" },
+    /* A branch not taken goes with its errors, also those a call
+     * raises */
+    { "if (false()) then error() else 1", "(constant integer:1)" },
+    { "if (true()) then 1 else exactly-one(())", "(constant integer:1)" },
     { "$v and 0", "(constant boolean:false)" },
     { "0 and $v", "(constant boolean:false)" },
     { "$v or 'x'", "(constant boolean:true)" },
@@ -679,6 +752,16 @@ static const struct {
       "(step child (name x) (predicate (path (step child (name y) "
       "(predicate (call Q{http://www.w3.org/2005/xpath-functions}last))"
       ")))))" },
+    /* So are predicates whose function returns a boolean or nodes */
+    { "//x[not(@id)]",
+      "(path root (step descendant sorted (name x) (predicate (call "
+      "Q{http://www.w3.org/2005/xpath-functions}not "
+      "(path (step attribute (name id)))))))" },
+    { "//x[count(y)]",
+      "(path root (step descendant-or-self sorted (kind node)) "
+      "(step child (name x) (predicate (call "
+      "Q{http://www.w3.org/2005/xpath-functions}count "
+      "(path (step child (name y)))))))" },
     /* Other focus-dependent functions only read the context item */
     { "//x[name() = 'x']",
       "(path root (step descendant sorted (name x) (predicate (binary = "
@@ -928,6 +1011,262 @@ testFoldSizes(void) {
     xmlFree(expr);
 }
 
+/*
+ * A fold whose string would pass the byte limit stops at the limit,
+ * before the string is built: here it would be 9 MB. Evaluating still
+ * gives the string.
+ */
+static void
+testFoldStringSize(void) {
+    char *call = repeatExpr("string-join(1 to 9000, '", "a", "", 1000, "')");
+    char *test = repeatExpr("string-join(1 to 9000, '", "a", "", 1000,
+                            "') ne ''");
+    xp3Expr *compiled = NULL;
+    size_t largest;
+
+    if ((call == NULL) || (test == NULL)) {
+        check(0, "string fold expressions allocated");
+        goto done;
+    }
+    if (!xp3TestAllocInstall()) {
+        printf("teststatic: string fold size test skipped: this libxml2 "
+               "ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    compiled = xp3Compile(NULL, BAD_CAST call, NULL);
+    largest = xp3TestAllocLargest();
+    xp3TestAllocRestore();
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_FUNCTION_CALL),
+          "a string of 9 MB is left");
+    check(largest < 1048576, "the fold stops at the byte limit");
+    xp3FreeExpr(compiled);
+
+    compiled = xp3Compile(NULL, BAD_CAST test, NULL);
+    check((compiled != NULL) &&
+          (compiled->ast->root->kind == XP3_AST_BINARY) &&
+          (xp3EvaluateBoolean(compiled, NULL, NULL) == 1),
+          "a string that wasn't folded is evaluated");
+    xp3FreeExpr(compiled);
+
+done:
+    xmlFree(call);
+    xmlFree(test);
+}
+
+/*
+ * Extension functions
+ */
+
+#define EX_FN "Q{urn:example}"
+
+/* Registration only; compiling never calls a nondeterministic function */
+static xp3Sequence *
+extTwice(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    int64_t value;
+
+    (void) call;
+    (void) count;
+    (void) userData;
+    if (xp3SequenceInteger(args[0], 0, &value) != 0)
+        return(NULL);
+    value *= 2;
+    return(xp3NewIntegerSequence(&value, 1));
+}
+
+/* An error, so a fold of it is dropped */
+static xp3Sequence *
+extFail(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    (void) args;
+    (void) count;
+    (void) userData;
+    xp3FunctionError(call, NULL, BAD_CAST "FORG0001", NULL);
+    return(NULL);
+}
+
+/* The optimizing context, with ex:det, ex:nondet, ex:fail and ex:f#0
+ * and #1 registered */
+static xp3StaticContext *
+extensionContext(xp3LanguageLevel level) {
+    xp3StaticContext *ctx = xp3NewStaticContext();
+
+    if ((ctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(ctx, level) < 0) ||
+        (xp3DeclareNamespace(ctx, BAD_CAST "ex",
+                             BAD_CAST "urn:example") < 0) ||
+        (xp3DeclareVariable(ctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:det($a as xs:integer) as "
+                             "xs:integer", XP3_FUNCTION_DETERMINISTIC,
+                             extTwice, NULL, NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:nondet($a as xs:integer) as "
+                             "xs:integer", 0, extTwice, NULL, NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:fail($a)",
+                             XP3_FUNCTION_DETERMINISTIC, extFail, NULL,
+                             NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:f()", 0, extTwice, NULL,
+                             NULL) < 0) ||
+        (xp3RegisterFunction(ctx, BAD_CAST "ex:f($a)", 0, extTwice, NULL,
+                             NULL) < 0)) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    return(ctx);
+}
+
+static const struct {
+    const char *expr;
+    const char *tree;
+} extensionCases[] = {
+    /* A deterministic call with constant arguments folds like a
+     * built-in one; a nondeterministic one never does */
+    { "ex:det(1 + 1)", "(constant integer:4)" },
+    { "ex:det(2) + 1", "(constant integer:5)" },
+    { "ex:nondet(2)", "(call " EX_FN "nondet (constant integer:2))" },
+    { "ex:det(ex:nondet(2))",
+      "(call " EX_FN "det (call " EX_FN "nondet (constant integer:2)))" },
+    { "ex:det($v)", "(call " EX_FN "det (var v))" },
+    /* A fold that raises an error is dropped, as for built-ins */
+    { "ex:fail(1)", "(call " EX_FN "fail (constant integer:1))" },
+    /* Arities, arrows and references */
+    { "ex:f(), ex:f(1)",
+      "(sequence (call " EX_FN "f) (call " EX_FN "f (constant integer:1)))" },
+    { "2 => ex:det()", "(constant integer:4)" },
+    { "ex:f#1", "(function-ref " EX_FN "f#1)" }
+};
+
+static const struct {
+    const char *expr;
+    const char *message;
+} extensionMessages[] = {
+    { "ex:f(1, 2)", "function ex:f does not take 2 arguments" },
+    { "ex:det#0", "function ex:det does not take 0 arguments" },
+    { "ex:g()", "unknown function ex:g#0" },
+    { "ex:f#99999999999999999999",
+      "function ex:f does not take that many arguments" }
+};
+
+static void
+testExtensionFunctions(void) {
+    xp3StaticContext *ctx = extensionContext(XP3_XPATH_31);
+    const xp3ExtFunction *registered;
+    xp3Error *err = NULL;
+    xp3Expr *compiled;
+    size_t i;
+
+    if (ctx == NULL) {
+        check(0, "extension context created");
+        return;
+    }
+    for (i = 0; i < sizeof(extensionCases) / sizeof(extensionCases[0]); i++) {
+        xmlChar *tree = compileToString(ctx, extensionCases[i].expr, &err);
+
+        if ((tree == NULL) ||
+            !xmlStrEqual(tree, BAD_CAST extensionCases[i].tree)) {
+            fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
+                    extensionCases[i].expr, extensionCases[i].tree,
+                    (tree != NULL) ? (const char *) tree :
+                    (const char *) xp3ErrorCode(err));
+            failures++;
+        }
+        xmlFree(tree);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+
+    /* The expression holds a copy of the entry, once per function */
+    registered = xp3StaticContextFunctions(ctx, BAD_CAST "urn:example",
+                                           BAD_CAST "nondet");
+    compiled = xp3Compile(ctx, BAD_CAST "ex:nondet(1), ex:nondet(2)", NULL);
+    if ((compiled == NULL) || (registered == NULL)) {
+        check(0, "extension calls compiled");
+    } else {
+        const xp3FuncInfo *first = compiled->ast->root->first->func;
+        const xp3FuncInfo *second = compiled->ast->root->last->func;
+
+        check((first != NULL) && (first != &registered->info) &&
+              (first->flags & XP3_FUNC_EXTENSION) &&
+              (((const xp3ExtFunction *) first)->impl == extTwice) &&
+              (((const xp3ExtFunction *) first)->next == NULL),
+              "a call refers to the expression's copy of the function");
+        check(first == second, "each function is copied once");
+    }
+    xp3FreeExpr(compiled);
+
+    /* XPST0017 knows the arities of extension names */
+    for (i = 0; i < sizeof(extensionMessages) / sizeof(extensionMessages[0]);
+         i++) {
+        compiled = xp3Compile(ctx, BAD_CAST extensionMessages[i].expr, &err);
+        check((compiled == NULL) &&
+              xmlStrEqual(xp3ErrorCode(err), BAD_CAST "XPST0017") &&
+              xmlStrEqual(xp3ErrorMessage(err),
+                          BAD_CAST extensionMessages[i].message),
+              extensionMessages[i].message);
+        xp3ErrorFree(err);
+        err = NULL;
+    }
+    xp3FreeStaticContext(ctx);
+
+    /* Extension functions exist at every level */
+    ctx = extensionContext(XP3_XPATH_20);
+    compiled = xp3Compile(ctx, BAD_CAST "ex:nondet(1), ex:f()", NULL);
+    check(compiled != NULL, "extension functions exist in XPath 2.0");
+    xp3FreeExpr(compiled);
+    xp3FreeStaticContext(ctx);
+}
+
+/* Compiling calls of extension functions, with each allocation failing
+ * in turn: copying the entries, and folding */
+static void
+testExtensionAllocationFailures(void) {
+    xp3StaticContext *ctx = extensionContext(XP3_XPATH_31);
+    const char *text = "ex:nondet($v), ex:det(3), ex:f(), ex:nondet(1)";
+    const char *expected = "(sequence (call " EX_FN "nondet (var v)) "
+                           "(constant integer:6) (call " EX_FN "f) "
+                           "(call " EX_FN "nondet (constant integer:1)))";
+    int i;
+
+    if (ctx == NULL) {
+        check(0, "extension context created");
+        return;
+    }
+    if (!xp3TestAllocInstall()) {
+        printf("teststatic: extension allocation-failure tests skipped\n");
+        xp3TestAllocRestore();
+        xp3FreeStaticContext(ctx);
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        xp3Error *err = NULL;
+        xp3Expr *compiled;
+        xmlChar *tree;
+
+        xp3TestAllocFailAt(i);
+        compiled = xp3Compile(ctx, BAD_CAST text, &err);
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            tree = (compiled != NULL) ?
+                   xp3AstToString(compiled->ast->root) : NULL;
+            check((tree != NULL) && xmlStrEqual(tree, BAD_CAST expected),
+                  "extension calls compiled after allocation failures");
+            xmlFree(tree);
+            xp3FreeExpr(compiled);
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        check((compiled == NULL) && (err != NULL) &&
+              (strcmp((const char *) xp3ErrorCode(err), "NO_MEMORY") == 0),
+              "a failed allocation compiling extension calls is NO_MEMORY");
+        xp3ErrorFree(err);
+        xp3FreeExpr(compiled);
+    }
+    check((i > 0) && (i < 1000), "extension compile failure points");
+    xp3TestAllocRestore();
+    xp3FreeStaticContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -941,7 +1280,10 @@ main(void) {
     testOptimize();
     testFoldBudget();
     testFoldSizes();
+    testFoldStringSize();
     testAllocationFailures();
+    testExtensionFunctions();
+    testExtensionAllocationFailures();
 
     if (failures == 0)
         printf("teststatic: OK\n");

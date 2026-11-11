@@ -104,7 +104,8 @@ LLVMFuzzerTestOneInput(const char *data, size_t size) {
     ctx = (bytes[0] % 4 == 0) ? NULL : fuzzCtx[bytes[0] % 4 - 1];
     failurePos = ((size_t) bytes[1] << 8) | bytes[2];
 
-    xp3TestAllocFailAt((failurePos > 0) ? (int) failurePos - 1 : -1);
+    xp3TestAllocFailAt(((failurePos > 0) && fuzzInjects) ?
+                       (int) failurePos - 1 : -1);
     expr = xp3CompileLength(ctx, BAD_CAST data + 3, size - 3, &err);
     failed = xp3TestAllocFailed();
     xp3TestAllocFailAt(-1);

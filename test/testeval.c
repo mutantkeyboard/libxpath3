@@ -22,6 +22,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+#include <libxml/xmlversion.h>
 
 #include <libxpath3/xpath3.h>
 #include "private/xp3context.h"
@@ -171,6 +172,11 @@ typedef struct {
     const char *expr;
     const char *expected;
 } xp3EvalCase;
+
+/* Collation URIs as XPath string literals; UCA is open for a query */
+#define HTML_ASCII "'http://www.w3.org/2005/xpath-functions/collation/" \
+                   "html-ascii-case-insensitive'"
+#define UCA "'http://www.w3.org/2013/collation/UCA"
 
 /* Evaluated with the element r as the context node */
 static const xp3EvalCase xp3Cases[] = {
@@ -706,10 +712,725 @@ static const xp3EvalCase xp3Cases[] = {
     { "xs:byte(300)", "error:FORG0001" },
     { "xs:integer(())", "" },
 
+    /* Booleans (F&O 3.1, 7) */
+    { "true(), fn:false()", "boolean:true boolean:false" },
+    { "not(()), not(x), not(0), not(''), not('a')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false" },
+    { "not((1, 2))", "error:FORG0006" },
+    { "not(1 to 3)", "error:FORG0006" },
+    { "boolean(x), boolean(0.0), boolean(xs:double('NaN')), boolean('a')",
+      "boolean:true boolean:false boolean:false boolean:true" },
+    { "boolean((x, 1))", "boolean:true" },
+    { "boolean((1, x))", "error:FORG0006" },
+    { "boolean(xs:QName('xs:x'))", "error:UNSUPPORTED" },
+
+    /* Accessors (2) */
+    { "string(), string(x[1]), string(@a), string(())",
+      "string:onetwotail string:one string:1 string:" },
+    { "string(1.0e0), string(1e7), string(xs:untypedAtomic('u'))",
+      "string:1 string:1.0E7 string:u" },
+    { "string(comment()), string(processing-instruction())",
+      "string:c string:d" },
+    { "string((1, 2))", "error:XPTY0004" },
+    { "data(x), data(()), data(@a), data((1, 'a'))",
+      "untypedAtomic:one untypedAtomic:two untypedAtomic:1 integer:1 "
+      "string:a" },
+    { "data(), data(comment())", "untypedAtomic:onetwotail string:c" },
+    { "data(1 to 3)", "integer:1 integer:2 integer:3" },
+
+    /* Functions on numeric values (4.4) */
+    { "abs(-1), abs(2), abs(-1.5), abs(1.5), abs(-0.0), abs(())",
+      "integer:1 integer:2 decimal:1.5 decimal:1.5 decimal:0" },
+    { "abs(-1.5e0), abs(xs:float('-2.5')), abs(-0e0), abs(xs:float('-0'))",
+      "double:1.5 float:2.5 double:0 float:0" },
+    { "abs(xs:double('-INF')), abs(xs:float('-INF')), "
+      "abs(xs:double('NaN')), abs(xs:float('NaN'))",
+      "double:INF float:INF double:NaN float:NaN" },
+    { "abs(xs:byte(-4)), abs(xs:positiveInteger(4)), "
+      "abs(xs:negativeInteger(-99999999999999999999))",
+      "integer:4 integer:4 integer:99999999999999999999" },
+    { "abs(xs:byte(-4)) instance of xs:byte, "
+      "abs(xs:unsignedShort(4)) instance of xs:unsignedShort, "
+      "abs(xs:short(4)) instance of xs:integer, "
+      "abs(xs:decimal(-1)) instance of xs:integer",
+      "boolean:false boolean:false boolean:true boolean:false" },
+    { "abs(@a), abs(xs:untypedAtomic('-3'))", "double:1 double:3" },
+    { "abs('1')", "error:XPTY0004" },
+    { "abs((1, 2))", "error:XPTY0004" },
+    { "abs(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "ceiling(10.5), ceiling(-10.5), ceiling(0.001), ceiling(-0.001), "
+      "ceiling(3), ceiling(xs:byte(-3)), ceiling(())",
+      "decimal:11 decimal:-10 decimal:1 decimal:0 integer:3 integer:-3" },
+    { "floor(10.5), floor(-10.5), floor(0.001), floor(-0.001), "
+      "floor(xs:long(7)), floor(())",
+      "decimal:10 decimal:-11 decimal:0 decimal:-1 integer:7" },
+    { "ceiling(-0.5e0), ceiling(0.5e0), ceiling(-0e0), floor(-0.5e0), "
+      "floor(-0e0), floor(0.5e0), ceiling(1e300), floor(xs:float('-1.5'))",
+      "double:-0 double:1 double:-0 double:-1 double:-0 double:0 "
+      "double:1.0E300 float:-2" },
+    { "ceiling(xs:double('-INF')), floor(xs:float('INF')), "
+      "ceiling(xs:double('NaN')), floor(xs:float('NaN'))",
+      "double:-INF float:INF double:NaN float:NaN" },
+    { "ceiling(1.5) instance of xs:decimal, floor(xs:int(1)) instance of "
+      "xs:int, floor(xs:int(1)) instance of xs:integer",
+      "boolean:true boolean:false boolean:true" },
+    { "round(2.5), round(2.4999), round(-2.5), round(-2.51), round(xs:int(7))",
+      "decimal:3 decimal:2 decimal:-2 decimal:-3 integer:7" },
+    { "round(1.125, 2), round(xs:decimal('12.345'), 2), round(8452, -2), "
+      "round(1234, -2), round(-1250, -2), round(5, -1), round(-5, -1)",
+      "decimal:1.13 decimal:12.35 integer:8500 integer:1200 integer:-1200 "
+      "integer:10 integer:0" },
+    { "round(1.5, 1000000), round(1.5, 99999999999999999999), "
+      "round(123, -1000000), round(-5.5, -99999999999999999999), "
+      "round(0.05, 1), round(-0.05, 1), round(0.0001, 3)",
+      "decimal:1.5 decimal:1.5 integer:0 decimal:0 decimal:0.1 decimal:0 "
+      "decimal:0" },
+    { "round(2.5e0), round(-2.5e0), round(-0.4e0), round(-0.5e0), "
+      "round(-0.6e0), round(0.49999999999999994e0), round(xs:float('-1.5'))",
+      "double:3 double:-2 double:-0 double:-0 double:-1 double:0 float:-1" },
+    { "round(35.425e0, 2), round(3.1415e0, 2), round(-0.04e0, 1), "
+      "round(1.5e0, 1000000), round(1e300, -1000000), "
+      "round(-1e300, -1000000), round(1.7976931348623157E308, -308)",
+      "double:35.42 double:3.14 double:-0 double:1.5 double:0 double:-0 "
+      "double:INF" },
+    { "round(4.9e-324, 323), round(4.9e-324, 324), round(4.9e-324, 1074)",
+      "double:0 double:4.9E-324 double:4.9E-324" },
+    { "round(xs:float('1.25'), 1), round(xs:float('0.05'), 1), "
+      "round(xs:float(12345.6), -2), round(xs:float('-0.04'), 1), "
+      "round(xs:float('3.4028235E38'), -35)",
+      "float:1.3 float:0.1 float:12300 float:-0 float:INF" },
+    { "round(()), round((), 2), round(xs:double('NaN'), 2), "
+      "round(xs:double('-INF')), round(xs:float('INF'), -3), round(0e0, 2), "
+      "round(-0e0, -2)",
+      "double:NaN double:-INF float:INF double:0 double:-0" },
+    { "round(@a, 1), round(xs:untypedAtomic('2.5'))", "double:1 double:3" },
+    { "round(1.5, 1.0)", "error:XPTY0004" },
+    { "round(1.5, ())", "error:XPTY0004" },
+    { "round((1.5, 2))", "error:XPTY0004" },
+    { "round('1')", "error:XPTY0004" },
+    { "round(1.5, 1 to 1)", "decimal:1.5" },
+    { "round-half-to-even(0.5), round-half-to-even(1.5), "
+      "round-half-to-even(2.5), round-half-to-even(-2.5), "
+      "round-half-to-even(2.51), round-half-to-even(xs:short(-3))",
+      "decimal:0 decimal:2 decimal:2 decimal:-2 decimal:3 integer:-3" },
+    { "round-half-to-even(35612.25, -2), round-half-to-even(1.125, 2), "
+      "round-half-to-even(1.135, 2), round-half-to-even(xs:byte(-25), -1), "
+      "round-half-to-even(-35, -1), round-half-to-even(3.567812, 4294967296)",
+      "decimal:35600 decimal:1.12 decimal:1.14 integer:-20 integer:-40 "
+      "decimal:3.567812" },
+    { "round-half-to-even(2.5e0), round-half-to-even(3.5e0), "
+      "round-half-to-even(-0.5e0), round-half-to-even(-1.5e0), "
+      "round-half-to-even(3.567812e+3, 2), round-half-to-even(4.7564e-3, 2), "
+      "round-half-to-even(12350e0, -2), round-half-to-even(-12450e0, -2)",
+      "double:2 double:4 double:-0 double:-2 double:3567.81 double:0 "
+      "double:12400 double:-12400" },
+    { "round-half-to-even(xs:float('0.05'), 1), "
+      "round-half-to-even(xs:float('3.75'), 1), "
+      "round-half-to-even(xs:float('-0'), 1), "
+      "round-half-to-even(xs:float('150.015'), 2), "
+      "round-half-to-even(xs:float('-0.5'))",
+      "float:0.1 float:3.8 float:-0 float:150.01 float:-0" },
+    { "round-half-to-even(()), round-half-to-even((), -1), "
+      "round-half-to-even(xs:double('NaN')), "
+      "round-half-to-even(xs:double('-INF'), 2)",
+      "double:NaN double:-INF" },
+    { "round-half-to-even(1, '1')", "error:XPTY0004" },
+
+    /* Trigonometric and exponential functions (4.8) */
+    { "math:pi(), 2 * math:pi()",
+      "double:3.141592653589793 double:6.283185307179586" },
+    { "math:exp(()), math:exp(0), math:exp(-1), math:exp(xs:double('INF')), "
+      "math:exp(xs:double('-INF')), math:exp(1000)",
+      "double:1 double:0.36787944117144233 double:INF double:0 double:INF" },
+    { "math:exp10(()), math:exp10(0), math:exp10(1), math:exp10(-1), "
+      "math:exp10(0.5), math:exp10(xs:double('-INF')), math:exp10(400)",
+      "double:1 double:10 double:0.1 double:3.1622776601683795 double:0 "
+      "double:INF" },
+    { "math:log(()), math:log(0), math:log(-0e0), math:log(-1), math:log(2), "
+      "math:log(xs:double('INF')), math:log(xs:double('-INF'))",
+      "double:-INF double:-INF double:NaN double:0.6931471805599453 "
+      "double:INF double:NaN" },
+    { "math:log10(()), math:log10(1e3), math:log10(1e-3), math:log10(0), "
+      "math:log10(-1), math:log10(2)",
+      "double:3 double:-3 double:-INF double:NaN double:0.3010299956639812" },
+    { "math:sqrt(()), math:sqrt(0e0), math:sqrt(-0e0), math:sqrt(2), "
+      "math:sqrt(-2), math:sqrt(xs:double('INF')), "
+      "math:sqrt(xs:double('-INF')), math:sqrt(1e6)",
+      "double:0 double:-0 double:1.4142135623730951 double:NaN double:INF "
+      "double:NaN double:1000" },
+    { "math:sin(()), math:sin(-0e0), math:sin(xs:double('INF')), "
+      "math:cos(()), math:cos(-0e0), math:cos(xs:double('NaN')), "
+      "math:tan(()), math:tan(-0e0), math:tan(xs:double('-INF'))",
+      "double:-0 double:NaN double:1 double:NaN double:-0 double:NaN" },
+    { "math:asin(()), math:asin(-0e0), math:asin(1), math:asin(2), "
+      "math:acos(()), math:acos(1), math:acos(-1), math:acos(-1.5), "
+      "math:atan(()), math:atan(-0e0), math:atan(xs:double('INF'))",
+      "double:-0 double:1.5707963267948966 double:NaN double:0 "
+      "double:3.141592653589793 double:NaN double:-0 "
+      "double:1.5707963267948966" },
+    { "math:atan2(0e0, 0e0), math:atan2(-0e0, 0e0), math:atan2(0e0, -0e0), "
+      "math:atan2(-0e0, -1), math:atan2(1, 0), math:atan2(-0e0, 1), "
+      "math:atan2(xs:double('NaN'), 1)",
+      "double:0 double:-0 double:3.141592653589793 "
+      "double:-3.141592653589793 double:1.5707963267948966 double:-0 "
+      "double:NaN" },
+    { "math:atan2((), 1)", "error:XPTY0004" },
+    { "math:sqrt('4')", "error:XPTY0004" },
+    { "math:sqrt(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "math:pow((), 93.7), math:pow(2, 3), math:pow(-2, 3), math:pow(2, -3), "
+      "math:pow(-2, -3), math:pow(0, 0), math:pow(xs:double('NaN'), 0), "
+      "math:pow(-0e0, 3), math:pow(-0e0, -3), math:pow(0, -4)",
+      "double:8 double:-8 double:0.125 double:-0.125 double:1 double:1 "
+      "double:-0 double:-INF double:INF" },
+    { "math:pow(-0e0, -3.0e0), math:pow(-0e0, -3.1e0), "
+      "math:pow(-0e0, 3.1e0), math:pow(-1, xs:double('INF')), "
+      "math:pow(1, xs:double('NaN')), math:pow(-2.5e0, 2.00000001e0), "
+      "math:pow(16, 0.25e0), math:pow(-2.5e0, 2.0e0)",
+      "double:-INF double:INF double:0 double:1 double:1 double:NaN "
+      "double:2 double:6.25" },
+    { "math:pow(-1, 9007199254740993), math:pow(-1, 9007199254740992), "
+      "math:pow(-1, 99999999999999999999999), "
+      "math:pow(-1, -99999999999999999998), "
+      "math:pow(2, 99999999999999999999), "
+      "math:pow(-2, 99999999999999999999), "
+      "math:pow(-0.5e0, 99999999999999999999), "
+      "math:pow(-0e0, -99999999999999999999)",
+      "double:-1 double:1 double:-1 double:1 double:INF double:-INF "
+      "double:-0 double:-INF" },
+    { "math:pow(xs:double('-INF'), 3), math:pow(xs:double('-INF'), -3), "
+      "math:pow(xs:double('-INF'), 2), "
+      "math:pow(xs:double('NaN'), 99999999999999999999)",
+      "double:-INF double:-0 double:INF double:NaN" },
+    { "math:pow(-2, xs:byte(3)), math:pow(-2, 3.0), "
+      "math:pow(2, xs:float(0.5)), math:pow(@a, 2), "
+      "math:pow(2, xs:untypedAtomic('3'))",
+      "double:-8 double:-8 double:1.4142135623730951 double:1 double:8" },
+    { "math:pow(2, ())", "error:XPTY0004" },
+    { "math:pow(2, 'a')", "error:XPTY0004" },
+
+    /* Numbers (4.5.1) */
+    { "number('12'), number(' 1.5e1 '), number(true()), number(@a)",
+      "double:12 double:15 double:1 double:1" },
+    { "number('a'), number(()), number(), number(xs:anyURI('1'))",
+      "double:NaN double:NaN double:NaN double:NaN" },
+    { "number(x[1]), number(1 to 1), number(xs:float(1.5))",
+      "double:NaN double:1 double:1.5" },
+    { "number((1, 2))", "error:XPTY0004" },
+    { "number(x)", "error:XPTY0004" },
+
+    /* Assembling and disassembling strings (5.2) */
+    { "codepoints-to-string((66, 65, 67, 72)), codepoints-to-string(()), "
+      "string-to-codepoints(codepoints-to-string((233, 2309, 65537, "
+      "1114111, 9))), codepoints-to-string(65 to 67)",
+      "string:BACH string: integer:233 integer:2309 integer:65537 "
+      "integer:1114111 integer:9 string:ABC" },
+    { "codepoints-to-string(0)", "error:FOCH0001" },
+    { "codepoints-to-string((65, 55296))", "error:FOCH0001" },
+    { "codepoints-to-string(65534)", "error:FOCH0001" },
+    { "codepoints-to-string(1114112)", "error:FOCH0001" },
+    { "codepoints-to-string(-1)", "error:FOCH0001" },
+    { "codepoints-to-string(-4294967231)", "error:FOCH0001" },
+    { "codepoints-to-string(99999999999999999999)", "error:FOCH0001" },
+    { "codepoints-to-string('a')", "error:XPTY0004" },
+    { "string-to-codepoints('Th\xc3\xa9r\xc3\xa8se'), "
+      "string-to-codepoints(''), string-to-codepoints(()), "
+      "string-to-codepoints(@a)",
+      "integer:84 integer:104 integer:233 integer:114 integer:232 "
+      "integer:115 integer:101 integer:49" },
+
+    /* Comparing strings (5.3) */
+    { "compare('abc', 'abc'), compare('abc', 'abd'), compare('b', 'abc'), "
+      "compare('', 'a'), compare((), 'a'), compare('a', ()), "
+      "compare(x[1], 'one'), compare(xs:anyURI('a'), 'a')",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:0 integer:0" },
+    { "compare('\xef\xbf\xbd', '\xf0\x90\x80\x80'), "
+      "compare('\xc3\xa9', 'z'), "
+      "compare('a', 'b', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "integer:-1 integer:1 integer:-1" },
+    { "compare((), 'a', 'collation/codepoint')", "error:FOCH0002" },
+    { "compare('a', 'a', 'http://example.com/collation')", "error:FOCH0002" },
+
+    /* UCA URIs fall back to the codepoint collation unless they say
+     * fallback=no (5.3.3) */
+    { "compare('b', 'a', " UCA "'), compare('a', 'B', " UCA "?'), "
+      "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+      "compare('a', 'b', " UCA "?lang=en;'), "
+      "compare('a', 'b', " UCA "?numeric=unknown;;keyword=x;version=')",
+      "integer:1 integer:1 integer:1 integer:-1 integer:-1" },
+    { "compare('a', 'b', " UCA "?fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=no;fallback=yes'), "
+      "compare('a', 'b', " UCA "?fallback=maybe'), "
+      "compare('a', 'b', " UCA "?fallback=No'), "
+      "contains('aB', 'B', " UCA "?lang=de')",
+      "integer:-1 integer:-1 integer:-1 integer:-1 boolean:true" },
+    { "compare('a', 'b', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?fallback=yes;lang=en;fallback=no')",
+      "error:FOCH0002" },
+    { "compare((), 'a', " UCA "?strength=primary;fallback=no')",
+      "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "?lang=en;=x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "x')", "error:FOCH0002" },
+    { "compare('a', 'b', " UCA "/?lang=en')", "error:FOCH0002" },
+
+    /* The HTML ASCII case-insensitive collation (5.3.4) */
+    { "compare('a', 'A', " HTML_ASCII "), "
+      "compare('abc', 'ABD', " HTML_ASCII "), "
+      "compare('Z', 'a', " HTML_ASCII "), compare('[', 'a', " HTML_ASCII "), "
+      "compare('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "compare((), 'a', " HTML_ASCII ")",
+      "integer:0 integer:-1 integer:1 integer:-1 integer:-1" },
+    { "contains('iNPut', 'pu', " HTML_ASCII "), "
+      "contains('iNPut', 'PUx', " HTML_ASCII "), "
+      "contains('aaAB', 'AAb', " HTML_ASCII "), "
+      "contains('\xc3\x81', '\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('Input', 'iN', " HTML_ASCII "), "
+      "starts-with('In', 'iNput', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Put', " HTML_ASCII "), "
+      "ends-with('inPUT', 'Pat', " HTML_ASCII ")",
+      "boolean:true boolean:false boolean:true boolean:false boolean:true "
+      "boolean:false boolean:true boolean:false" },
+    { "substring-before('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xB', " HTML_ASCII "), "
+      "substring-after('aXbXc', 'xx', " HTML_ASCII "), "
+      "contains-token('red GREEN', 'green', " HTML_ASCII "), "
+      "contains-token('a\xc3\x81', 'A\xc3\xa1', " HTML_ASCII "), "
+      "starts-with('a', 'A')",
+      "string:a string:Xc string: boolean:true boolean:false "
+      "boolean:false" },
+    { "codepoint-equal('abcd', 'abcd'), codepoint-equal('abcd', 'abcd '), "
+      "codepoint-equal('', ''), codepoint-equal('', ()), "
+      "codepoint-equal((), ())",
+      "boolean:true boolean:false boolean:true" },
+    { "contains-token('red green blue ', 'red'), "
+      "contains-token(('red', 'green', 'blue'), ' red '), "
+      "contains-token('red, green, blue', 'red'), contains-token((), 'a'), "
+      "contains-token('a b', ' '), contains-token('a b', 'a b'), "
+      "contains-token('a\tb', 'b'), contains-token(x, 'two')",
+      "boolean:true boolean:true boolean:false boolean:false "
+      "boolean:false boolean:false boolean:true boolean:true" },
+    { "contains-token('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true" },
+    { "contains-token('a', 'a', 'html-ascii-case-insensitive')",
+      "error:FOCH0002" },
+
+    /* Functions on string values (5.4) */
+    { "concat('un', 'grateful'), concat('a', (), 1, 2.5, true(), x[1], "
+      "xs:untypedAtomic('u')), concat(1e0, xs:float('INF'), "
+      "xs:hexBinary('0a')), concat((), ())",
+      "string:ungrateful string:a12.5trueoneu string:1INF0A string:" },
+    { "concat((1, 2), 'a')", "error:XPTY0004" },
+    { "concat('a')", "error:XPST0017" },
+    { "string-join(1 to 9), string-join((), 'x'), string-join(x, '-'), "
+      "string-join('a', '-'), string-join((1, 'b', 2.5), '')",
+      "string:123456789 string: string:one-two string:a string:1b2.5" },
+    { "string-join(1 to 5, ', ')", "string:1, 2, 3, 4, 5" },
+    { "string-join((1, 2), ())", "error:XPTY0004" },
+    { "substring('motor car', 6), substring('metadata', 4, 3), "
+      "substring('12345', 1.5, 2.6), substring('12345', 0, 3), "
+      "substring('12345', 5, -3), substring('12345', -3, 5)",
+      "string: car string:ada string:234 string:12 string: string:1" },
+    { "substring('12345', 0 div 0e0, 3), substring('12345', 1, 0 div 0e0), "
+      "substring((), 1, 3), substring('12345', -42, 1 div 0e0), "
+      "substring('12345', -1 div 0e0, 1 div 0e0), "
+      "substring('12345', 1 div 0e0), substring('12345', 0 div 0e0)",
+      "string: string: string: string:12345 string: string: string:" },
+    { "substring('12345', 2.5), substring('12345', -0.5, 2), "
+      "substring('12345', 0.49999999999999994e0, 1), "
+      "substring('12345', -1 div 0e0), substring('12345', 3, 1e300)",
+      "string:345 string:1 string: string:12345 string:345" },
+    { "string-to-codepoints(substring('a\xf0\x90\x80\x80" "b', 2, 1)), "
+      "substring(x[1], 2), substring(@a, 1)",
+      "integer:65536 string:ne string:1" },
+    { "substring('abc', 'a')", "error:XPTY0004" },
+    { "substring('abc', x[1])", "error:FORG0001" },
+    { "string-length('Harp'), string-length(()), string-length(''), "
+      "string-length(), string-length(x[2]), "
+      "string-length('a\xf0\x90\x80\x80\xc3\xa9')",
+      "integer:4 integer:0 integer:0 integer:10 integer:3 integer:3" },
+    { "string-length(1)", "error:XPTY0004" },
+    { "normalize-space('  a  b\t\n\rc  '), normalize-space(()), "
+      "normalize-space('   '), x ! normalize-space(), "
+      "string-length(normalize-space(' a\xc2\xa0" "b '))",
+      "string:a b c string: string: string:one string:two integer:3" },
+    { "translate('bar', 'abc', 'ABC'), translate('--aaa--', 'abc-', 'ABC'), "
+      "translate('abcdabc', 'abc', 'AB'), translate('abc', '', 'x'), "
+      "translate((), 'a', 'b'), translate('aba', 'aa', 'xy')",
+      "string:BAr string:AAA string:ABdAB string:abc string: string:xbx" },
+    { "string-to-codepoints(translate('abc', 'b', '\xf0\x90\x80\x80')), "
+      "translate('a\xf0\x90\x80\x80" "c', '\xf0\x90\x80\x80', 'b'), "
+      "translate('cba', 'abcabc', 'xyzuvw'), translate('abab', 'aba', 'x'), "
+      "translate('a\xe2\x82\xac', '\xe2\x82\xac\xe2\x82\xac" "a', "
+      "'\xf0\x90\x80\x80')",
+      "integer:97 integer:65536 integer:99 string:abc string:zyx "
+      "string:xx string:\xf0\x90\x80\x80" },
+
+    /* Substring matching (5.5) */
+    { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
+      "contains('', ()), contains((), ''), contains('abc', ''), "
+      "contains('', 'a'), contains('abababc', 'ababc'), "
+      "contains('aaab', 'aab'), contains('ab', 'abc')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:true "
+      "boolean:false boolean:true boolean:true boolean:false" },
+    { "starts-with('tattoo', 'tat'), starts-with('tattoo', 'att'), "
+      "starts-with((), ()), starts-with('a', ''), starts-with('', 'a'), "
+      "starts-with('a', 'ab')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "ends-with('tattoo', 'too'), ends-with('tattoo', 'atto'), "
+      "ends-with((), ()), ends-with('a', ''), ends-with('', 'a'), "
+      "ends-with('a', 'ba')",
+      "boolean:true boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false" },
+    { "substring-before('tattoo', 'attoo'), "
+      "substring-before('tattoo', 'tatto'), substring-before('abc', ''), "
+      "substring-before((), ()), substring-before('abc', 'x'), "
+      "substring-before('abcbc', 'bc')",
+      "string:t string: string: string: string: string:a" },
+    { "substring-after('tattoo', 'tat'), "
+      "substring-after('tattoo', 'tattoo'), substring-after('abc', ''), "
+      "substring-after((), ()), substring-after('abc', 'x'), "
+      "substring-after('abcbc', 'bc')",
+      "string:too string: string:abc string: string: string:bc" },
+    { "contains('a', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint'), "
+      "substring-after('ab', 'a', "
+      "'http://www.w3.org/2005/xpath-functions/collation/codepoint')",
+      "boolean:true string:b" },
+    { "starts-with('a', 'a', " UCA "?fallback=no')", "error:FOCH0002" },
+    { "ends-with('a', 'a', '')", "error:FOCH0002" },
+    { "substring-before('a', 'a', 'x')", "error:FOCH0002" },
+    { "contains('a', 'a', ())", "error:XPTY0004" },
+
+    /* Splitting strings (5.6.5) */
+    { "tokenize(' red green\tblue  '), tokenize(''), tokenize(()), "
+      "tokenize('   '), tokenize('a'), tokenize(x[2])",
+      "string:red string:green string:blue string:a string:two" },
+    { "tokenize('a b', ' ')", "error:UNSUPPORTED" },
+
+    /* Functions on URIs (6) */
+    { "encode-for-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean')",
+      "string:http%3A%2F%2Fwww.example.com%2F00%2FWeather%2FCA%2F"
+      "Los%2520Angeles%23ocean" },
+    { "concat('http://www.example.com/', encode-for-uri('~b\xc3\xa9"
+      "b\xc3\xa9')), encode-for-uri('100% organic'), encode-for-uri(()), "
+      "encode-for-uri('AZaz09-_.~'), encode-for-uri('\xf0\x90\x80\x80'), "
+      "encode-for-uri(' !*'), encode-for-uri(xs:anyURI('a b'))",
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 string:100%25%20organic "
+      "string: string:AZaz09-_.~ string:%F0%90%80%80 string:%20%21%2A "
+      "string:a%20b" },
+    { "encode-for-uri(1)", "error:XPTY0004" },
+    { "iri-to-uri('http://www.example.com/00/Weather/CA/"
+      "Los%20Angeles#ocean'), "
+      "iri-to-uri('http://www.example.com/~b\xc3\xa9" "b\xc3\xa9'), "
+      "iri-to-uri('My Documents'), iri-to-uri('My%20Documents'), "
+      "iri-to-uri(())",
+      "string:http://www.example.com/00/Weather/CA/Los%20Angeles#ocean "
+      "string:http://www.example.com/~b%C3%A9b%C3%A9 "
+      "string:My%20Documents string:My%20Documents string:" },
+    { "iri-to-uri('<>\"{}|\\^`'), "
+      "iri-to-uri(codepoints-to-string((9, 10, 13, 127))), "
+      "iri-to-uri('!#$&()*+,/:;=?@[]~%'), iri-to-uri(x[1])",
+      "string:%3C%3E%22%7B%7D%7C%5C%5E%60 string:%09%0A%0D%7F "
+      "string:!#$&()*+,/:;=?@[]~% string:one" },
+    { "escape-html-uri('http://www.example.com/00/Weather/CA/"
+      "Los Angeles#ocean')",
+      "string:http://www.example.com/00/Weather/CA/Los Angeles#ocean" },
+    { "escape-html-uri('~b\xc3\xa9'), escape-html-uri(()), "
+      "escape-html-uri(codepoints-to-string((9, 127, 32, 126))), "
+      "escape-html-uri('<%>\"')",
+      "string:~b%C3%A9 string: string:%09%7F ~ string:<%>\"" },
+
+    /* Errors (3.1.1) */
+    { "error()", "error:FOER0000" },
+    { "error(())", "error:FOER0000" },
+    { "error((), 'boom')", "error:FOER0000" },
+    { "error((), 'boom', (1, x))", "error:FOER0000" },
+    { "if (x) then 1 else error()", "integer:1" },
+    { "error(1)", "error:XPTY0004" },
+    { "error(@a)", "error:XPTY0117" },
+    { "error((), 1)", "error:XPTY0004" },
+    { "error((), ())", "error:XPTY0004" },
+
+    /* Sequences (14.1) */
+    { "empty(()), empty(y), empty(x), exists(()), exists(x)",
+      "boolean:true boolean:true boolean:false boolean:false boolean:true" },
+    { "exists(1 to 100000000000), empty(1 to 100000000000)",
+      "boolean:true boolean:false" },
+    { "head((1, 2, 3)), head(()), head(x), head(1 to 100000000000)",
+      "integer:1 e:x#x1 integer:1" },
+    { "tail((1, 2, 3)), tail(5), tail(()), tail(1 to 3)",
+      "integer:2 integer:3 integer:2 integer:3" },
+    { "count(tail(1 to 10000000000)), tail(x)", "integer:9999999999 e:x#x2" },
+    { "reverse((1, 'a', x[1])), reverse(()), reverse(1 to 3), reverse(7)",
+      "e:x#x1 string:a integer:1 integer:3 integer:2 integer:1 integer:7" },
+    { "reverse(x)", "e:x#x2 e:x#x1" },
+    { "reverse(1 to 100000000000)", "error:LIMIT" },
+    { "subsequence((1, 2, 3, 4, 5), 2), subsequence((1, 2, 3, 4, 5), 2, 2)",
+      "integer:2 integer:3 integer:4 integer:5 integer:2 integer:3" },
+    { "subsequence(1 to 5, 1.5, 2), subsequence(1 to 5, 2.5, 1.5)",
+      "integer:2 integer:3 integer:3 integer:4" },
+    { "subsequence((1, 2, 3), 0), subsequence((1, 2, 3), -1, 3)",
+      "integer:1 integer:2 integer:3 integer:1" },
+    { "subsequence((1, 2, 3), -0.5), subsequence((1, 2, 3), 2.4999)",
+      "integer:1 integer:2 integer:3 integer:2 integer:3" },
+    { "subsequence((1, 2, 3), xs:double('NaN')), "
+      "subsequence((1, 2, 3), 1, xs:double('NaN')), "
+      "subsequence((1, 2, 3), xs:double('INF')), "
+      "subsequence((1, 2, 3), xs:double('-INF'), xs:double('INF')), "
+      "subsequence((1, 2, 3), 4), subsequence((1, 2, 3), 2, 0), "
+      "subsequence((1, 2, 3), 2, -1), subsequence((), 1)", "" },
+    { "subsequence((1, 2, 3), xs:double('-INF')), "
+      "subsequence((1, 2, 3), 2, xs:double('INF'))",
+      "integer:1 integer:2 integer:3 integer:2 integer:3" },
+    { "subsequence((1, 2, 3), -1e300, 1e300), subsequence((1, 2), 1e300)",
+      "" },
+    { "subsequence(1 to 10000000000, 9999999999)",
+      "integer:9999999999 integer:10000000000" },
+    { "count(subsequence(1 to 10000000000, 2, 5000000000))",
+      "integer:5000000000" },
+    { "subsequence(x, @a), subsequence(x, 2, xs:float(1))",
+      "e:x#x1 e:x#x2 e:x#x2" },
+    { "subsequence((1, 2), '1')", "error:XPTY0004" },
+    { "subsequence((1, 2), ())", "error:XPTY0004" },
+    { "subsequence((1, 2), (1, 2))", "error:XPTY0004" },
+    { "subsequence((1, 2), xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "remove((1, 2, 3), 2), remove((1, 2), 0), remove((1, 2), 3)",
+      "integer:1 integer:3 integer:1 integer:2 integer:1 integer:2" },
+    { "remove(1 to 3, 1), remove(1 to 3, 3), remove(1 to 3, 2)",
+      "integer:2 integer:3 integer:1 integer:2 integer:1 integer:3" },
+    { "remove((), 1), remove((1, 2), 99999999999999999999), "
+      "remove((1, 2), -99999999999999999999)",
+      "integer:1 integer:2 integer:1 integer:2" },
+    { "remove(x, @a), count(remove(1 to 10000000000, 1))",
+      "e:x#x2 integer:9999999999" },
+    { "remove((1, 2), 1.0)", "error:XPTY0004" },
+    { "insert-before((1, 2, 3), 2, ('a', 'b'))",
+      "integer:1 string:a string:b integer:2 integer:3" },
+    { "insert-before((1, 2), 0, 'a'), insert-before((1, 2), 3, 'b')",
+      "string:a integer:1 integer:2 integer:1 integer:2 string:b" },
+    { "insert-before((1, 2), 99999999999999999999, 'a'), "
+      "insert-before(1 to 2, -99999999999999999999, 0)",
+      "integer:1 integer:2 string:a integer:0 integer:1 integer:2" },
+    { "insert-before((), 5, x), insert-before(x, 1, ())",
+      "e:x#x1 e:x#x2 e:x#x1 e:x#x2" },
+    { "insert-before((1, 2), (), 3)", "error:XPTY0004" },
+
+    /* Comparing values in sequences (14.2) */
+    { "distinct-values((1, 2.0, 3, 2, 1e0, xs:float(1))), "
+      "distinct-values(()), distinct-values(1 to 3), distinct-values(x)",
+      "integer:1 decimal:2 integer:3 integer:1 integer:2 integer:3 "
+      "untypedAtomic:one untypedAtomic:two" },
+    { "distinct-values(('a', xs:untypedAtomic('a'), xs:anyURI('a'), 'b', "
+      "'A')), distinct-values(('a', 'A', 'b'), " HTML_ASCII ")",
+      "string:a string:b string:A string:a string:b" },
+    { "distinct-values((xs:double('NaN'), xs:float('NaN'), 0e0, -0e0, "
+      "xs:float('-0'), 0)), distinct-values((true(), 1, 'true', false(), "
+      "true()))",
+      "double:NaN double:0 boolean:true integer:1 string:true "
+      "boolean:false" },
+    { "distinct-values((xs:hexBinary('0A'), xs:base64Binary('Cg=='), "
+      "xs:hexBinary('0a')))", "hexBinary:0A base64Binary:Cg==" },
+    /* eq is not transitive across numeric types; a decimal rounds to
+     * one float directly and to the one below through xs:double */
+    { "distinct-values((0.1, 0.1e0, xs:float(0.1))), "
+      "distinct-values((xs:float(0.1), 0.1e0, 0.1)), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "1.0000000596046447762579867379"
+      "88403547205962240695953369140625))), "
+      "count(distinct-values((xs:float('1.00000011920928955078125'), "
+      "xs:double(1.00000005960464477625798673"
+      "7988403547205962240695953369140625)))), "
+      "distinct-values((1, 1.0, xs:byte(1), 10000000000000000000001, "
+      "1e22)) instance of xs:integer+",
+      "decimal:0.1 float:0.1 double:0.1 integer:1 integer:2 "
+      "boolean:true" },
+    /* Many distinct numbers that share their nearest float or double
+     * take linear time: quadratic, these took minutes */
+    { "count(distinct-values((1 to 100000) ! "
+      "(1e0 + . * 2.220446049250313e-16))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(1 + . div 1000000000000000000000000))), "
+      "count(distinct-values((1 to 100000) ! "
+      "(. + 1000000000000000000000000000000000000000)))",
+      "integer:100000 integer:100000 integer:100000" },
+    /* The hash seed differs between calls, the result doesn't: the
+     * first of each value, in input order */
+    { "let $s := (1 to 5000) ! ('v' || .), "
+      "$u := (1 to 5000) ! ('V' || .), "
+      "$n := (1 to 5000) ! (. + 0.5) return "
+      "(deep-equal(distinct-values(($s, reverse($s), $u, $s)), ($s, $u)), "
+      "deep-equal(distinct-values(($s, $u), " HTML_ASCII "), $s), "
+      "deep-equal(distinct-values(($n, $n ! xs:double(.), "
+      "(1 to 5000) ! xs:float(.), 1 to 5000)), "
+      "($n, (1 to 5000) ! xs:float(.))), "
+      "deep-equal(distinct-values(($s, $s)), distinct-values(($s, $s))))",
+      "boolean:true boolean:true boolean:true boolean:true" },
+    { "distinct-values(1, 'x')", "error:FOCH0002" },
+    { "index-of((10, 20, 30, 30, 20, 10), 20), index-of((10, 20), 35), "
+      "index-of(('a', 'sport', 'and', 'a', 'pastime'), 'a')",
+      "integer:2 integer:5 integer:1 integer:4" },
+    { "index-of((1, 'a', 1.0, 1e0, xs:untypedAtomic('1')), 1), "
+      "index-of(xs:double('NaN'), xs:double('NaN')), index-of(x, 'two'), "
+      "index-of(1 to 5, 4), index-of(('a', 'A'), 'a', " HTML_ASCII ")",
+      "integer:1 integer:3 integer:4 integer:2 integer:4 integer:1 "
+      "integer:2" },
+    { "index-of((1, 2), (1, 2))", "error:XPTY0004" },
+    { "index-of((1, 2), 1, 'x')", "error:FOCH0002" },
+    { "deep-equal((1, 'a'), (1e0, xs:untypedAtomic('a'))), "
+      "deep-equal((), ()), deep-equal(1, ()), "
+      "deep-equal(xs:double('NaN'), xs:float('NaN')), deep-equal(1, '1'), "
+      "deep-equal(x, x), deep-equal(x[1], x[2]), deep-equal(x[1], 'one')",
+      "boolean:true boolean:true boolean:false boolean:true boolean:false "
+      "boolean:true boolean:false boolean:false" },
+    { "deep-equal(/, /), deep-equal(@a, @a), deep-equal(comment(), "
+      "comment()), deep-equal(x[1]/text(), x[1]/text()), "
+      "deep-equal('a', 'A', " HTML_ASCII "), deep-equal('a', 'A')",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true "
+      "boolean:false" },
+    { "deep-equal(1, 1, 'x')", "error:FOCH0002" },
+
+    /* Cardinality and counting (14.3, 14.4.1) */
+    { "exactly-one(1), zero-or-one(()), zero-or-one(x[1]), "
+      "one-or-more(1 to 2)",
+      "integer:1 e:x#x1 integer:1 integer:2" },
+    { "exactly-one(())", "error:FORG0005" },
+    { "exactly-one(x)", "error:FORG0005" },
+    { "zero-or-one(1 to 2)", "error:FORG0003" },
+    { "one-or-more(())", "error:FORG0004" },
+    { "count(()), count(x), count(//x), count((1, 2, 3)[. > 1])",
+      "integer:0 integer:2 integer:3 integer:2" },
+    { "count(1 to 10000000000)", "integer:10000000000" },
+    { "count(-9223372036854775808 to 9223372036854775806)",
+      "integer:18446744073709551615" },
+
+    /* Aggregate functions (14.4) */
+    { "sum((1, 2, 3)), sum(()), sum((), ()), sum((), 'z'), sum((1, 2), 'z')",
+      "integer:6 integer:0 string:z integer:3" },
+    { "sum((1, 2.5)), sum((1, 2e0)), sum((1, xs:float(2))), "
+      "sum((xs:float(1), 2e0))",
+      "decimal:3.5 double:3 float:3 double:3" },
+    { "sum(xs:byte(1)), sum(xs:byte(1)) instance of xs:byte, "
+      "sum((xs:byte(1), xs:byte(2))) instance of xs:byte",
+      "byte:1 boolean:true boolean:false" },
+    { "sum((@a, 2)), sum(xs:untypedAtomic('1.5')), sum(@a)",
+      "double:3 double:1.5 double:1" },
+    { "sum((1, xs:double('NaN'))), sum((xs:double('INF'), "
+      "xs:double('-INF'))), sum((-0e0, -0e0)), sum(-0e0), "
+      "sum((xs:float('NaN'), 1))",
+      "double:NaN double:NaN double:-0 double:-0 float:NaN" },
+    { "sum(1 to 10), sum(1 to 10000000000), sum(-5 to 5), "
+      "sum(9223372036854775806 to 9223372036854775807), "
+      "sum(-9223372036854775808 to 9223372036854775806), sum(7 to 7)",
+      "integer:55 integer:50000000005000000000 integer:0 "
+      "integer:18446744073709551613 integer:-18446744073709551615 "
+      "integer:7" },
+    { "sum(('a', 1))", "error:FORG0006" },
+    { "sum((1, 'a'))", "error:FORG0006" },
+    { "sum('a')", "error:FORG0006" },
+    { "sum((true(), 1))", "error:FORG0006" },
+    { "sum(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "sum(x)", "error:FORG0001" },
+    { "avg((3, 4, 5)), avg(()), avg((1, 2)), avg(xs:byte(4)), "
+      "avg((1, 2, 2)) eq 5 div 3",
+      "decimal:4 decimal:1.5 decimal:4 boolean:true" },
+    { "avg(1 to 4), avg(1 to 10000000000), "
+      "avg(-9223372036854775808 to 9223372036854775806), avg(-3 to 4), "
+      "avg(3 to 3)",
+      "decimal:2.5 decimal:5000000000.5 decimal:-1 decimal:0.5 "
+      "decimal:3" },
+    { "avg((1, 2e0)), avg((xs:float('INF'), xs:float('-INF'))), "
+      "avg((3, 4, xs:float('NaN'))), avg((@a, 2)), avg(xs:float(1))",
+      "double:1.5 float:NaN float:NaN double:1.5 float:1" },
+    { "avg(('a', 1))", "error:FORG0006" },
+    { "avg(true())", "error:FORG0006" },
+    { "avg(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "min((3, 4, 5)), max((3, 4, 5)), min(()), max(()), "
+      "min(1 to 10000000000), max(1 to 10000000000), min(5 to 5)",
+      "integer:3 integer:5 integer:1 integer:10000000000 integer:5" },
+    { "max((xs:integer(5), xs:float(5.0), xs:double(0))), "
+      "min((xs:integer(5), xs:float(5), xs:double(10))), "
+      "min((1, xs:float(2))), max((2.5, xs:float(1))), "
+      "max((1, 2.5)), min((1, 2.5))",
+      "double:5 double:5 float:1 float:2.5 decimal:2.5 integer:1" },
+    { "min((xs:byte(3), 5)) instance of xs:byte, max((@a, 0)), "
+      "min(xs:untypedAtomic('2')), max(xs:short(4))",
+      "boolean:true double:1 double:2 short:4" },
+    { "min((1, xs:double('NaN'))), max((xs:double('NaN'), 1)), "
+      "min((xs:float('NaN'), 1)), max((xs:float('NaN'), 1e0)), "
+      "min(xs:double('NaN'))",
+      "double:NaN double:NaN float:NaN double:NaN double:NaN" },
+    { "min((true(), false())), max((false(), true())), max(false())",
+      "boolean:false boolean:true boolean:false" },
+    { "max((xs:hexBinary('0A'), xs:hexBinary('0B'))), "
+      "min((xs:base64Binary('AQ=='), xs:base64Binary('AA==')))",
+      "hexBinary:0B base64Binary:AA==" },
+    { "min((1, 'a'))", "error:FORG0006" },
+    { "max(('a', 1))", "error:FORG0006" },
+    { "min((true(), 1))", "error:FORG0006" },
+    { "max((xs:hexBinary('0A'), xs:base64Binary('AA==')))",
+      "error:FORG0006" },
+    { "min(('b', 'a', 'c')), max(('b', 'a', 'c')), "
+      "min(('b', xs:anyURI('a'))), max((xs:anyURI('a'), xs:anyURI('b'))), "
+      "max((xs:token('z'), xs:anyURI('a'))), max(('a', xs:anyURI('b')))",
+      "string:a string:c string:a anyURI:b token:z string:b" },
+    { "max(('a', 'B')), max(('a', 'B'), " HTML_ASCII "), "
+      "min(('a', 'B'), " HTML_ASCII "), "
+      "max((xs:anyURI('a'), xs:anyURI('B')), " HTML_ASCII "), "
+      "min((1, 2), " HTML_ASCII ")",
+      "string:a string:B string:a anyURI:a integer:1" },
+    { "min(('a', xs:untypedAtomic('1')))", "error:FORG0006" },
+    { "max((xs:anyURI('a'), true()))", "error:FORG0006" },
+    { "max(('a', 'b'), 'x')", "error:FOCH0002" },
+    { "min(xs:untypedAtomic('a'))", "error:FORG0001" },
+    { "max(x)", "error:FORG0001" },
+
+    /* The focus (15) */
+    { "position(), last()", "integer:1 integer:1" },
+    { "(5, 6, 7)[position() = last()], x[last()], x[position() < 2]",
+      "integer:7 e:x#x2 e:x#x1" },
+    { "(1 to 5)[position() > 3], *[last() - 1]",
+      "integer:4 integer:5 e:x#x2" },
+    { "x/position(), x/last()", "integer:1 integer:2 integer:2 integer:2" },
+    /* The default collation (15.7) is the one calls without a
+     * collation argument use */
+    { "default-collation(), compare('a', 'b', default-collation()), "
+      "compare('a', 'B', default-collation())",
+      "string:http://www.w3.org/2005/xpath-functions/collation/codepoint "
+      "integer:-1 integer:1" },
+
+    /* String concatenation (XPath 3.1, 3.6) */
+    { "'a' || 'b', () || 'b', 1 || 2.5, x[1] || x[2], 1e0 || ''",
+      "string:ab string:b string:12.5 string:onetwo string:1" },
+    { "'a' || (1, 2)", "error:XPTY0004" },
+    { "'a' || x", "error:XPTY0004" },
+    { "'' || ()", "string:" },
+
+    /* Simple map (3.15) */
+    { "(1, 2, 3) ! (. * 2)", "integer:2 integer:4 integer:6" },
+    { "x ! @id", "a:id a:id" },
+    { "(x[2], x[1], x[2]) ! .", "e:x#x2 e:x#x1 e:x#x2" },
+    { "x ! (y, .)", "e:x#x1 e:y e:x#x2" },
+    { "(1 to 3) ! position(), (1 to 3) ! last()",
+      "integer:1 integer:2 integer:3 integer:3 integer:3 integer:3" },
+    { "() ! 1, 1 ! . ! (. + 1), x ! 1", "integer:2 integer:1 integer:1" },
+    { "(1, 2) ! x", "error:XPTY0020" },
+
+    /* Arrows (3.16) */
+    { "(1, 2, 3) => count(), (1, 2, 3) => subsequence(2)",
+      "integer:3 integer:2 integer:3" },
+    { "x => reverse(), 'a' => string(), 2 => xs:double()",
+      "e:x#x2 e:x#x1 string:a double:2" },
+    { "(1, 2) => exactly-one()", "error:FORG0005" },
+
     /* Not implemented yet */
-    { "count(x)", "error:UNSUPPORTED" },
-    { "'a' || 'b'", "error:UNSUPPORTED" },
-    { "x ! 1", "error:UNSUPPORTED" },
+    { "upper-case('a')", "error:UNSUPPORTED" },
+    { "'a' => upper-case()", "error:UNSUPPORTED" },
+    { "subsequence(?, 1)", "error:UNSUPPORTED" },
+    { "count#1", "error:UNSUPPORTED" },
     { "map { 1: 2 }", "error:UNSUPPORTED" },
     { "(1)?*", "error:UNSUPPORTED" },
     { "(1)(2)", "error:UNSUPPORTED" },
@@ -901,6 +1622,17 @@ testHugeNumbers(void) {
     checkRepeated("'", "7", XP3_DECIMAL_MAX_DIGITS + 10,
                   "' cast as xs:decimal", "error:FOCA0001",
                   "a string with too many digits for a decimal");
+    checkRepeated("sum((1, ", "9", XP3_DECIMAL_MAX_DIGITS, "))",
+                  "error:FOAR0002", "a sum past the limit of digits");
+    checkRepeated("avg((1, ", "9", XP3_DECIMAL_MAX_DIGITS, "))",
+                  "error:FOAR0002", "an average past the limit of digits");
+    checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS, ", -1)",
+                  "error:FOAR0002", "rounding up past the limit of digits");
+    checkRepeated("round(", "9", XP3_DECIMAL_MAX_DIGITS,
+                  ", -99999999999)", "integer:0",
+                  "rounding to a unit beyond the limit of digits");
+    checkRepeated("floor(-0.", "9", XP3_DECIMAL_MAX_DIGITS - 1, ")",
+                  "decimal:-1", "the floor of a long fraction");
 }
 
 /*
@@ -1050,6 +1782,1327 @@ done:
     xmlFreeDoc(doc);
 }
 
+/*
+ * Functions that read the focus raise XPDY0002 without one, also in a
+ * folded subexpression; the others don't need it.
+ */
+static void
+testFunctionFocus(void) {
+    checkEval(NULL, NULL, "position()", "error:XPDY0002");
+    checkEval(NULL, NULL, "last()", "error:XPDY0002");
+    checkEval(NULL, NULL, "string()", "error:XPDY0002");
+    checkEval(NULL, NULL, "data()", "error:XPDY0002");
+    checkEval(NULL, NULL, "number()", "error:XPDY0002");
+    checkEval(NULL, NULL, "string-length()", "error:XPDY0002");
+    checkEval(NULL, NULL, "normalize-space()", "error:XPDY0002");
+    checkEval(NULL, NULL, "name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "local-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "namespace-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "node-name()", "error:XPDY0002");
+    checkEval(NULL, NULL, "root()", "error:XPDY0002");
+    checkEval(NULL, NULL, "has-children()", "error:XPDY0002");
+    checkEval(NULL, NULL, "path()", "error:XPDY0002");
+    checkEval(NULL, NULL, "lang('en')", "error:XPDY0002");
+    checkEval(NULL, NULL, "base-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "document-uri()", "error:XPDY0002");
+    checkEval(NULL, NULL, "generate-id()", "error:XPDY0002");
+    checkEval(NULL, NULL, "('ab', ' c ') ! string-length()",
+              "integer:2 integer:3");
+    checkEval(NULL, NULL, "(' a ', 'b') ! normalize-space()",
+              "string:a string:b");
+    checkEval(NULL, NULL, "(1, 2)[position() = 2]", "integer:2");
+    checkEval(NULL, NULL, "(1, 2) ! string()", "string:1 string:2");
+    checkEval(NULL, NULL, "('1', 'a') ! number()", "double:1 double:NaN");
+    checkEval(NULL, NULL, "count((1, 2))", "integer:2");
+}
+
+/* Binary values are ordered from XPath 3.1 on, so fn:max can't
+ * compare them before */
+static void
+testAggregateLevels(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+
+    if ((sctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) < 0)) {
+        check(0, "static context at level 3.0");
+    } else {
+        checkEval(sctx, NULL, "max((xs:hexBinary('0A'), "
+                  "xs:hexBinary('0B')))", "error:FORG0006");
+        checkEval(sctx, NULL, "max(xs:hexBinary('0A'))", "error:FORG0006");
+        checkEval(sctx, NULL, "max((true(), false()))", "boolean:true");
+    }
+    xp3FreeStaticContext(sctx);
+}
+
+/* fn:string-join#1 comes with XPath 3.0, fn:tokenize#1 and
+ * fn:contains-token with 3.1 */
+static void
+testStringLevels(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+
+    if ((sctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_20) < 0)) {
+        check(0, "static context at level 2.0");
+    } else {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "error:XPST0017");
+        checkEval(sctx, NULL, "string-join(('a', 'b'), '-')", "string:a-b");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+        checkEval(sctx, NULL, "contains-token('a b', 'a')",
+                  "error:XPST0017");
+    }
+    if ((sctx != NULL) &&
+        (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) == 0)) {
+        checkEval(sctx, NULL, "string-join(('a', 'b'))", "string:ab");
+        checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+    }
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * fn:deep-equal on nodes (F&O 3.1, 14.2.3): pairs that differ in one
+ * respect. A comment or processing instruction between two texts
+ * counts only by splitting them; attributes are a set.
+ */
+static const char xp3DeepDoc[] =
+    "<t>"
+    "<p><e a='1' b='2'>x<!--c-->y<f/></e></p>"
+    "<q><e b='2' a='1'>x<?pi?>y<f/></e></q>"
+    "<r><e a='1' b='2'>xy<f/></e></r>"
+    "<s><e a='1' b='3'>x<!--c-->y<f/></e></s>"
+    "<u><e a='1'>x<!--c-->y<f/></e></u>"
+    "<v xmlns:n='urn:n'><n:e a='1' b='2'>x<!--c-->y<f/></n:e></v>"
+    "<g xmlns:m='urn:n'><m:e a='1' b='2'>x<!--c-->y<f/></m:e></g>"
+    "<w><e a='1' b='2'>X<!--c-->Y<f/></e></w>"
+    "<k xmlns:n='urn:n'><e n:a='1'/></k><l><e a='1'/></l>"
+    "<m><e a1='1' a2='2' a3='3' a4='4' a5='5' a6='6' a7='7' a8='8' "
+    "a9='9'/></m>"
+    "<n><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='1'/></n>"
+    "<o><e a9='9' a8='8' a7='7' a6='6' a5='5' a4='4' a3='3' a2='2' "
+    "a1='0'/></o>"
+    "<h><e a='1' b='2'>x<!--c-->y<f><i/></f></e></h>"
+    "</t>";
+
+static const xp3EvalCase xp3DeepCases[] = {
+    { "deep-equal(p/e, q/e), deep-equal(p/e, r/e), deep-equal(p/e, s/e), "
+      "deep-equal(p/e, u/e), deep-equal(p/e, v/*), deep-equal(v/*, g/*)",
+      "boolean:true boolean:false boolean:false boolean:false "
+      "boolean:false boolean:true" },
+    { "deep-equal(p/e, w/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+      "deep-equal(m/e, n/e), deep-equal(m/e, o/e), deep-equal(k/e, l/e), "
+      "deep-equal(p/e, h/e), deep-equal(h/e, p/e)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:false boolean:false boolean:false" },
+    { "deep-equal(p, q), deep-equal(p/e/text(), q/e/text()), "
+      "deep-equal(p/e/comment(), s/e/comment()), "
+      "deep-equal(p/e/comment(), q/e/processing-instruction()), "
+      "deep-equal(p/e/@a, q/e/@a), deep-equal(p/e/@a, p/e/@b)",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:true boolean:false" },
+    { "deep-equal((p/e, 1), (q/e, 1)), deep-equal((1, 2), 1), "
+      "deep-equal(p/e, 'x'), deep-equal(p/e/f, h/e/f/i)",
+      "boolean:true boolean:false boolean:false boolean:false" }
+};
+
+static void
+testDeepEqual(void) {
+    xmlDocPtr doc = parseDoc(xp3DeepDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep-equal test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3DeepCases) / sizeof(xp3DeepCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+            checkEval(plain, ctx, xp3DeepCases[i].expr,
+                      xp3DeepCases[i].expected);
+        }
+    }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The names of nodes (F&O 3.1, 2.1 and 13.1 to 13.3): elements with a
+ * prefix, in a default namespace and in none, attributes with and
+ * without a prefix, and the nodes without a name. The second element
+ * has the namespace of the first under another prefix.
+ */
+static const char xp3NameDoc[] =
+    "<r xmlns:p='urn:p' p:a='1' b='2'>"
+    "<p:e/><q:e xmlns:q='urn:p'/><e/>"
+    "<d xmlns='urn:d'><f/></d>"
+    "text<!--c--><?t v?>"
+    "</r>";
+
+static const xp3EvalCase xp3NameCases[] = {
+    { "name(*[1]), local-name(*[1]), namespace-uri(*[1]), node-name(*[1])",
+      "string:p:e string:e anyURI:urn:p QName:p:e" },
+    { "node-name(*[1]) eq node-name(*[2]), "
+      "node-name(*[1]) eq node-name(*[3]), name(*[2])",
+      "boolean:true boolean:false string:q:e" },
+    { "name(*[4]), local-name(*[4]), namespace-uri(*[4]), node-name(*[4]), "
+      "name(*[4]/*), namespace-uri(*[4]/*)",
+      "string:d string:d anyURI:urn:d QName:d string:f anyURI:urn:d" },
+    { "name(*[3]), local-name(*[3]), namespace-uri(*[3]), node-name(*[3])",
+      "string:e string:e anyURI: QName:e" },
+    { "name(@*[1]), local-name(@*[1]), namespace-uri(@*[1]), "
+      "node-name(@*[1]), name(@*[2]), local-name(@*[2]), "
+      "namespace-uri(@*[2]), node-name(@*[2])",
+      "string:p:a string:a anyURI:urn:p QName:p:a string:b string:b "
+      "anyURI: QName:b" },
+    { "name(processing-instruction()), "
+      "local-name(processing-instruction()), "
+      "namespace-uri(processing-instruction()), "
+      "node-name(processing-instruction())",
+      "string:t string:t anyURI: QName:t" },
+    { "(/, text(), comment()) ! (name(.), local-name(.), namespace-uri(.), "
+      "count(node-name(.)))",
+      "string: string: anyURI: integer:0 string: string: anyURI: integer:0 "
+      "string: string: anyURI: integer:0" },
+    { "name(()), local-name(()), namespace-uri(()), node-name(())",
+      "string: string: anyURI:" },
+    { "namespace-uri(*[1]) instance of xs:anyURI, "
+      "node-name(*[1]) instance of xs:QName, name(*[1]) instance of xs:string",
+      "boolean:true boolean:true boolean:true" },
+
+    /* The context item for the forms without an argument */
+    { "name(), local-name(), namespace-uri(), node-name()",
+      "string:r string:r anyURI: QName:r" },
+    { "(*, @*, processing-instruction()) ! name()",
+      "string:p:e string:q:e string:e string:d string:p:a string:b "
+      "string:t" },
+    { "(*[1], @*[1], *[3]) ! namespace-uri(), (*[4], text()) ! local-name(), "
+      "(*[1], comment(), processing-instruction()) ! node-name()",
+      "anyURI:urn:p anyURI:urn:p anyURI: string:d string: QName:p:e "
+      "QName:t" },
+    { "/ ! name(), / ! local-name(), / ! namespace-uri(), / ! node-name()",
+      "string: string: anyURI:" },
+    { "1 ! name()", "error:XPTY0004" },
+    { "'a' ! local-name()", "error:XPTY0004" },
+    { "1 ! namespace-uri()", "error:XPTY0004" },
+    { "1 ! node-name()", "error:XPTY0004" },
+    { "name(1)", "error:XPTY0004" },
+    { "local-name(*)", "error:XPTY0004" }
+};
+
+static void
+testNodeNames(void) {
+    xmlDocPtr doc = parseDoc(xp3NameDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "node name test set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3NameCases) / sizeof(xp3NameCases[0]);
+             i++) {
+            checkEval(NULL, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+            checkEval(plain, ctx, xp3NameCases[i].expr,
+                      xp3NameCases[i].expected);
+        }
+        /* fn:node-name#0 comes with XPath 3.0 */
+        checkEval(level20, ctx, "node-name()", "error:XPST0017");
+        checkEval(level20, ctx, "node-name(.)", "QName:r");
+    }
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The shape of trees (F&O 3.1, 13.5 and 13.7 to 13.9): a chain of
+ * elements with attributes, elements with only an attribute and with
+ * nothing, and the other kinds of nodes.
+ */
+static const char xp3TreeDoc[] =
+    "<r a='1'>"
+    "<x id='x1' b='2'><x id='x2'><x id='x3'>t</x></x></x>"
+    "<y id='y1' c='3'/><y id='y2'></y>"
+    "text<!--c--><?p v?>"
+    "</r>";
+
+/* Evaluated with r as the context node, and $o bound to the element o
+ * of another document, <o><p/></o> */
+static const xp3EvalCase xp3TreeCases[] = {
+    /* fn:root */
+    { "root(), root(.), root(()), root(/)", "d d d" },
+    { "(/, ., @a, x, x/@b, .//text(), comment(), processing-instruction()) "
+      "! root()",
+      "d d d d d d d d d" },
+    { "root(x//x[@id = 'x3']/text()) is /, root($o) is root($o/*), "
+      "root($o) is /",
+      "boolean:true boolean:true boolean:false" },
+    { "1 ! root()", "error:XPTY0004" },
+    { "root(1)", "error:XPTY0004" },
+    { "root((x, y))", "error:XPTY0004" },
+
+    /* fn:has-children */
+    { "has-children(/), has-children(), has-children(.), has-children(x), "
+      "has-children(x//x[@id = 'x3'])",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "y ! has-children(), has-children(@a), has-children(x/@b)",
+      "boolean:false boolean:false boolean:false boolean:false" },
+    { "(text(), comment(), processing-instruction(), x//text()) ! "
+      "has-children(), has-children(())",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    { "1 ! has-children()", "error:XPTY0004" },
+
+    /* fn:innermost and fn:outermost */
+    { "innermost(()), outermost(())", "" },
+    { "innermost(x), outermost(y[2])", "e:x#x1 e:y#y2" },
+    { "innermost((x, x/@b)), innermost((x/@b, x))", "a:b a:b" },
+    { "outermost((x, x/@b)), outermost((x/@b, x))", "e:x#x1 e:x#x1" },
+    { "innermost(reverse(.//x)), outermost(reverse(.//x))",
+      "e:x#x3 e:x#x1" },
+    { "let $x := .//x return (innermost(($x[2], $x, $x[1], $x[3])), "
+      "outermost(($x[3], $x[2], $x[2])))",
+      "e:x#x3 e:x#x2" },
+    { "innermost(reverse(y)), outermost((y[2], y[1], y[2]))",
+      "e:y#y1 e:y#y2 e:y#y1 e:y#y2" },
+    { "innermost((., @a, x, x/@b, .//text()))", "a:a a:b t:t t:text" },
+    { "outermost((., @a, x, x/@b, .//text()))", "e:r" },
+    { "innermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    { "outermost((processing-instruction(), .//text(), y, x/@b, @a))",
+      "a:a a:b t:t e:y#y1 e:y#y2 t:text p:p" },
+    /* An attribute is no ancestor of the element after it */
+    { "innermost((x//x, x/@b)), outermost((x//x, x/@b))",
+      "a:b e:x#x3 a:b e:x#x2" },
+    { "innermost((/, comment())), outermost((comment(), /))", "c:c d" },
+    { "count(innermost(($o/*, $o, x, x/x))), "
+      "innermost(($o/*, $o, x, x/x)) except ($o/*, x/x)",
+      "integer:2" },
+    { "count(outermost(($o/*, $o, x, x/x))), "
+      "outermost(($o/*, $o, x, x/x)) except ($o, x)",
+      "integer:2" },
+    { "innermost(1)", "error:XPTY0004" },
+    { "outermost((x, 1))", "error:XPTY0004" }
+};
+
+/* A tree without a document, a/b/c with an attribute k on b and a text
+ * in c, evaluated with b as the context node */
+static const xp3EvalCase xp3DetachedTreeCases[] = {
+    { "root(), root(.), root(@k), root(c/text())", "e:a e:a e:a e:a" },
+    { "root() is .., has-children(root()), has-children(c/text())",
+      "boolean:true boolean:true boolean:false" },
+    { "innermost((c, @k, ., ..)), outermost((c, @k, ., ..))",
+      "a:k e:c e:a" }
+};
+
+static void
+testTreeShape(void) {
+    xmlDocPtr doc = parseDoc(xp3TreeDoc);
+    xmlDocPtr other = parseDoc("<o><p/></o>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr middle = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3DynamicContext *detachedCtx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr otherRoot;
+    size_t i;
+
+    if (detached != NULL)
+        middle = xmlNewChild(detached, NULL, BAD_CAST "b", NULL);
+    if ((doc == NULL) || (other == NULL) || (middle == NULL) ||
+        (xmlNewProp(middle, BAD_CAST "k", BAD_CAST "v") == NULL) ||
+        (xmlNewChild(middle, NULL, BAD_CAST "c", BAD_CAST "leaf") == NULL) ||
+        (ctx == NULL) || (detachedCtx == NULL) || (sctx == NULL) ||
+        (plain == NULL) || (level20 == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "o") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "o") < 0) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0) ||
+        (xp3SetContextNode(detachedCtx, middle) < 0)) {
+        check(0, "tree shape test set up");
+        goto done;
+    }
+    otherRoot = xmlDocGetRootElement(other);
+    bound = xp3NewNodeSequence(&otherRoot, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "o", bound) < 0)) {
+        check(0, "tree shape variable bound");
+        goto done;
+    }
+    plain->noOptimize = 1;
+    for (i = 0; i < sizeof(xp3TreeCases) / sizeof(xp3TreeCases[0]); i++) {
+        checkEval(sctx, ctx, xp3TreeCases[i].expr, xp3TreeCases[i].expected);
+        checkEval(plain, ctx, xp3TreeCases[i].expr,
+                  xp3TreeCases[i].expected);
+    }
+    for (i = 0;
+         i < sizeof(xp3DetachedTreeCases) / sizeof(xp3DetachedTreeCases[0]);
+         i++) {
+        checkEval(sctx, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+        checkEval(plain, detachedCtx, xp3DetachedTreeCases[i].expr,
+                  xp3DetachedTreeCases[i].expected);
+    }
+    /* fn:root is in XPath 2.0, the others come with 3.0 */
+    checkEval(level20, ctx, "root()", "d");
+    checkEval(level20, ctx, "has-children(.)", "error:XPST0017");
+    checkEval(level20, ctx, "innermost(.)", "error:XPST0017");
+    checkEval(level20, ctx, "outermost(.)", "error:XPST0017");
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(detachedCtx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(other);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:path (F&O 3.1, 13.6): each kind of node, elements with names that
+ * differ in the local part or the namespace, attributes in a namespace
+ * and in none, a text node of several libxml2 nodes, and processing
+ * instructions with different targets.
+ */
+static const char xp3PathDoc[] =
+    "<?t a?>"
+    "<r xmlns:p='urn:p' a='1' p:a='2'>"
+    "<e/><p:e/><e/><f/><e xmlns='urn:d'/>"
+    "x<!--c-->a<![CDATA[b]]>c<g>y</g>z"
+    "<!--d--><?t v?><?u v?><?t w?>"
+    "</r>"
+    "<!--e-->";
+
+/* Evaluated with r as the context node, after an element h is added
+ * to it with a text node, a character reference that XDM doesn't have
+ * and another text node, then an element i and a third text node */
+static const xp3EvalCase xp3PathCases[] = {
+    { "path(/), path(/processing-instruction()), path(/comment())",
+      "string:/ string:/processing-instruction(t)[1] string:/comment()[1]" },
+    { "path(.), path(e[1]), path(e[2])",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[1] string:/Q{}r[1]/Q{}e[2]" },
+    { "path(Q{urn:p}e), path(f), path(Q{urn:d}e)",
+      "string:/Q{}r[1]/Q{urn:p}e[1] string:/Q{}r[1]/Q{}f[1] "
+      "string:/Q{}r[1]/Q{urn:d}e[1]" },
+    { "path(@a), path(@Q{urn:p}a)",
+      "string:/Q{}r[1]/@a string:/Q{}r[1]/@Q{urn:p}a" },
+    /* a, the CDATA section b and c are one text node */
+    { "text() ! path(), path(g/text())",
+      "string:/Q{}r[1]/text()[1] string:/Q{}r[1]/text()[2] "
+      "string:/Q{}r[1]/text()[3] string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "comment() ! path()",
+      "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2]" },
+    { "processing-instruction() ! path()",
+      "string:/Q{}r[1]/processing-instruction(t)[1] "
+      "string:/Q{}r[1]/processing-instruction(u)[1] "
+      "string:/Q{}r[1]/processing-instruction(t)[2]" },
+    /* The character reference is skipped, so a and b are one text */
+    { "count(h/text()), h/text() ! path()",
+      "integer:2 string:/Q{}r[1]/Q{}h[1]/text()[1] "
+      "string:/Q{}r[1]/Q{}h[1]/text()[2]" },
+    { "path(()), count(path(())), path(.) instance of xs:string",
+      "integer:0 boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "path(), (e[2], @a, g/text()) ! path()",
+      "string:/Q{}r[1] string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/@a "
+      "string:/Q{}r[1]/Q{}g[1]/text()[1]" },
+    { "/ ! path()", "string:/" },
+    { "1 ! path()", "error:XPTY0004" },
+    { "path(1)", "error:XPTY0004" },
+    { "path((e, f))", "error:XPTY0004" }
+};
+
+/* The first example of 13.6, evaluated with its document node as the
+ * context node */
+static const char xp3PathSpecDoc[] =
+    "<p xmlns=\"http://example.com/one\" xml:lang=\"de\" "
+    "author=\"Friedrich von Schiller\">\n"
+    "Freude, sch\xc3\xb6ner G\xc3\xb6tterfunken,<br/>\n"
+    "Tochter aus Elysium,<br/>\n"
+    "Wir betreten feuertrunken,<br/>\n"
+    "Himmlische, dein Heiligtum.</p>";
+
+static const xp3EvalCase xp3PathSpecCases[] = {
+    { "path(.)", "string:/" },
+    { "path(*:p)", "string:/Q{http://example.com/one}p[1]" },
+    { "path(*:p/@xml:lang)",
+      "string:/Q{http://example.com/one}p[1]"
+      "/@Q{http://www.w3.org/XML/1998/namespace}lang" },
+    { "path(*:p/@author)",
+      "string:/Q{http://example.com/one}p[1]/@author" },
+    { "path(*:p/*:br[2])",
+      "string:/Q{http://example.com/one}p[1]"
+      "/Q{http://example.com/one}br[2]" },
+    { "path(//text()[starts-with(normalize-space(), 'Tochter')])",
+      "string:/Q{http://example.com/one}p[1]/text()[2]" }
+};
+
+/* The second example of 13.6, a tree without a document node,
+ * evaluated with its root element as the context node */
+static const char xp3PathEmployeeDoc[] =
+    "<employee xml:id=\"ID21256\">"
+    "<empnr>E21256</empnr><first>John</first><last>Brown</last>"
+    "</employee>";
+
+#define FN_ROOT "Q{http://www.w3.org/2005/xpath-functions}root()"
+
+static const xp3EvalCase xp3PathEmployeeCases[] = {
+    { "path(.), path()", "string:" FN_ROOT " string:" FN_ROOT },
+    { "path(@xml:id)",
+      "string:" FN_ROOT "/@Q{http://www.w3.org/XML/1998/namespace}id" },
+    { "path(empnr), path(last/text())",
+      "string:" FN_ROOT "/Q{}empnr[1] "
+      "string:" FN_ROOT "/Q{}last[1]/text()[1]" }
+};
+
+/* The children of h in xp3PathCases */
+static int
+addPathChildren(xmlDocPtr doc, xmlNodePtr h) {
+    xmlNodePtr children[5];
+    size_t i;
+
+    children[0] = xmlNewDocText(doc, BAD_CAST "a");
+    children[1] = xmlNewCharRef(doc, BAD_CAST "#66");
+    children[2] = xmlNewDocText(doc, BAD_CAST "b");
+    children[3] = xmlNewDocNode(doc, NULL, BAD_CAST "i", NULL);
+    children[4] = xmlNewDocText(doc, BAD_CAST "c");
+    for (i = 0; i < 5; i++) {
+        if (children[i] == NULL)
+            return(-1);
+        xmlAddChild(h, children[i]);
+    }
+    return(0);
+}
+
+/* Each case evaluated optimized and not */
+static void
+checkPathCases(const xp3StaticContext *sctx, const xp3StaticContext *plain,
+               xp3DynamicContext *ctx, const xp3EvalCase *cases,
+               size_t count) {
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        checkEval(sctx, ctx, cases[i].expr, cases[i].expected);
+        checkEval(plain, ctx, cases[i].expr, cases[i].expected);
+    }
+}
+
+static void
+testPath(void) {
+    xmlDocPtr doc = parseDoc(xp3PathDoc);
+    xmlDocPtr spec = parseDoc(xp3PathSpecDoc);
+    xmlDocPtr employeeDoc = parseDoc(xp3PathEmployeeDoc);
+    xmlNodePtr employee = NULL;
+    xmlNodePtr text = xmlNewText(BAD_CAST "fred");
+    xmlAttrPtr attr = xmlNewProp(NULL, BAD_CAST "name", BAD_CAST "fred");
+    xmlNodePtr h = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        h = xmlNewChild(xmlDocGetRootElement(doc), NULL, BAD_CAST "h",
+                        NULL);
+    if (employeeDoc != NULL) {
+        /* Unlinked, it keeps the document's xml namespace */
+        employee = xmlDocGetRootElement(employeeDoc);
+        xmlUnlinkNode(employee);
+    }
+    if ((h == NULL) || (spec == NULL) || (employee == NULL) ||
+        (text == NULL) || (attr == NULL) ||
+        (addPathChildren(doc, h) < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "path test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "path context node set");
+    checkPathCases(sctx, plain, ctx, xp3PathCases,
+                   sizeof(xp3PathCases) / sizeof(xp3PathCases[0]));
+    /* fn:path comes with XPath 3.0 */
+    checkEval(level20, ctx, "path()", "error:XPST0017");
+    checkEval(level20, ctx, "path(.)", "error:XPST0017");
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) spec) == 0,
+          "path example document set");
+    checkPathCases(sctx, plain, ctx, xp3PathSpecCases,
+                   sizeof(xp3PathSpecCases) / sizeof(xp3PathSpecCases[0]));
+
+    check(xp3SetContextNode(ctx, employee) == 0, "path example tree set");
+    checkPathCases(sctx, plain, ctx, xp3PathEmployeeCases,
+                   sizeof(xp3PathEmployeeCases) /
+                   sizeof(xp3PathEmployeeCases[0]));
+
+    /* A text node and an attribute without a parent are roots */
+    check(xp3SetContextNode(ctx, text) == 0, "parentless text set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) attr) == 0,
+          "parentless attribute set");
+    checkEval(sctx, ctx, "path()", "string:" FN_ROOT);
+    checkEval(plain, ctx, "path()", "string:" FN_ROOT);
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeProp(attr);
+    xmlFreeNode(text);
+    xmlFreeNode(employee);
+    xmlFreeDoc(employeeDoc);
+    xmlFreeDoc(spec);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * The namespaces of elements and the language of nodes (F&O 3.1,
+ * 10.2.5, 10.2.6 and 13.4): a default namespace, a prefix bound again
+ * nearer, the default namespace undeclared, and xml:lang given again
+ * nearer, also as "". The elements are in urn:d except f.
+ */
+static const char xp3NamespaceDoc[] =
+    "<r xmlns='urn:d' xmlns:p='urn:p' xml:lang='en-GB'>"
+    "<e xmlns:p='urn:q' xml:lang='DE'>"
+    "<f xmlns='' xmlns:s='urn:s' a='1'>text<!--c--></f>"
+    "</e>"
+    "<g xml:lang=''><h/></g>"
+    "<i xml:lang='-x'/>"
+    "<j xml:lang='\xc3\x89'/>"
+    "<!--c-->"
+    "</r>";
+
+#define XML_NS "http://www.w3.org/XML/1998/namespace"
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3NamespaceCases[] = {
+    /* fn:in-scope-prefixes: the nearest element's first, xml last */
+    { "in-scope-prefixes(.)", "string: string:p string:xml" },
+    { "in-scope-prefixes(*:e)", "string:p string: string:xml" },
+    { "in-scope-prefixes(*:e/f)", "string:s string:p string:xml" },
+    { "in-scope-prefixes(*:g/*:h), in-scope-prefixes(.) instance of "
+      "xs:string+",
+      "string: string:p string:xml boolean:true" },
+    { "in-scope-prefixes(@xml:lang)", "error:XPTY0004" },
+    { "in-scope-prefixes(())", "error:XPTY0004" },
+    { "in-scope-prefixes(comment())", "error:XPTY0004" },
+
+    /* fn:namespace-uri-for-prefix */
+    { "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('p', *:e), "
+      "namespace-uri-for-prefix('p', *:e/f)",
+      "anyURI:urn:p anyURI:urn:q anyURI:urn:q" },
+    { "namespace-uri-for-prefix('', .), namespace-uri-for-prefix((), *:e), "
+      "namespace-uri-for-prefix('s', *:e/f)",
+      "anyURI:urn:d anyURI:urn:d anyURI:urn:s" },
+    { "count(namespace-uri-for-prefix('', *:e/f)), "
+      "count(namespace-uri-for-prefix((), *:e/f)), "
+      "count(namespace-uri-for-prefix('s', .)), "
+      "count(namespace-uri-for-prefix('xmlns', .))",
+      "integer:0 integer:0 integer:0 integer:0" },
+    { "namespace-uri-for-prefix('xml', *:e/f), "
+      "namespace-uri-for-prefix('p', .) instance of xs:anyURI",
+      "anyURI:" XML_NS " boolean:true" },
+    { "namespace-uri-for-prefix('p', @xml:lang)", "error:XPTY0004" },
+    { "namespace-uri-for-prefix('p', ())", "error:XPTY0004" },
+    { "namespace-uri-for-prefix(1, .)", "error:XPTY0004" },
+
+    /* fn:lang: equal, or the part before a "-", ignoring case */
+    { "lang('en', .), lang('EN', .), lang('en-gb', .), lang('En-GB', .)",
+      "boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en-G', .), lang('e', .), lang('', .), lang((), .), "
+      "lang('en-GB-x', .)",
+      "boolean:false boolean:false boolean:false boolean:false "
+      "boolean:false" },
+    /* The nearest xml:lang counts, also when it is "" */
+    { "lang('de', *:e), lang('en', *:e), lang('d', *:e)",
+      "boolean:true boolean:false boolean:false" },
+    { "lang('en', *:g), lang('', *:g), lang('', *:g/*:h), "
+      "lang((), *:g/*:h)",
+      "boolean:false boolean:true boolean:true boolean:true" },
+    { "lang('', *:i), lang('-x', *:i), lang('-', *:i), lang('x', *:i)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    /* Case is folded for ASCII letters only */
+    { "lang('\xc3\x89', *:j), lang('\xc3\xa9', *:j)",
+      "boolean:true boolean:false" },
+    /* An attribute starts at its element, other nodes at their parent */
+    { "lang('de', *:e/f), lang('de', *:e/f/@a), lang('de', *:e/f/text()), "
+      "lang('de', *:e/f/comment()), lang('de', *:e/@xml:lang)",
+      "boolean:true boolean:true boolean:true boolean:true boolean:true" },
+    { "lang('en', comment()), lang('en', @xml:lang), lang('en', /), "
+      "lang('', /)",
+      "boolean:true boolean:true boolean:false boolean:false" },
+    { "lang('en', ())", "error:XPTY0004" },
+    { "lang('en', 1)", "error:XPTY0004" },
+    { "lang(1)", "error:XPTY0004" },
+
+    /* The context item for fn:lang#1 */
+    { "lang('en'), *:e ! lang('de'), (*:e/f/@a, *:g) ! lang('de')",
+      "boolean:true boolean:true boolean:true boolean:false" },
+    { "/ ! lang('en')", "boolean:false" },
+    { "1 ! lang('en')", "error:XPTY0004" }
+};
+
+/* Evaluated with a as the context node, after a declaration of xml
+ * and an undeclaration of p on b are added to <a xmlns:p='urn:p'
+ * xmlns:q='urn:q'><b><c/></b></a> */
+static const xp3EvalCase xp3DeclaredCases[] = {
+    { "in-scope-prefixes(.), in-scope-prefixes(b)",
+      "string:p string:q string:xml string:q string:xml" },
+    { "count(namespace-uri-for-prefix('p', b/c)), "
+      "namespace-uri-for-prefix('p', .), namespace-uri-for-prefix('xml', .)",
+      "integer:0 anyURI:urn:p anyURI:" XML_NS }
+};
+
+/* Add a namespace declaration to an element as it is, also those that
+ * xmlNewNs() refuses in some versions of libxml2 */
+static int
+addDeclaration(xmlNodePtr element, const char *href, const char *prefix) {
+    xmlNsPtr ns = xmlMalloc(sizeof(xmlNs));
+    xmlNsPtr *last = &element->nsDef;
+
+    if (ns == NULL)
+        return(-1);
+    memset(ns, 0, sizeof(xmlNs));
+    ns->type = XML_NAMESPACE_DECL;
+    ns->href = xmlStrdup(BAD_CAST href);
+    ns->prefix = xmlStrdup(BAD_CAST prefix);
+    while (*last != NULL)
+        last = &(*last)->next;
+    *last = ns;
+    if ((ns->href == NULL) || (ns->prefix == NULL))
+        return(-1);
+    return(0);
+}
+
+static void
+testNamespaces(void) {
+    xmlDocPtr doc = parseDoc(xp3NamespaceDoc);
+    xmlDocPtr declared = parseDoc("<a xmlns:p='urn:p' xmlns:q='urn:q'>"
+                                  "<b><c/></b></a>");
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr root = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (declared != NULL)
+        root = xmlDocGetRootElement(declared);
+    if ((doc == NULL) || (root == NULL) || (detached == NULL) ||
+        (addDeclaration(root, XML_NS, "xml") < 0) ||
+        (addDeclaration(root->children, "", "p") < 0) ||
+        (ctx == NULL) || (sctx == NULL) || (plain == NULL) ||
+        (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "namespace test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "namespace context node set");
+    checkPathCases(sctx, plain, ctx, xp3NamespaceCases,
+                   sizeof(xp3NamespaceCases) /
+                   sizeof(xp3NamespaceCases[0]));
+    /* All three are in XPath 2.0 */
+    checkEval(level20, ctx, "lang('en'), in-scope-prefixes(.)[last()], "
+              "namespace-uri-for-prefix('p', .)",
+              "boolean:true string:xml anyURI:urn:p");
+
+    check(xp3SetContextNode(ctx, root) == 0, "declarations set");
+    checkPathCases(sctx, plain, ctx, xp3DeclaredCases,
+                   sizeof(xp3DeclaredCases) / sizeof(xp3DeclaredCases[0]));
+
+    /* An element without a document still has xml */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "in-scope-prefixes(.), lang('en')",
+              "string:xml boolean:false");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(detached);
+    xmlFreeDoc(declared);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * Base and document URIs (F&O 3.1, 2.5 and 2.6), in a document read
+ * from URI_DOC: a relative xml:base resolved against the document, one
+ * below it resolved against that, and an absolute one that overrides
+ * both. No xml:base has dot segments, which libxml2 versions resolve
+ * differently.
+ */
+#define URI_DOC "http://example.org/dir/doc.xml"
+#define URI_SUB "http://example.org/dir/sub/"
+
+static const char xp3UriDoc[] =
+    "<r a='1' xml:base='sub/'>"
+    "<e xml:base='x/y.xml' b='2'>text<!--c--><?p v?></e>"
+    "<f xml:base='http://example.com/abs/'><g xml:base='rel/'/></f>"
+    "<h/>"
+    "</r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3UriCases[] = {
+    /* fn:base-uri: the document, then the xml:base chain */
+    { "base-uri(/), base-uri(.), base-uri(e)",
+      "anyURI:" URI_DOC " anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(f), base-uri(f/g)",
+      "anyURI:http://example.com/abs/ anyURI:http://example.com/abs/rel/" },
+    /* Other nodes have the base URI of their parent */
+    { "(e/@b, e/text(), e/comment(), e/processing-instruction()) ! "
+      "base-uri(.)",
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml "
+      "anyURI:" URI_SUB "x/y.xml anyURI:" URI_SUB "x/y.xml" },
+    { "base-uri(@a), base-uri(h)", "anyURI:" URI_SUB " anyURI:" URI_SUB },
+    { "count(base-uri(())), base-uri(.) instance of xs:anyURI",
+      "integer:0 boolean:true" },
+
+    /* fn:document-uri: document nodes only */
+    { "document-uri(/), document-uri(/) instance of xs:anyURI",
+      "anyURI:" URI_DOC " boolean:true" },
+    { "count(document-uri(.)), count(document-uri(@a)), "
+      "count(document-uri(e/text())), count(document-uri(()))",
+      "integer:0 integer:0 integer:0 integer:0" },
+
+    /* The context item for the forms without an argument */
+    { "base-uri(), e ! base-uri(), / ! base-uri()",
+      "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml anyURI:" URI_DOC },
+    { "/ ! document-uri(), count(document-uri())",
+      "anyURI:" URI_DOC " integer:0" },
+    { "1 ! base-uri()", "error:XPTY0004" },
+    { "1 ! document-uri()", "error:XPTY0004" },
+    { "base-uri(1)", "error:XPTY0004" },
+    { "document-uri('a')", "error:XPTY0004" }
+};
+
+static void
+testUris(void) {
+    const char *noUrlXml = "<r xml:base='sub/'><e/></r>";
+    xmlDocPtr doc = xmlReadMemory(xp3UriDoc, (int) strlen(xp3UriDoc),
+                                  URI_DOC, NULL, 0);
+    xmlDocPtr noUrl = xmlReadMemory(noUrlXml, (int) strlen(noUrlXml), NULL,
+                                    NULL, 0);
+    xmlNodePtr detached = xmlNewNode(NULL, BAD_CAST "a");
+    xmlNodePtr text = xmlNewText(BAD_CAST "t");
+    xmlNodePtr owned = NULL;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+
+    if (doc != NULL)
+        owned = xmlNewDocNode(doc, NULL, BAD_CAST "o", NULL);
+    if ((doc == NULL) || (noUrl == NULL) || (detached == NULL) ||
+        (text == NULL) || (owned == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0)) {
+        check(0, "URI test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    check(xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) == 0,
+          "URI context node set");
+    checkPathCases(sctx, plain, ctx, xp3UriCases,
+                   sizeof(xp3UriCases) / sizeof(xp3UriCases[0]));
+    /* fn:document-uri#0 comes with XPath 3.0 */
+    checkEval(level20, ctx, "base-uri(), base-uri(e), document-uri(/)",
+              "anyURI:" URI_SUB " anyURI:" URI_SUB "x/y.xml "
+              "anyURI:" URI_DOC);
+    checkEval(level20, ctx, "document-uri()", "error:XPST0017");
+
+    /* Without a URL, the document has neither, and xml:base stays
+     * relative */
+    check(xp3SetContextNode(ctx, (xmlNodePtr) noUrl) == 0,
+          "document without a URL set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri()), "
+              "base-uri(r), base-uri(r/e)",
+              "integer:0 integer:0 anyURI:sub/ anyURI:sub/");
+
+    /* Without a parent or a document, there is no base */
+    check(xp3SetContextNode(ctx, detached) == 0, "detached element set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    check(xp3SetContextNode(ctx, text) == 0, "detached text set");
+    checkEval(sctx, ctx, "count(base-uri()), count(document-uri())",
+              "integer:0 integer:0");
+    /* An element without a parent has the URL of the document that
+     * owns it, as libxml2 gives it */
+    check(xp3SetContextNode(ctx, owned) == 0, "unlinked element set");
+    checkEval(sctx, ctx, "base-uri(), count(document-uri())",
+              "anyURI:" URI_DOC " integer:0");
+
+done:
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeNode(owned);
+    xmlFreeNode(text);
+    xmlFreeNode(detached);
+    xmlFreeDoc(noUrl);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:generate-id (F&O 3.1, 14.5.4): a text node of three libxml2
+ * nodes, attributes and the other kinds of nodes. The ids are the
+ * positions in document order from 1: / is id1, r id2, @a id3, e id4,
+ * @b id5, the text id6, the comment id7, the PI id8 and f id9.
+ */
+static const char xp3IdDoc[] =
+    "<r a='1'><e b='2'>a<![CDATA[b]]>c</e><!--c--><?p v?><f/></r>";
+
+/* Evaluated with r as the context node */
+static const xp3EvalCase xp3IdCases[] = {
+    { "generate-id(/), generate-id(.), generate-id(@a), generate-id(e)",
+      "string:id1 string:id2 string:id3 string:id4" },
+    /* The same node the same id, whatever order the calls come in */
+    { "generate-id(e), generate-id(.), generate-id(e)",
+      "string:id4 string:id2 string:id4" },
+    { "(f, e/@b, ., e/text(), f) ! generate-id(.)",
+      "string:id9 string:id5 string:id2 string:id6 string:id9" },
+    /* A text node by any path is the same node */
+    { "generate-id(e/text()) eq generate-id(e/node()[1]), "
+      "generate-id(e/text()) eq generate-id((//text())[1])",
+      "boolean:true boolean:true" },
+    /* An attribute is not its element */
+    { "generate-id(@a) eq generate-id(.), generate-id(e/@b) eq generate-id(e)",
+      "boolean:false boolean:false" },
+    /* Different nodes, different ids */
+    { "let $n := (/, //node(), //@*) "
+      "return count($n) eq count(distinct-values($n ! generate-id(.)))",
+      "boolean:true" },
+    { "generate-id(()), generate-id(.) instance of xs:string",
+      "string: boolean:true" },
+
+    /* The context item for the form without an argument */
+    { "generate-id(), generate-id() eq generate-id(.), "
+      "(e, comment(), /) ! generate-id()",
+      "string:id2 boolean:true string:id4 string:id7 string:id1" },
+    { "1 ! generate-id()", "error:XPTY0004" },
+    { "generate-id(1)", "error:XPTY0004" }
+};
+
+/*
+ * Evaluated with the document as the context node, in
+ * <r><a id='1'><a id='2'/></a><a id='3'/></r>: the //a rewrite visits
+ * the a elements in another order, and pruning skips the call on r, so
+ * ids numbered in the order of the calls would differ when optimized.
+ * In document order, a#1 is id3 and a#2 id5.
+ */
+static const xp3EvalCase xp3IdOptimizedCases[] = {
+    { "//a[generate-id() = 'id5']/string(@id)", "string:2" },
+    { "(generate-id(r) = '' and 0, generate-id(r/a[1]))",
+      "boolean:false string:id3" }
+};
+
+/* Whether an id is an ASCII name, [A-Za-z][A-Za-z0-9]*, as F&O 3.1,
+ * 14.5.4 requires */
+static int
+isAsciiName(const xmlChar *id) {
+    size_t i;
+
+    if ((id == NULL) || (id[0] == 0))
+        return(0);
+    for (i = 0; id[i] != 0; i++) {
+        int letter = ((id[i] >= 'A') && (id[i] <= 'Z')) ||
+                     ((id[i] >= 'a') && (id[i] <= 'z'));
+        int digit = (id[i] >= '0') && (id[i] <= '9');
+
+        if (letter)
+            continue;
+        if (i == 0)
+            return(0);
+        if (!digit)
+            return(0);
+    }
+    return(1);
+}
+
+/* The ids of every node but the document, r to f, are id2 to id9 in
+ * each evaluation of the unchanged document */
+static void
+checkIdsAgain(const xp3StaticContext *sctx, xp3DynamicContext *ctx) {
+    xp3Expr *expr = xp3Compile(sctx, BAD_CAST "(//node() | //@*) ! "
+                               "generate-id(.)", NULL);
+    xp3Sequence *ids;
+    size_t i;
+    size_t j;
+
+    check(expr != NULL, "generate-id expression compiled");
+    for (i = 0; (expr != NULL) && (i < 2); i++) {
+        ids = xp3Evaluate(expr, ctx, NULL);
+        check((ids != NULL) && (xp3SequenceLength(ids) == 8),
+              "an id for each node");
+        for (j = 0; (ids != NULL) && (j < xp3SequenceLength(ids)); j++) {
+            xmlChar *id = xp3SequenceStringValue(ids, j);
+            char expected[32];
+
+            snprintf(expected, sizeof(expected), "id%lu",
+                     (unsigned long) j + 2);
+            check(isAsciiName(id), "an id is an ASCII name");
+            check(xmlStrEqual(id, BAD_CAST expected),
+                  "an unchanged document gets the same ids again");
+            xmlFree(id);
+        }
+        xp3FreeSequence(ids);
+    }
+    xp3FreeExpr(expr);
+}
+
+static void
+testGenerateId(void) {
+    xmlDocPtr doc = parseDoc(xp3IdDoc);
+    xmlDocPtr nested = parseDoc("<r><a id='1'><a id='2'/></a><a id='3'/>"
+                                "</r>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3StaticContext *level20 = xp3NewStaticContext();
+    xp3Sequence *bound = NULL;
+    xmlNodePtr root = NULL;
+    xmlNodePtr cdata;
+
+    if (doc != NULL)
+        root = xmlDocGetRootElement(doc);
+    if ((root == NULL) || (nested == NULL) || (ctx == NULL) ||
+        (sctx == NULL) || (plain == NULL) || (level20 == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level20, XP3_XPATH_20) < 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3DeclareVariable(plain, NULL, BAD_CAST "v") < 0)) {
+        check(0, "generate-id test set up");
+        goto done;
+    }
+    plain->noOptimize = 1;
+
+    /* The CDATA section in the middle of the text run of e */
+    cdata = root->children->children->next;
+    bound = xp3NewNodeSequence(&cdata, 1);
+    if ((bound == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound) < 0) ||
+        (xp3SetContextNode(ctx, root) < 0)) {
+        check(0, "generate-id context set");
+        goto done;
+    }
+    checkPathCases(sctx, plain, ctx, xp3IdCases,
+                   sizeof(xp3IdCases) / sizeof(xp3IdCases[0]));
+    checkEval(sctx, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(plain, ctx, "generate-id($v), generate-id($v) eq "
+              "generate-id(e/text())", "string:id6 boolean:true");
+    checkEval(level20, ctx, "generate-id(.)", "error:XPST0017");
+    checkIdsAgain(sctx, ctx);
+    checkIdsAgain(plain, ctx);
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) nested) == 0,
+          "nested document set");
+    checkPathCases(sctx, plain, ctx, xp3IdOptimizedCases,
+                   sizeof(xp3IdOptimizedCases) /
+                   sizeof(xp3IdOptimizedCases[0]));
+
+done:
+    xp3FreeSequence(bound);
+    xp3FreeStaticContext(level20);
+    xp3FreeStaticContext(plain);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(nested);
+    xmlFreeDoc(doc);
+}
+
+/* A document of one chain of elements, the innermost with a text */
+static xmlDocPtr
+chainDoc(int depth, const char *leaf) {
+    xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
+    xmlNodePtr cur;
+    int i;
+
+    if (doc == NULL)
+        return(NULL);
+    cur = xmlNewDocNode(doc, NULL, BAD_CAST "a", NULL);
+    xmlDocSetRootElement(doc, cur);
+    for (i = 1; (cur != NULL) && (i < depth); i++)
+        cur = xmlNewChild(cur, NULL, BAD_CAST "a", NULL);
+    if ((cur == NULL) ||
+        (xmlNewChild(cur, NULL, BAD_CAST "b", BAD_CAST leaf) == NULL)) {
+        xmlFreeDoc(doc);
+        return(NULL);
+    }
+    return(doc);
+}
+
+/* fn:deep-equal walks trees without recursion, so depth needs no
+ * stack */
+static void
+testDeepTrees(void) {
+    xmlDocPtr doc = chainDoc(100000, "leaf");
+    xmlDocPtr same = chainDoc(100000, "leaf");
+    xmlDocPtr other = chainDoc(100000, "other");
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *bound[2] = { NULL, NULL };
+    xmlNodePtr root;
+
+    if ((doc == NULL) || (same == NULL) || (other == NULL) ||
+        (sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "deep trees set up");
+        goto done;
+    }
+    root = xmlDocGetRootElement(same);
+    bound[0] = xp3NewNodeSequence(&root, 1);
+    root = xmlDocGetRootElement(other);
+    bound[1] = xp3NewNodeSequence(&root, 1);
+    if ((bound[0] == NULL) || (bound[1] == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[0]) < 0)) {
+        check(0, "deep trees bound");
+        goto done;
+    }
+    checkEval(sctx, ctx, "deep-equal(., $v), deep-equal(/, $v/..)",
+              "boolean:true boolean:true");
+    if (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound[1]) < 0)
+        check(0, "deep tree rebound");
+    else
+        checkEval(sctx, ctx, "deep-equal(., $v)", "boolean:false");
+
+done:
+    xp3FreeSequence(bound[0]);
+    xp3FreeSequence(bound[1]);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    xmlFreeDoc(doc);
+    xmlFreeDoc(same);
+    xmlFreeDoc(other);
+}
+
+/*
+ * fn:innermost and fn:outermost count a step per parent they visit. On
+ * a chain, outermost walks from each node up to the top, while
+ * innermost only walks to the parent of the next node.
+ */
+static void
+testTreeShapeSteps(void) {
+    xmlDocPtr doc = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((doc == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) doc) < 0)) {
+        check(0, "tree shape step test set up");
+    } else {
+        checkEval(NULL, ctx, "outermost(//*)", "e:a");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*)", "integer:1001");
+        checkEval(NULL, ctx, "innermost(//*)", "e:b");
+        checkEval(NULL, ctx, "count(outermost(//*))", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/*
+ * fn:path counts a step per ancestor and per preceding sibling it
+ * visits: on a chain the path of each node costs its depth, and among
+ * siblings of the same name its position.
+ */
+static void
+testPathSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr root = NULL;
+    int i;
+
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        if (xmlNewChild(root, NULL, BAD_CAST "a", NULL) == NULL)
+            root = NULL;
+    }
+    if ((chain == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "path step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! path())", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(//*)", "integer:1001");
+    /* 1,000 steps of "/Q{}a[1]" and one of "/Q{}b[1]" */
+    checkEval(NULL, ctx, "string-length(path(//b))", "integer:8008");
+    checkEval(NULL, ctx, "count(//* ! path())", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "siblings set as the context");
+    checkEval(NULL, ctx, "count(r/a ! path())", "integer:1000");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "count(r/a)", "integer:1000");
+    checkEval(NULL, ctx, "path(r/a[last()])", "string:/Q{}r[1]/Q{}a[1000]");
+    checkEval(NULL, ctx, "count(r/a ! path())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * The namespace functions and fn:lang count a step per ancestor and per
+ * declaration they visit: on a chain with the declaration and xml:lang
+ * at the top, each node costs its depth. fn:in-scope-prefixes walks up
+ * again for each declaration, so many declarations on one element cost
+ * their number squared.
+ */
+static void
+testNamespaceSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xmlDocPtr wide = parseDoc("<r/>");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlNodePtr top = NULL;
+    xmlNodePtr root = NULL;
+    char name[32];
+    int i;
+
+    if (chain != NULL)
+        top = xmlDocGetRootElement(chain);
+    if ((top != NULL) &&
+        ((xmlNewNs(top, BAD_CAST "urn:p", BAD_CAST "p") == NULL) ||
+         (xmlSetProp(top, BAD_CAST "xml:lang", BAD_CAST "en") == NULL)))
+        top = NULL;
+    if (wide != NULL)
+        root = xmlDocGetRootElement(wide);
+    for (i = 0; (root != NULL) && (i < 1000); i++) {
+        snprintf(name, sizeof(name), "p%d", i);
+        if (xmlNewNs(root, BAD_CAST "urn:p", BAD_CAST name) == NULL)
+            root = NULL;
+    }
+    if ((top == NULL) || (root == NULL) || (ctx == NULL)) {
+        check(0, "namespace step test set up");
+        goto done;
+    }
+
+    check(xp3SetContextNode(ctx, (xmlNodePtr) chain) == 0,
+          "chain set as the context");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p', //b), "
+              "in-scope-prefixes(//b), lang('en', //b)",
+              "anyURI:urn:p string:p string:xml boolean:true");
+    checkEval(NULL, ctx, "count(//* ! namespace-uri-for-prefix('p', .))",
+              "error:LIMIT");
+    checkEval(NULL, ctx, "count(//* ! in-scope-prefixes(.))", "error:LIMIT");
+    checkEval(NULL, ctx, "count(//*[lang('en')])", "error:LIMIT");
+
+    xp3SetMaxSteps(ctx, 0);
+    check(xp3SetContextNode(ctx, (xmlNodePtr) wide) == 0,
+          "declarations set as the context");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "integer:1001");
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(NULL, ctx, "namespace-uri-for-prefix('p999', r)",
+              "anyURI:urn:p");
+    checkEval(NULL, ctx, "count(in-scope-prefixes(r))", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(wide);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * fn:base-uri counts a step per node from the one whose base it gives
+ * up to the root, as libxml2 may read the xml:base of each: on a
+ * chain, each node costs its depth.
+ */
+static void
+testBaseUriSteps(void) {
+    xmlDocPtr chain = chainDoc(1000, "leaf");
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (chain != NULL)
+        chain->URL = xmlStrdup(BAD_CAST URI_DOC);
+    if ((chain == NULL) || (chain->URL == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, (xmlNodePtr) chain) < 0)) {
+        check(0, "base URI step test set up");
+    } else {
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "integer:1001");
+        xp3SetMaxSteps(ctx, 100000);
+        checkEval(NULL, ctx, "count(//*), base-uri(//b)",
+                  "integer:1001 anyURI:" URI_DOC);
+        checkEval(NULL, ctx, "count(//* ! base-uri())", "error:LIMIT");
+    }
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(chain);
+}
+
+/*
+ * fn:error: the code with its namespace, and the description as the
+ * message
+ */
+static void
+testUserErrors(void) {
+    static const struct {
+        const char *expr;
+        const char *ns;
+        const char *message;
+    } cases[] = {
+        { "error()", XP3_ERR_NS, NULL },
+        { "error((), 'boom')", XP3_ERR_NS, "boom" },
+        { "error((), xs:anyURI('urn:x'), 1)", XP3_ERR_NS, "urn:x" },
+        { "error((), ' ' || 1)", XP3_ERR_NS, " 1" }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        xp3Expr *expr = xp3Compile(NULL, BAD_CAST cases[i].expr, NULL);
+        xp3Error *err = NULL;
+        const xmlChar *message;
+
+        check(xp3Evaluate(expr, NULL, &err) == NULL, cases[i].expr);
+        message = xp3ErrorMessage(err);
+        check((err != NULL) &&
+              xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FOER0000") &&
+              xmlStrEqual(xp3ErrorNamespace(err), BAD_CAST cases[i].ns) &&
+              (xp3ErrorLine(err) == 1) && (xp3ErrorColumn(err) == 1) &&
+              (message != NULL) &&
+              ((cases[i].message == NULL) ||
+               xmlStrEqual(message, BAD_CAST cases[i].message)),
+              cases[i].expr);
+        xp3ErrorFree(err);
+        xp3FreeExpr(expr);
+    }
+}
+
 /* The context node is mapped to its XDM node when an evaluation
  * starts, so the tree may change after it is set. libxml2 merges a
  * text node into an adjacent one, but not a CDATA section, so these
@@ -1102,15 +3155,22 @@ testTreeChange(void) {
 
 /* Text that libxml2 stored without checking it: a lead byte from 0xF8
  * is not UTF-8, so the text is no NCName or NMTOKEN, while the same
- * bytes with lead byte 0xF0 are U+10000, a name character. */
+ * bytes with lead byte 0xF0 are U+10000, a name character. The string
+ * functions count each byte that is not UTF-8 as one character, U+FFFD,
+ * which the URI functions escape as such. */
 static void
 testInvalidUtf8(void) {
     static const struct {
         const char *text;
         const char *expected;
+        const char *codepoints;
+        const char *escaped;
     } cases[] = {
-        { "\xf8\x90\x80\x80", "boolean:false" },
-        { "\xf0\x90\x80\x80", "boolean:true" }
+        { "\xf8\x90\x80\x80", "boolean:false",
+          "integer:65533 integer:65533 integer:65533 integer:65533",
+          "string:%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD" },
+        { "\xf0\x90\x80\x80", "boolean:true", "integer:65536",
+          "string:%F0%90%80%80" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     size_t i;
@@ -1130,10 +3190,83 @@ testInvalidUtf8(void) {
         check(xp3SetContextNode(ctx, root) == 0, "context node set");
         checkEval(NULL, ctx, ". castable as xs:NCName", cases[i].expected);
         checkEval(NULL, ctx, ". castable as xs:NMTOKEN", cases[i].expected);
+        checkEval(NULL, ctx, "string-to-codepoints(.)", cases[i].codepoints);
+        checkEval(NULL, ctx, "encode-for-uri(.)", cases[i].escaped);
         xp3SetContextNode(ctx, NULL);
         xmlFreeDoc(doc);
     }
     xp3FreeDynamicContext(ctx);
+}
+
+/*
+ * Matching and comparing text that libxml2 stored without checking
+ * agree with counting it: a byte that isn't UTF-8 is U+FFFD, here
+ * \xef\xbf\xbd, and results keep the bytes as they are. @a is the euro
+ * sign, @b and @d bytes of it on their own, and @c holds one in the
+ * middle; the @x of the two e elements differ only in that.
+ */
+static void
+testInvalidUtf8Matching(void) {
+    static const xp3EvalCase cases[] = {
+        { "contains(@a, @b), contains(@a, @d), contains(@c, @b), "
+          "contains(@c, '\xef\xbf\xbd'), contains('\xef\xbf\xbd', @d)",
+          "boolean:false boolean:false boolean:true boolean:true "
+          "boolean:true" },
+        { "starts-with(@b, '\xef\xbf\xbd'), ends-with(@a, @d), "
+          "starts-with(@c, 'a\xef\xbf\xbd'), "
+          "ends-with(@c, '\xef\xbf\xbd" "b')",
+          "boolean:true boolean:false boolean:true boolean:true" },
+        { "substring-before(@a, @b), substring-after(@a, @b), "
+          "substring-before(@c, '\xef\xbf\xbd'), substring-after(@c, @d), "
+          "substring-before(@c, 'b'), substring-after(@c, 'a')",
+          "string: string: string:a string:b string:a\x82 string:\x82" "b" },
+        { "@b = '\xef\xbf\xbd', @b eq '\xef\xbf\xbd', @b = @d, "
+          "@b gt '\xe2\x82\xac', @b lt '\xf0\x90\x80\x80', @a = @b",
+          "boolean:true boolean:true boolean:true boolean:true "
+          "boolean:true boolean:false" },
+        { "compare(@b, '\xef\xbf\xbd'), compare(@b, '\xe2\x82\xac'), "
+          "compare(@a, @b), codepoint-equal(@b, '\xef\xbf\xbd'), "
+          "codepoint-equal(@c, 'a\xef\xbf\xbd" "b')",
+          "integer:0 integer:1 integer:-1 boolean:true boolean:true" },
+        { "distinct-values((@b, '\xef\xbf\xbd', @d)), "
+          "index-of(('\xef\xbf\xbd', @a, @d), @b), "
+          "contains-token(@b, ' \xef\xbf\xbd ')",
+          "untypedAtomic:\x82 integer:1 integer:3 boolean:true" },
+        { "deep-equal(data(@b), '\xef\xbf\xbd'), deep-equal(e[1], e[2]), "
+          "max((string(@b), '\xe2\x82\xac')), "
+          "min((string(@b), '\xe2\x82\xac')), "
+          "distinct-values((@b, 'B'), " HTML_ASCII ")",
+          "boolean:true boolean:true string:\x82 string:\xe2\x82\xac "
+          "untypedAtomic:\x82 string:B" },
+        /* Results copy the bytes as they are */
+        { "translate(@c, 'a', 'A'), normalize-space(@c), substring(@c, 2, 1), "
+          "string-length(@c)",
+          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" }
+    };
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlDocPtr doc = parseDoc("<r><e/><e/></r>");
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    size_t i;
+
+    if ((ctx == NULL) || (root == NULL) ||
+        (xmlNewProp(root, BAD_CAST "a", BAD_CAST "\xe2\x82\xac") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "b", BAD_CAST "\x82") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "c", BAD_CAST "a\x82" "b") == NULL) ||
+        (xmlNewProp(root, BAD_CAST "d", BAD_CAST "\xac") == NULL) ||
+        (xmlNewProp(root->children, BAD_CAST "x",
+                    BAD_CAST "\x82") == NULL) ||
+        (xmlNewProp(root->last, BAD_CAST "x",
+                    BAD_CAST "\xef\xbf\xbd") == NULL) ||
+        (xp3SetContextNode(ctx, root) != 0)) {
+        check(0, "invalid UTF-8 matching set up");
+        goto done;
+    }
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        checkEval(NULL, ctx, cases[i].expr, cases[i].expected);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
 }
 
 /*
@@ -1232,6 +3365,125 @@ done:
     xmlFreeDoc(doc);
 }
 
+/* An evaluation with $n bound to an integer */
+static void
+checkLoop(const xp3StaticContext *sctx, xp3DynamicContext *ctx, int64_t n,
+          const char *expected) {
+    xp3Sequence *value = xp3NewIntegerSequence(&n, 1);
+
+    check((value != NULL) &&
+          (xp3BindVariable(ctx, NULL, BAD_CAST "n", value) == 0),
+          "$n bound");
+    xp3FreeSequence(value);
+    checkEval(sctx, ctx, "count(for $i in 1 to $n, $j in 1 to $n return $i)",
+              expected);
+}
+
+/*
+ * The limit on steps at run time. With $n = 100 the loop below takes
+ * 10,305 steps, so 15,000 fit one evaluation but not two.
+ */
+static void
+testStepLimit(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *expr = NULL;
+    xp3Error *err = NULL;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "n") < 0)) {
+        check(0, "step limit test set up");
+        goto done;
+    }
+    check(xp3SetMaxSteps(NULL, 5) == -1, "no context");
+
+    /* No limit by default, and with 0 */
+    checkLoop(sctx, ctx, 200, "integer:40000");
+    check(xp3SetMaxSteps(ctx, 15000) == 0, "limit set");
+    checkLoop(sctx, ctx, 200, "error:LIMIT");
+    checkLoop(sctx, ctx, 1000000, "error:LIMIT");
+    check(xp3SetMaxSteps(ctx, 0) == 0, "limit removed");
+    checkLoop(sctx, ctx, 200, "integer:40000");
+
+    /* The count starts again with each evaluation */
+    xp3SetMaxSteps(ctx, 15000);
+    checkLoop(sctx, ctx, 100, "integer:10000");
+    expr = xp3Compile(sctx, BAD_CAST "count(for $i in 1 to $n, $j in 1 to "
+                      "$n return $i) eq 10000", NULL);
+    for (i = 0; i < 5; i++)
+        check(xp3EvaluateBoolean(expr, ctx, NULL) == 1,
+              "each evaluation has the whole limit");
+
+    /* The message names the limit */
+    checkLoop(sctx, ctx, 200, "error:LIMIT");
+    xp3FreeExpr(expr);
+    expr = xp3Compile(sctx, BAD_CAST "count(for $i in 1 to $n, $j in 1 to "
+                      "$n return $i)", NULL);
+    check((expr != NULL) && (xp3Evaluate(expr, ctx, &err) == NULL) &&
+          xmlStrEqual(xp3ErrorMessage(err), BAD_CAST
+                      "the evaluation needs more than 15000 steps"),
+          "the message of the step limit");
+    xp3ErrorFree(err);
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * The string functions and comparisons count a step per 256 bytes
+ * they read or make, so a limit on operations bounds them: a string of
+ * 4 MB takes 16,384 steps to read.
+ */
+static void
+testStringSteps(void) {
+    static const size_t size = 4 * 1024 * 1024;
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xmlChar *str = xmlMalloc(size + 1);
+    xp3Sequence *seq = NULL;
+    size_t i;
+
+    if ((sctx == NULL) || (ctx == NULL) || (str == NULL)) {
+        check(0, "string step test set up");
+        goto done;
+    }
+    for (i = 0; i < size; i++)
+        str[i] = (xmlChar) (((i % 4) < 2) ? 'a' : ' ');
+    str[size] = 0;
+    seq = xp3NewStringSequence((const xmlChar **) &str, 1);
+    if ((seq == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "s") != 0) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "s", seq) != 0)) {
+        check(0, "string step variable bound");
+        goto done;
+    }
+
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(sctx, ctx, "string-length($s)", "integer:4194304");
+    xp3SetMaxSteps(ctx, 10000);
+    checkEval(sctx, ctx, "string-length('abc')", "integer:3");
+    checkEval(sctx, ctx, "string-length($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-space($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "contains($s, 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "translate($s, 'a', 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "compare($s, $s)", "error:LIMIT");
+    checkEval(sctx, ctx, "$s eq $s", "error:LIMIT");
+    checkEval(sctx, ctx, "$s = $s", "error:LIMIT");
+    checkEval(sctx, ctx, "count(distinct-values(($s, $s)))", "error:LIMIT");
+    checkEval(sctx, ctx, "concat($s, 'a') instance of xs:string",
+              "error:LIMIT");
+    checkEval(sctx, ctx, "($s || 'a') instance of xs:string", "error:LIMIT");
+
+done:
+    xp3FreeSequence(seq);
+    xmlFree(str);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
 static int
 evalBoolean(xp3DynamicContext *ctx, const char *expr, const char **code) {
     xp3Error *err = NULL;
@@ -1293,21 +3545,31 @@ testErrorPositions(void) {
     check(xp3Evaluate(expr, NULL, NULL) == NULL, "no error wanted");
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "1 ||\n2", NULL);
+    expr = xp3Compile(NULL, BAD_CAST "upper-case(())", NULL);
+    err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
           xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED") &&
           (xp3ErrorNamespace(err) == NULL) &&
-          (xp3ErrorMessage(err) != NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), "||") != NULL),
-          "UNSUPPORTED names the operator, without namespace");
+          (strstr((const char *) xp3ErrorMessage(err), " upper-case#1 ") !=
+           NULL), "UNSUPPORTED names a function without its namespace");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "count(())", NULL);
+    /* A conversion error is at the argument, a call's own at its name */
+    expr = xp3Compile(NULL, BAD_CAST "subsequence(1,\n  'a')", NULL);
     err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), " count#1 ") !=
-           NULL), "UNSUPPORTED names a function without its namespace");
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST "XPTY0004") &&
+          (xp3ErrorLine(err) == 2) && (xp3ErrorColumn(err) == 3),
+          "XPTY0004 at the argument, line 2 column 3");
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    expr = xp3Compile(NULL, BAD_CAST "1,\n  exactly-one(())", NULL);
+    err = NULL;
+    check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FORG0005") &&
+          (xp3ErrorLine(err) == 2) && (xp3ErrorColumn(err) == 3),
+          "FORG0005 at the call, line 2 column 3");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
 }
@@ -1630,6 +3892,140 @@ testBuildingSequences(void) {
 done:
     xp3FreeDynamicContext(ctx);
     xp3FreeStaticContext(sctx);
+}
+
+/* An atomic sequence from lexical forms, described, or "error:CODE" */
+static void
+checkAtomicSequence(xp3AtomicType type, const char *first,
+                    const char *second, const char *expected) {
+    const xmlChar *lexicals[2];
+    xp3Sequence *seq;
+    xp3Error *err = NULL;
+    char actual[256];
+
+    lexicals[0] = BAD_CAST first;
+    lexicals[1] = BAD_CAST second;
+    seq = xp3NewAtomicSequence(type, lexicals, (second != NULL) ? 2 : 1,
+                               &err);
+    if (seq != NULL)
+        describe(seq, actual, sizeof(actual));
+    else
+        snprintf(actual, sizeof(actual), "error:%s",
+                 (err != NULL) ? (const char *) xp3ErrorCode(err) : "none");
+    if (strcmp(actual, expected) != 0) {
+        fprintf(stderr, "FAIL: atomic sequence of %s\n  expected: %s\n"
+                "  actual:   %s\n", first, expected, actual);
+        failures++;
+    }
+    check((seq == NULL) == (err != NULL), "an error exactly on failure");
+    xp3FreeSequence(seq);
+    xp3ErrorFree(err);
+}
+
+static void
+testAtomicSequences(void) {
+    const xmlChar *lexicals[1];
+    const xmlChar *invalidUtf8[1];
+    xp3Sequence *seq;
+    xp3Error *err;
+    int i;
+
+    checkAtomicSequence(XP3_TYPE_DECIMAL, "1.50", " -2 ",
+                        "decimal:1.5 decimal:-2");
+    checkAtomicSequence(XP3_TYPE_UNTYPED_ATOMIC, "a", "",
+                        "untypedAtomic:a untypedAtomic:");
+    checkAtomicSequence(XP3_TYPE_STRING, " a ", NULL, "string: a ");
+    checkAtomicSequence(XP3_TYPE_BOOLEAN, "1", "false",
+                        "boolean:true boolean:false");
+    checkAtomicSequence(XP3_TYPE_UNSIGNED_BYTE, "255", NULL,
+                        "unsignedByte:255");
+    checkAtomicSequence(XP3_TYPE_HEX_BINARY, "0aff", NULL, "hexBinary:0AFF");
+    checkAtomicSequence(XP3_TYPE_ANY_URI, "urn:x", NULL, "anyURI:urn:x");
+    checkAtomicSequence(XP3_TYPE_DECIMAL, "1.5", "x", "error:FORG0001");
+    checkAtomicSequence(XP3_TYPE_POSITIVE_INTEGER, "0", NULL,
+                        "error:FORG0001");
+    /* Casting to the date and time types comes with Part 10 */
+    checkAtomicSequence(XP3_TYPE_DATE, "2026-11-05", NULL,
+                        "error:UNSUPPORTED");
+
+    /* The message names the value and the type */
+    lexicals[0] = BAD_CAST "x";
+    err = NULL;
+    seq = xp3NewAtomicSequence(XP3_TYPE_DECIMAL, lexicals, 1, &err);
+    check((seq == NULL) &&
+          xmlStrEqual(xp3ErrorNamespace(err), BAD_CAST XP3_ERR_NS) &&
+          xmlStrEqual(xp3ErrorMessage(err),
+                      BAD_CAST "\"x\" is not a valid xs:decimal"),
+          "the message of an invalid value");
+    xp3ErrorFree(err);
+    check(xp3NewAtomicSequence(XP3_TYPE_DECIMAL, lexicals, 1, NULL) == NULL,
+          "an invalid value without an error argument");
+
+    /* Invalid arguments: NULL, and no error */
+    invalidUtf8[0] = BAD_CAST "\xC3";
+    err = xp3ErrorNoMemory();
+    check((xp3NewAtomicSequence(XP3_TYPE_ANY_ATOMIC, lexicals, 1, &err) ==
+           NULL) && (err == NULL), "xs:anyAtomicType is abstract");
+    check((xp3NewAtomicSequence(XP3_TYPE_NOTATION, lexicals, 1, &err) ==
+           NULL) && (err == NULL), "xs:NOTATION is abstract");
+    check((xp3NewAtomicSequence((xp3AtomicType) 99, lexicals, 1, &err) ==
+           NULL) && (err == NULL), "an unknown type");
+    check((xp3NewAtomicSequence(XP3_TYPE_STRING, NULL, 1, &err) == NULL) &&
+          (err == NULL), "no lexical forms");
+    check((xp3NewAtomicSequence(XP3_TYPE_STRING, invalidUtf8, 1, &err) ==
+           NULL) && (err == NULL), "a lexical form that isn't UTF-8");
+    check((xp3NewAtomicSequence(XP3_TYPE_STRING, lexicals,
+                                (size_t) XP3_MAX_SEQUENCE_ITEMS + 1, &err) ==
+           NULL) && (err == NULL), "more than 10 million values");
+    lexicals[0] = NULL;
+    check((xp3NewAtomicSequence(XP3_TYPE_STRING, lexicals, 1, &err) ==
+           NULL) && (err == NULL), "a NULL lexical form");
+    seq = xp3NewAtomicSequence(XP3_TYPE_STRING, NULL, 0, &err);
+    check((seq != NULL) && (xp3SequenceLength(seq) == 0) && (err == NULL),
+          "no values give the empty sequence");
+    xp3FreeSequence(seq);
+
+    /* Allocation failures: NULL with NO_MEMORY */
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: atomic sequence allocation-failure test "
+               "skipped\n");
+        xp3TestAllocRestore();
+        return;
+    }
+    for (i = 0; i < 1000; i++) {
+        const xmlChar *two[2];
+        char actual[128];
+
+        two[0] = BAD_CAST "2.50";
+        two[1] = BAD_CAST "x";
+        err = NULL;
+        xp3TestAllocFailAt(i);
+        seq = xp3NewAtomicSequence(XP3_TYPE_DECIMAL, two, 1, &err);
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            describe(seq, actual, sizeof(actual));
+            check(strcmp(actual, "decimal:2.5") == 0,
+                  "an atomic sequence made after allocation failures");
+            xp3FreeSequence(seq);
+            /* An invalid value: its error, or NO_MEMORY */
+            xp3TestAllocFailAt(i);
+            seq = xp3NewAtomicSequence(XP3_TYPE_DECIMAL, two, 2, &err);
+            xp3TestAllocFailAt(-1);
+            check((seq == NULL) &&
+                  (xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FORG0001") ||
+                   xmlStrEqual(xp3ErrorCode(err), BAD_CAST "NO_MEMORY")),
+                  "an invalid value under allocation failures");
+            xp3ErrorFree(err);
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        check((seq == NULL) &&
+              xmlStrEqual(xp3ErrorCode(err), BAD_CAST "NO_MEMORY"),
+              "a failed allocation is NO_MEMORY");
+        xp3ErrorFree(err);
+    }
+    check((i > 0) && (i < 1000), "atomic sequence failure points exercised");
+    xp3TestAllocRestore();
 }
 
 /*
@@ -2110,6 +4506,172 @@ static const char *const xp3AllocOperatorsExpected =
     "boolean:true integer:1 integer:2 integer:18446744073709551616 "
     "integer:18446744073709551617 boolean:true integer:1";
 
+/* Function calls, the conversion rules, ||, ! and arrows */
+static const char *const xp3AllocFunctions =
+    "(count(x), exists(()), not(x), boolean('a'), string(x[1]), data(@a), "
+    "number('1.5'), head(x), tail((1, 2, 3)), reverse(x), "
+    "subsequence((1, 'a', 2), 2), remove((1, 2, 3), 2), "
+    "insert-before((1, 2), 2, 'b'), exactly-one(1), zero-or-one(()), "
+    "one-or-more(x)[1], x ! position(), 'a' || 1, x => count(), "
+    "(1 to 3)[position() = last()], subsequence(x, @a), string(), "
+    "number(), count(1 to 10000000000), subsequence(1 to 9, 8), "
+    "remove($v, 1), reverse(1 to 2), "
+    "count(-9223372036854775807 to 9223372036854775807))";
+
+static const char *const xp3AllocFunctionsExpected =
+    "integer:2 boolean:false boolean:false boolean:true string:one "
+    "untypedAtomic:1 double:1.5 e:x#x1 integer:2 integer:3 e:x#x2 e:x#x1 "
+    "string:a integer:2 integer:1 integer:3 integer:1 string:b integer:2 "
+    "integer:1 e:x#x1 integer:1 integer:2 string:a1 integer:2 integer:3 "
+    "e:x#x1 e:x#x2 string:onetwotail double:NaN integer:10000000000 "
+    "integer:8 integer:9 e:x#x1 integer:2 integer:1 "
+    "integer:18446744073709551615";
+
+/* The aggregate functions */
+static const char *const xp3AllocAggregate =
+    "(sum((1, 2.5, @a)), sum((), 'z'), sum(1 to 10000000000), "
+    "avg((1, 2)), avg(-3 to 4), min((3, xs:float(2))), max((@a, 0)), "
+    "min(1 to 5), max((true(), false())), sum((1, 2), ()))";
+
+static const char *const xp3AllocAggregateExpected =
+    "double:4.5 string:z integer:50000000005000000000 decimal:1.5 "
+    "decimal:0.5 float:2 double:1 integer:1 boolean:true integer:3";
+
+/* The string and URI functions and the collations, with searches for
+ * strings longer than the table that fits on the stack, and a call
+ * with more arguments than fit on the stack */
+static const char *const xp3AllocStrings =
+    "(concat('a', 1, x[1]), string-join(1 to 3, '-'), "
+    "concat(x[1], 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'), "
+    "string-join((), 'x'), substring('12345', 2, 2), string-length(x[2]), "
+    "normalize-space(' a  b '), normalize-space(), "
+    "translate('abcabc', 'ab', 'B'), compare('a', 'b'), "
+    "codepoint-equal('a', 'a'), codepoints-to-string((65, 66)), "
+    "string-to-codepoints('ab'), contains-token(('a b', 'c'), ' c '), "
+    "tokenize(' a b '), substring-before('abc', 'b'), "
+    "substring-after('abc', 'b'), starts-with('abc', 'ab'), "
+    "ends-with('abc', 'bc'), contains(x[1], 'n'), "
+    "contains(string-join(for $i in 1 to 40 return 'ab'), "
+    "string-join(for $i in 1 to 35 return 'ab')), "
+    "contains(string-join(for $i in 1 to 40 return 'aB'), "
+    "string-join(for $i in 1 to 35 return 'Ab'), " HTML_ASCII "), "
+    "compare('A', 'a', " HTML_ASCII "), "
+    "compare('a', 'B', " UCA "?lang=en;strength=primary'), "
+    "encode-for-uri('a b\xc3\xa9'), iri-to-uri('a b'), "
+    "escape-html-uri('\xc3\xa9x'), default-collation())";
+
+static const char *const xp3AllocStringsExpected =
+    "string:a1one string:1-2-3 string:onebcdefghi string: string:23 "
+    "integer:3 string:a b "
+    "string:onetwotail string:BcBc integer:-1 boolean:true string:AB "
+    "integer:97 integer:98 boolean:true string:a string:b string:a "
+    "string:c boolean:true boolean:true boolean:true boolean:true "
+    "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
+    "string:%C3%A9x "
+    "string:http://www.w3.org/2005/xpath-functions/collation/codepoint";
+
+/* The functions that compare values in sequences, on xp3DeepDoc */
+static const char *const xp3AllocCompare =
+    "(distinct-values((1, 2.5, 2.5e0, 'a', 'A', xs:float(1), true())), "
+    "count(distinct-values(((1 to 20) ! (. * 1.5), 30, 30e0, "
+    "xs:float(30), 100000000000000000000))), "
+    "distinct-values(('a', 'A'), " HTML_ASCII "), "
+    "index-of((1, 'a', 1.0), 1), deep-equal(p/e, q/e), "
+    "deep-equal(m/e, n/e), deep-equal(p/e, w/e, " HTML_ASCII "), "
+    "min(('b', 'a')), max(('a', xs:anyURI('b'))), "
+    "max(('a', 'B'), " HTML_ASCII "))";
+
+static const char *const xp3AllocCompareExpected =
+    "integer:1 decimal:2.5 string:a string:A boolean:true integer:21 "
+    "string:a "
+    "integer:1 integer:3 boolean:true boolean:true boolean:true "
+    "string:a string:b string:B";
+
+/* The names of nodes, on xp3NameDoc */
+static const char *const xp3AllocNames =
+    "(name(*[1]), local-name(@*[1]), namespace-uri(*[4]), node-name(*[1]), "
+    "node-name(processing-instruction()), name(), node-name(), "
+    "name(text()), namespace-uri(()))";
+
+static const char *const xp3AllocNamesExpected =
+    "string:p:e string:a anyURI:urn:d QName:p:e QName:t string:r QName:r "
+    "string: anyURI:";
+
+/* The shape of trees, on xp3TreeDoc */
+static const char *const xp3AllocTree =
+    "(root(), root(@a), has-children(), has-children(y[1]), "
+    "innermost(reverse(.//x)), outermost((x//x, x/@b, .)), "
+    "innermost((x/@b, x)))";
+
+static const char *const xp3AllocTreeExpected =
+    "d d boolean:true boolean:false e:x#x3 e:r a:b";
+
+/* fn:path, on xp3PathDoc */
+static const char *const xp3AllocPath =
+    "(path(/), path(), path(@Q{urn:p}a), path(e[2]), path(text()[3]), "
+    "comment() ! path(), path(processing-instruction('t')[2]), "
+    "path(()))";
+
+static const char *const xp3AllocPathExpected =
+    "string:/ string:/Q{}r[1] string:/Q{}r[1]/@Q{urn:p}a "
+    "string:/Q{}r[1]/Q{}e[2] string:/Q{}r[1]/text()[3] "
+    "string:/Q{}r[1]/comment()[1] string:/Q{}r[1]/comment()[2] "
+    "string:/Q{}r[1]/processing-instruction(t)[2]";
+
+/* The namespaces of elements and fn:lang, on xp3NamespaceDoc */
+static const char *const xp3AllocNamespaces =
+    "(in-scope-prefixes(*:e/f), namespace-uri-for-prefix('p', *:e), "
+    "namespace-uri-for-prefix((), .), lang('en'), lang('de', *:e/f/@a), "
+    "lang('x', /))";
+
+static const char *const xp3AllocNamespacesExpected =
+    "string:s string:p string:xml anyURI:urn:q anyURI:urn:d boolean:true "
+    "boolean:true boolean:false";
+
+/*
+ * fn:base-uri, on xp3UriDoc read from test.xml. Before libxml2 2.13 a
+ * failed allocation in xmlNodeGetBase() can't be told from no base, so
+ * it gives the empty sequence and this loop runs from 2.13 on only.
+ */
+static const char *const xp3AllocBaseUri =
+    "(base-uri(/), base-uri(), base-uri(e/@b), base-uri(f/g), "
+    "base-uri(()))";
+
+static const char *const xp3AllocBaseUriExpected =
+    "anyURI:test.xml anyURI:sub/ anyURI:sub/x/y.xml "
+    "anyURI:http://example.com/abs/rel/";
+
+/* fn:document-uri and fn:generate-id, on xp3UriDoc read from
+ * test.xml */
+static const char *const xp3AllocIds =
+    "(document-uri(/), document-uri(), generate-id(e), generate-id(), "
+    "generate-id(e), generate-id(()), (e/node(), @a) ! generate-id(.))";
+
+static const char *const xp3AllocIdsExpected =
+    "anyURI:test.xml string:id5 string:id2 string:id5 string: string:id8 "
+    "string:id9 string:id10 string:id3";
+
+/* The functions on numeric values */
+static const char *const xp3AllocNumeric =
+    "(abs(-1.5), abs(xs:byte(-2)), abs(@a), ceiling(-0.5e0), floor(1.5), "
+    "round(2.5), round(1234, -2), round(35.425e0, 2), "
+    "round(xs:float('0.05'), 1), round-half-to-even(2.5), "
+    "round-half-to-even(12350e0, -2), round(-0.04e0, 1))";
+
+static const char *const xp3AllocNumericExpected =
+    "decimal:1.5 integer:2 double:1 double:-0 decimal:1 decimal:3 "
+    "integer:1200 double:35.42 float:0.1 decimal:2 double:12400 double:-0";
+
+/* The math functions, with the exponents of math:pow that allocate */
+static const char *const xp3AllocMath =
+    "(math:pi(), math:sqrt(4), math:pow(-1, 99999999999999999999), "
+    "math:pow(4, 0.5), math:pow(2, 3), math:log(@a), math:exp10(()), "
+    "math:atan2(0, -1))";
+
+static const char *const xp3AllocMathExpected =
+    "double:3.141592653589793 double:2 double:-1 double:2 double:8 "
+    "double:0 double:3.141592653589793";
+
 static xp3Sequence *
 allocatingWork(xmlDocPtr doc, const char *text, char *code, size_t size) {
     xp3StaticContext *sctx = xp3NewStaticContext();
@@ -2146,9 +4708,25 @@ done:
     return(result);
 }
 
+/* The result described, or "error:CODE" if there is none */
 static void
-testAllocationFailures(const char *text, const char *expected) {
-    xmlDocPtr doc = parseDoc(xp3TestDoc);
+describeOutcome(const xp3Sequence *result, const char *code, char *out,
+                size_t size) {
+    if (result == NULL)
+        snprintf(out, size, "error:%s", code);
+    else
+        describe(result, out, size);
+}
+
+/*
+ * Evaluate with each allocation failing in turn. The expected outcome
+ * may be an error, "error:CODE", for an expression that raises one;
+ * a failed allocation must still end in NO_MEMORY, never that error.
+ */
+static void
+testAllocationFailuresIn(const char *xml, const char *text,
+                         const char *expected) {
+    xmlDocPtr doc = parseDoc(xml);
     char actual[2048];
     char code[64];
     xp3Sequence *result;
@@ -2157,9 +4735,8 @@ testAllocationFailures(const char *text, const char *expected) {
     if (doc == NULL)
         return;
     result = allocatingWork(doc, text, code, sizeof(code));
-    describe(result, actual, sizeof(actual));
-    check((result != NULL) && (strcmp(actual, expected) == 0),
-          "reference evaluation");
+    describeOutcome(result, code, actual, sizeof(actual));
+    check(strcmp(actual, expected) == 0, "reference evaluation");
     if (strcmp(actual, expected) != 0)
         fprintf(stderr, "  actual: %s (%s)\n", actual, code);
     xp3FreeSequence(result);
@@ -2179,9 +4756,9 @@ testAllocationFailures(const char *text, const char *expected) {
         injected = xp3TestAllocFailed();
         xp3TestAllocFailAt(-1);
 
-        describe(result, actual, sizeof(actual));
+        describeOutcome(result, code, actual, sizeof(actual));
         if (!injected) {
-            check((result != NULL) && (strcmp(actual, expected) == 0),
+            check(strcmp(actual, expected) == 0,
                   "evaluation complete after allocation failures");
             xp3FreeSequence(result);
             break;
@@ -2198,6 +4775,848 @@ testAllocationFailures(const char *text, const char *expected) {
     xmlFreeDoc(doc);
 }
 
+static void
+testAllocationFailures(const char *text, const char *expected) {
+    testAllocationFailuresIn(xp3TestDoc, text, expected);
+}
+
+/*
+ * Extension functions
+ */
+
+#define EXT_NS "urn:example"
+
+/* A string result; NULL if it can't be made, as on allocation failure */
+static xp3Sequence *
+extString(const char *str) {
+    const xmlChar *strs[1];
+
+    strs[0] = BAD_CAST str;
+    return(xp3NewStringSequence(strs, 1));
+}
+
+/*
+ * The arguments as the implementation gets them, "type:value" for each
+ * item and " |" between arguments, as one xs:string
+ */
+static xp3Sequence *
+extArgs(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    char out[512];
+    size_t used = 0;
+    int i;
+
+    (void) call;
+    (void) userData;
+    out[0] = 0;
+    for (i = 0; i < count; i++) {
+        size_t j;
+
+        if (i > 0)
+            used = appendText(out, sizeof(out), used, "|");
+        for (j = 0; j < xp3SequenceLength(args[i]); j++) {
+            int type = xp3SequenceAtomicType(args[i], j);
+            xmlChar *value = xp3SequenceStringValue(args[i], j);
+            char item[128];
+
+            if (value == NULL)
+                return(NULL);
+            snprintf(item, sizeof(item), "%s:%s",
+                     (type >= 0) ?
+                     (const char *) xp3AtomicTypeName((xp3AtomicType) type) :
+                     "node", (const char *) value);
+            xmlFree(value);
+            used = appendText(out, sizeof(out), used, item);
+        }
+    }
+    return(extString(out));
+}
+
+/* A result chosen by the argument, for checking declared result types;
+ * the user data is a node to return */
+static xp3Sequence *
+extResult(xp3FunctionCall *call, xp3Sequence **args, int count,
+          void *userData) {
+    xmlChar *kind = xp3SequenceStringValue(args[0], 0);
+    xp3Sequence *result = NULL;
+    xmlNodePtr node = userData;
+    int64_t integers[2] = { 1, 2 };
+    double dbl = 1.5;
+
+    (void) call;
+    (void) count;
+    if (kind == NULL)
+        return(NULL);
+    if (xmlStrEqual(kind, BAD_CAST "integer"))
+        result = xp3NewIntegerSequence(integers, 1);
+    else if (xmlStrEqual(kind, BAD_CAST "integers"))
+        result = xp3NewIntegerSequence(integers, 2);
+    else if (xmlStrEqual(kind, BAD_CAST "double"))
+        result = xp3NewDoubleSequence(&dbl, 1);
+    else if (xmlStrEqual(kind, BAD_CAST "string"))
+        result = extString("a");
+    else if (xmlStrEqual(kind, BAD_CAST "empty"))
+        result = xp3NewIntegerSequence(NULL, 0);
+    else if (xmlStrEqual(kind, BAD_CAST "node"))
+        result = xp3NewNodeSequence(&node, 1);
+    xmlFree(kind);
+    return(result);
+}
+
+/* Errors raised the ways an implementation can */
+static xp3Sequence *
+extFail(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    xmlChar *how = xp3SequenceStringValue(args[0], 0);
+    xp3Sequence *result = NULL;
+
+    (void) count;
+    (void) userData;
+    if (how == NULL)
+        return(NULL);
+    if (xmlStrEqual(how, BAD_CAST "standard")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FORG0001", BAD_CAST "bad");
+    } else if (xmlStrEqual(how, BAD_CAST "user")) {
+        xp3FunctionError(call, BAD_CAST "urn:errors", BAD_CAST "oops",
+                         NULL);
+    } else if (xmlStrEqual(how, BAD_CAST "default")) {
+        xp3FunctionError(call, NULL, NULL, BAD_CAST "default code");
+    } else if (xmlStrEqual(how, BAD_CAST "twice")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FOAR0001", BAD_CAST "first");
+        xp3FunctionError(call, NULL, BAD_CAST "FOAR0002", BAD_CAST "second");
+    } else if (xmlStrEqual(how, BAD_CAST "and-value")) {
+        xp3FunctionError(call, NULL, BAD_CAST "FORG0001", NULL);
+        result = extString("ignored");
+    }
+    /* "null": NULL without an error */
+    xmlFree(how);
+    return(result);
+}
+
+/* The user data of the registration and of the evaluation, as
+ * "registration:evaluation" */
+static xp3Sequence *
+extUserData(xp3FunctionCall *call, xp3Sequence **args, int count,
+            void *userData) {
+    const char *data = xp3FunctionUserData(call);
+    char out[128];
+
+    (void) args;
+    (void) count;
+    snprintf(out, sizeof(out), "%s:%s", (const char *) userData,
+             (data != NULL) ? data : "none");
+    return(extString(out));
+}
+
+/* The registration's user data, a string */
+static xp3Sequence *
+extLabel(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    (void) call;
+    (void) args;
+    (void) count;
+    return(extString(userData));
+}
+
+/* Twice the argument, counting the calls in the user data */
+static xp3Sequence *
+extTwice(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    int64_t value;
+
+    (void) call;
+    (void) count;
+    (*(int *) userData)++;
+    if (xp3SequenceInteger(args[0], 0, &value) != 0)
+        return(NULL);
+    value *= 2;
+    return(xp3NewIntegerSequence(&value, 1));
+}
+
+/* Five integers */
+static xp3Sequence *
+extFive(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    static const int64_t values[] = { 1, 2, 3, 4, 5 };
+
+    (void) call;
+    (void) args;
+    (void) count;
+    (void) userData;
+    return(xp3NewIntegerSequence(values, 5));
+}
+
+/* A value of the type the user data names, from the argument's
+ * string, raising the error of an invalid one as a binding would */
+static xp3Sequence *
+extAtomic(xp3FunctionCall *call, xp3Sequence **args, int count,
+          void *userData) {
+    xmlChar *lexical = xp3SequenceStringValue(args[0], 0);
+    const xmlChar *lexicals[1];
+    xp3Sequence *result;
+    xp3Error *err = NULL;
+
+    (void) count;
+    if (lexical == NULL)
+        return(NULL);
+    lexicals[0] = lexical;
+    result = xp3NewAtomicSequence(
+        (xp3AtomicType) xp3TypeLookup(BAD_CAST userData), lexicals, 1, &err);
+    if ((result == NULL) &&
+        !xmlStrEqual(xp3ErrorCode(err), BAD_CAST "NO_MEMORY"))
+        xp3FunctionError(call, xp3ErrorNamespace(err), xp3ErrorCode(err),
+                         xp3ErrorMessage(err));
+    xp3ErrorFree(err);
+    xmlFree(lexical);
+    return(result);
+}
+
+/* The argument itself */
+static xp3Sequence *
+extSame(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    (void) call;
+    (void) count;
+    (void) userData;
+    return(xp3SequenceRef(args[0]));
+}
+
+/* The argument kept after the call, as a binding may keep one */
+static xp3Sequence *extKept;
+
+static xp3Sequence *
+extKeep(xp3FunctionCall *call, xp3Sequence **args, int count,
+        void *userData) {
+    (void) call;
+    (void) count;
+    (void) userData;
+    xp3FreeSequence(extKept);
+    extKept = xp3SequenceRef(args[0]);
+    if (extKept == NULL)
+        return(NULL);
+    return(xp3NewIntegerSequence(NULL, 0));
+}
+
+/* The integers 1 to the argument, made in C */
+static xp3Sequence *
+extRange(xp3FunctionCall *call, xp3Sequence **args, int count,
+         void *userData) {
+    xp3Sequence *result;
+    int64_t *values;
+    int64_t n;
+    int64_t i;
+
+    (void) call;
+    (void) count;
+    (void) userData;
+    if ((xp3SequenceInteger(args[0], 0, &n) != 0) || (n < 0) ||
+        (n > 100000))
+        return(NULL);
+    values = xmlMalloc(((size_t) n + 1) * sizeof(*values));
+    if (values == NULL)
+        return(NULL);
+    for (i = 0; i < n; i++)
+        values[i] = i + 1;
+    result = xp3NewIntegerSequence(values, (size_t) n);
+    xmlFree(values);
+    return(result);
+}
+
+/* Whether the signature names one of the local names, a NULL-terminated
+ * list; NULL is all of them */
+static int
+extSelected(const char *signature, const char *const *names) {
+    size_t len;
+
+    if (names == NULL)
+        return(1);
+    for (; *names != NULL; names++) {
+        len = strlen(*names);
+        if ((strncmp(signature + 3, *names, len) == 0) &&
+            (signature[3 + len] == '('))
+            return(1);
+    }
+    return(0);
+}
+
+/* The functions most tests use, with the prefix ex: all of them, or
+ * only the ones in names */
+static xp3StaticContext *
+extContext(xmlNodePtr node, int *counter, const char *const *names) {
+    static const struct {
+        const char *signature;
+        int flags;
+        xp3FunctionImpl impl;
+        int data;               /* 0 none, 1 node, 2 counter, 3 label */
+        const char *label;
+    } functions[] = {
+        { "ex:args($a as xs:double?, $b as xs:string*, $c as xs:integer) "
+          "as xs:string", 0, extArgs, 0, NULL },
+        { "ex:empty-arg($a as empty-sequence()) as xs:string", 0, extArgs,
+          0, NULL },
+        { "ex:integer($kind as xs:string) as xs:integer", 0, extResult, 1,
+          NULL },
+        { "ex:double($kind as xs:string) as xs:double", 0, extResult, 1,
+          NULL },
+        { "ex:string($kind as xs:string) as xs:string", 0, extResult, 1,
+          NULL },
+        { "ex:node($kind as xs:string) as node()", 0, extResult, 1, NULL },
+        { "ex:nothing($kind as xs:string) as empty-sequence()", 0,
+          extResult, 1, NULL },
+        { "ex:any($kind as xs:string)", 0, extResult, 1, NULL },
+        { "ex:fail($how as xs:string)", 0, extFail, 0, NULL },
+        { "ex:user-data() as xs:string", 0, extUserData, 3, "registered" },
+        { "ex:f() as xs:string", 0, extLabel, 3, "zero" },
+        { "ex:f($a) as xs:string", 0, extLabel, 3, "one" },
+        { "ex:det($a as xs:integer) as xs:integer",
+          XP3_FUNCTION_DETERMINISTIC, extTwice, 2, NULL },
+        { "ex:nondet($a as xs:integer) as xs:integer", 0, extTwice, 2,
+          NULL },
+        { "ex:five() as xs:integer+", 0, extFive, 0, NULL },
+        { "ex:decimal($s as xs:string) as xs:decimal", 0, extAtomic, 3,
+          "decimal" },
+        { "ex:untyped($s as xs:string)", 0, extAtomic, 3, "untypedAtomic" },
+        { "ex:untyped-integer($s as xs:string) as xs:integer", 0, extAtomic,
+          3, "untypedAtomic" },
+        { "ex:same($a)", 0, extSame, 0, NULL },
+        { "ex:keep($a) as empty-sequence()", 0, extKeep, 0, NULL },
+        { "ex:range($n as xs:integer)", 0, extRange, 0, NULL },
+        { "ex:range-integers($n as xs:integer) as xs:integer*", 0, extRange,
+          0, NULL }
+    };
+    xp3StaticContext *ctx = xp3NewStaticContext();
+    size_t i;
+
+    if ((ctx == NULL) ||
+        (xp3DeclareNamespace(ctx, BAD_CAST "ex", BAD_CAST EXT_NS) < 0)) {
+        xp3FreeStaticContext(ctx);
+        return(NULL);
+    }
+    for (i = 0; i < sizeof(functions) / sizeof(functions[0]); i++) {
+        void *data = (functions[i].data == 1) ? (void *) node :
+                     (functions[i].data == 2) ? (void *) counter :
+                     (functions[i].data == 3) ? (void *) functions[i].label :
+                     NULL;
+
+        if (!extSelected(functions[i].signature, names))
+            continue;
+        if (xp3RegisterFunction(ctx, BAD_CAST functions[i].signature,
+                                functions[i].flags, functions[i].impl, data,
+                                NULL) < 0) {
+            xp3FreeStaticContext(ctx);
+            return(NULL);
+        }
+    }
+    return(ctx);
+}
+
+static const struct {
+    const char *expr;
+    const char *expected;
+} extensionCases[] = {
+    /* Arguments are converted: atomized, untyped values cast, numbers
+     * promoted, xs:anyURI to xs:string */
+    { "ex:args(1, 'a', 3)", "string:double:1 | string:a | integer:3" },
+    { "ex:args(2.5, ('a', 'b'), 3)",
+      "string:double:2.5 | string:a string:b | integer:3" },
+    { "ex:args(@a, xs:anyURI('urn:u'), x[1]/@id = 'x1')",
+      "error:XPTY0004" },
+    { "ex:args(@a, xs:anyURI('urn:u'), 3)",
+      "string:double:1 | string:urn:u | integer:3" },
+    { "ex:args(xs:untypedAtomic('4'), x[1], xs:untypedAtomic('5'))",
+      "string:double:4 | string:one | integer:5" },
+    { "ex:args((), (), xs:byte(7))", "string:| | byte:7" },
+    { "ex:args(xs:untypedAtomic('x'), (), 3)", "error:FORG0001" },
+    { "ex:args('1', (), 3)", "error:XPTY0004" },
+    { "ex:args((1, 2), (), 3)", "error:XPTY0004" },
+    { "ex:args((), (), ())", "error:XPTY0004" },
+    { "ex:args((), (), (1, 2))", "error:XPTY0004" },
+    { "ex:args((), (), 1.5)", "error:XPTY0004" },
+    { "ex:empty-arg(())", "string:" },
+    { "ex:empty-arg(1)", "error:XPTY0004" },
+
+    /* The result is converted and checked the same way */
+    { "ex:integer('integer')", "integer:1" },
+    { "ex:integer('integers')", "error:XPTY0004" },
+    { "ex:integer('empty')", "error:XPTY0004" },
+    { "ex:integer('string')", "error:XPTY0004" },
+    { "ex:integer('double')", "error:XPTY0004" },
+    { "ex:double('integer')", "double:1" },
+    { "ex:string('node')", "string:one" },
+    { "ex:node('node')", "e:x#x1" },
+    { "ex:node('string')", "error:XPTY0004" },
+    { "ex:nothing('empty')", "" },
+    { "ex:nothing('integer')", "error:XPTY0004" },
+    { "ex:any('integers'), ex:any('node')",
+      "integer:1 integer:2 e:x#x1" },
+
+    /* Errors from the implementation; NULL without one is a failed
+     * allocation */
+    { "ex:fail('standard')", "error:FORG0001" },
+    { "ex:fail('user')", "error:oops" },
+    { "ex:fail('default')", "error:FOER0000" },
+    { "ex:fail('twice')", "error:FOAR0001" },
+    { "ex:fail('and-value')", "error:FORG0001" },
+    { "ex:fail('null')", "error:NO_MEMORY" },
+
+    /* Arities, arrows, and references as for built-in functions */
+    { "ex:f(), ex:f(1), 2 => ex:f()", "string:zero string:one string:one" },
+    { "ex:f(1, 2)", "error:XPST0017" },
+    { "ex:f#1", "error:UNSUPPORTED" },
+    { "ex:f#1(1)", "error:UNSUPPORTED" },
+    { "ex:f(?)", "error:UNSUPPORTED" },
+    { "ex:nondet(2) + ex:det(3)", "integer:10" },
+
+    /* Results of any atomic type, from their lexical forms */
+    { "ex:decimal(' 2.50 ')", "decimal:2.5" },
+    { "ex:decimal('x')", "error:FORG0001" },
+    { "ex:untyped('7') + 1", "double:8" },
+    { "ex:untyped-integer('7')", "integer:7" },
+    { "ex:untyped-integer('x')", "error:FORG0001" },
+
+    /* An argument returned: a constant, a range, nodes, nothing */
+    { "ex:same((1, 'a'))", "integer:1 string:a" },
+    { "ex:same(1 to 3)", "integer:1 integer:2 integer:3" },
+    { "ex:same(x[1])", "e:x#x1" },
+    { "ex:same(())", "" }
+};
+
+static void
+testExtensionFunctions(void) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *sctx;
+    int counter = 0;
+    size_t i;
+
+    if ((doc == NULL) || (ctx == NULL) ||
+        (xp3SetContextNode(ctx, xmlDocGetRootElement(doc)) < 0)) {
+        check(0, "extension function test set up");
+        goto done;
+    }
+    sctx = extContext(xmlDocGetRootElement(doc)->children, &counter, NULL);
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        goto done;
+    }
+    for (i = 0; i < sizeof(extensionCases) / sizeof(extensionCases[0]); i++)
+        checkEval(sctx, ctx, extensionCases[i].expr,
+                  extensionCases[i].expected);
+
+    /* Extension functions exist at every level */
+    xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_20);
+    checkEval(sctx, ctx, "ex:f(1), ex:det(1)", "string:one integer:2");
+    xp3FreeStaticContext(sctx);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xmlFreeDoc(doc);
+}
+
+/* An error from an implementation, with its code, namespace, message
+ * and position */
+static void
+checkExtensionError(const xp3StaticContext *sctx, const char *expr,
+                    const char *code, const char *ns, const char *message,
+                    int column) {
+    xp3Expr *compiled = xp3Compile(sctx, BAD_CAST expr, NULL);
+    xp3Error *err = NULL;
+
+    check((compiled != NULL) && (xp3Evaluate(compiled, NULL, &err) == NULL) &&
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST code) &&
+          xmlStrEqual(xp3ErrorNamespace(err), BAD_CAST ns) &&
+          (((message == NULL) && (xp3ErrorMessage(err) == NULL)) ||
+           xmlStrEqual(xp3ErrorMessage(err), BAD_CAST message)) &&
+          (xp3ErrorLine(err) == 1) && (xp3ErrorColumn(err) == column), expr);
+    xp3ErrorFree(err);
+    xp3FreeExpr(compiled);
+}
+
+static void
+testExtensionErrors(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
+
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        return;
+    }
+    checkExtensionError(sctx, "1 + ex:fail('standard')", "FORG0001",
+                        XP3_ERR_NS, "bad", 5);
+    checkExtensionError(sctx, "ex:fail('user')", "oops", "urn:errors", NULL,
+                        1);
+    checkExtensionError(sctx, "ex:fail('default')", "FOER0000", XP3_ERR_NS,
+                        "default code", 1);
+    checkExtensionError(sctx, "(1, ex:fail('twice'))", "FOAR0001",
+                        XP3_ERR_NS, "first", 5);
+    checkExtensionError(sctx, "ex:integer('string')", "XPTY0004",
+                        XP3_ERR_NS, "the result of ex:integer#1 is an "
+                        "xs:string, where xs:integer is expected", 1);
+    xp3FreeStaticContext(sctx);
+}
+
+static void
+testExtensionUserData(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    char handler[] = "handler";
+
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "user data test set up");
+        goto done;
+    }
+    checkEval(sctx, NULL, "ex:user-data()", "string:registered:none");
+    checkEval(sctx, ctx, "ex:user-data()", "string:registered:none");
+    check(xp3SetDynamicContextUserData(ctx, handler) == 0,
+          "user data set on a dynamic context");
+    checkEval(sctx, ctx, "ex:user-data()", "string:registered:handler");
+    check(xp3SetDynamicContextUserData(NULL, handler) < 0,
+          "user data on a NULL context");
+    check(xp3FunctionUserData(NULL) == NULL, "user data of a NULL call");
+    xp3FunctionError(NULL, NULL, NULL, NULL);
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * A deterministic function with constant arguments is called once,
+ * while compiling; a nondeterministic one on every evaluation
+ */
+static void
+testExtensionFolding(void) {
+    xp3StaticContext *sctx;
+    xp3Expr *det;
+    xp3Expr *nondet;
+    xp3Expr *variable;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *value;
+    char actual[64];
+    int counter = 0;
+    int64_t two = 2;
+    int i;
+
+    sctx = extContext(NULL, &counter, NULL);
+    value = xp3NewIntegerSequence(&two, 1);
+    if ((sctx == NULL) || (ctx == NULL) || (value == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", value) < 0)) {
+        check(0, "folding test set up");
+        xp3FreeStaticContext(sctx);
+        xp3FreeDynamicContext(ctx);
+        xp3FreeSequence(value);
+        return;
+    }
+    det = xp3Compile(sctx, BAD_CAST "ex:det(2)", NULL);
+    check(counter == 1, "a deterministic call is evaluated when compiling");
+    nondet = xp3Compile(sctx, BAD_CAST "ex:nondet(2)", NULL);
+    variable = xp3Compile(sctx, BAD_CAST "ex:det($v)", NULL);
+    check(counter == 1, "a nondeterministic call is not");
+    xp3FreeStaticContext(sctx);
+
+    for (i = 0; i < 3; i++) {
+        xp3Sequence *results[3];
+        int j;
+
+        results[0] = xp3Evaluate(det, ctx, NULL);
+        results[1] = xp3Evaluate(nondet, ctx, NULL);
+        results[2] = xp3Evaluate(variable, ctx, NULL);
+        for (j = 0; j < 3; j++) {
+            describe(results[j], actual, sizeof(actual));
+            check(strcmp(actual, "integer:4") == 0,
+                  "extension calls evaluate to their value");
+            xp3FreeSequence(results[j]);
+        }
+    }
+    check(counter == 7, "the unfolded calls are evaluated each time");
+
+    xp3FreeExpr(det);
+    xp3FreeExpr(nondet);
+    xp3FreeExpr(variable);
+    xp3FreeSequence(value);
+    xp3FreeDynamicContext(ctx);
+}
+
+/* The static context may be freed before evaluating: the expression
+ * owns copies of the functions it calls */
+static void
+testExtensionAfterFree(void) {
+    int counter = 0;
+    xp3StaticContext *sctx = extContext(NULL, &counter, NULL);
+    xp3Expr *expr;
+    xp3Sequence *result;
+    char actual[128];
+
+    if (sctx == NULL) {
+        check(0, "extension functions registered");
+        return;
+    }
+    expr = xp3Compile(sctx, BAD_CAST "ex:f(), ex:args(1, 'a', 3), "
+                      "ex:nondet(4)", NULL);
+    xp3FreeStaticContext(sctx);
+    result = xp3Evaluate(expr, NULL, NULL);
+    describe(result, actual, sizeof(actual));
+    check(strcmp(actual, "string:zero string:double:1 | string:a | "
+                 "integer:3 integer:8") == 0,
+          "an expression calls its extension functions after the static "
+          "context is freed");
+    xp3FreeSequence(result);
+    xp3FreeExpr(expr);
+}
+
+/* The result of an implementation counts against the sequence limit */
+static void
+testExtensionLimits(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((sctx == NULL) || (ctx == NULL)) {
+        check(0, "limit test set up");
+        goto done;
+    }
+    checkEval(sctx, ctx, "count(ex:five())", "integer:5");
+
+    /* Steps count the conversion of the result, an item at a time, not
+     * the C code that made it */
+    xp3SetMaxSteps(ctx, 1000);
+    checkEval(sctx, ctx, "count(ex:range(5000))", "integer:5000");
+    checkEval(sctx, ctx, "count(ex:range-integers(500))", "integer:500");
+    checkEval(sctx, ctx, "count(ex:range-integers(5000))", "error:LIMIT");
+    xp3SetMaxSteps(ctx, 0);
+
+    xp3SetMaxSequenceLength(ctx, 4);
+    checkEval(sctx, ctx, "count(ex:five())", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * An argument kept with xp3SequenceRef() outlives the expression: a
+ * folded constant is copied, any other sequence gets a reference
+ */
+static void
+testExtensionKeep(void) {
+    xp3StaticContext *sctx = extContext(NULL, NULL, NULL);
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *bound = NULL;
+    xp3Sequence *result;
+    xp3Expr *expr = NULL;
+    int64_t values[2] = { 5, 6 };
+    char actual[128];
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0)) {
+        check(0, "keep test set up");
+        goto done;
+    }
+
+    expr = xp3Compile(sctx, BAD_CAST "ex:keep((1, 'a', 2.5))", NULL);
+    if ((expr == NULL) || (expr->constantCount != 1)) {
+        check(0, "the argument is a folded constant");
+        goto done;
+    }
+    result = xp3Evaluate(expr, NULL, NULL);
+    check((result != NULL) && (xp3SequenceLength(result) == 0),
+          "ex:keep evaluated");
+    xp3FreeSequence(result);
+    check((extKept != NULL) && (extKept != expr->constants[0]) &&
+          (extKept->refs == 1),
+          "a constant argument is kept as a copy");
+    check(expr->constants[0]->refs == XP3_REFS_CONSTANT,
+          "the constant is unchanged");
+    xp3FreeExpr(expr);
+    expr = NULL;
+    describe(extKept, actual, sizeof(actual));
+    check(strcmp(actual, "integer:1 string:a decimal:2.5") == 0,
+          "a kept constant argument outlives its expression");
+    xp3FreeSequence(extKept);
+    extKept = NULL;
+
+    bound = xp3NewIntegerSequence(values, 2);
+    expr = xp3Compile(sctx, BAD_CAST "ex:keep($v)", NULL);
+    if ((bound == NULL) || (expr == NULL) ||
+        (xp3BindVariable(ctx, NULL, BAD_CAST "v", bound) < 0)) {
+        check(0, "keep test with a variable set up");
+        goto done;
+    }
+    result = xp3Evaluate(expr, ctx, NULL);
+    xp3FreeSequence(result);
+    check(extKept == bound, "any other argument is kept itself");
+    xp3FreeExpr(expr);
+    expr = NULL;
+    xp3FreeDynamicContext(ctx);
+    ctx = NULL;
+    xp3FreeSequence(bound);
+    bound = NULL;
+    describe(extKept, actual, sizeof(actual));
+    check(strcmp(actual, "integer:5 integer:6") == 0,
+          "a kept argument outlives the evaluation");
+    xp3FreeSequence(extKept);
+    extKept = NULL;
+    check(xp3SequenceRef(NULL) == NULL, "keeping NULL");
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeSequence(bound);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/* Copying a constant fails cleanly; a reference needs no memory */
+static void
+testSequenceRefAllocationFailures(void) {
+    xp3Expr *expr = xp3Compile(NULL, BAD_CAST "(1, 'a', 2.5)", NULL);
+    int64_t value = 1;
+    xp3Sequence *plain = xp3NewIntegerSequence(&value, 1);
+    xp3Sequence *copy;
+    char actual[128];
+    int i;
+
+    if ((expr == NULL) || (expr->constantCount != 1) || (plain == NULL)) {
+        check(0, "constant for the allocation-failure test");
+        goto done;
+    }
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: xp3SequenceRef allocation-failure test skipped\n");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    for (i = 0; i < 1000; i++) {
+        xp3TestAllocFailAt(i);
+        copy = xp3SequenceRef(expr->constants[0]);
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            describe(copy, actual, sizeof(actual));
+            check((copy != NULL) && (copy != expr->constants[0]) &&
+                  (strcmp(actual, "integer:1 string:a decimal:2.5") == 0),
+                  "a constant copied after allocation failures");
+            xp3FreeSequence(copy);
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        check(copy == NULL, "a failed copy returns NULL");
+    }
+    check((i > 0) && (i < 1000), "xp3SequenceRef failure points exercised");
+    xp3TestAllocFailAt(0);
+    copy = xp3SequenceRef(plain);
+    check((copy == plain) && !xp3TestAllocFailed(),
+          "a reference to a sequence allocates nothing");
+    xp3TestAllocFailAt(-1);
+    xp3FreeSequence(copy);
+    xp3TestAllocRestore();
+
+done:
+    xp3FreeSequence(plain);
+    xp3FreeExpr(expr);
+}
+
+/*
+ * Register, compile and evaluate with each allocation failing in turn,
+ * as testAllocationFailuresIn() does: the arguments are converted, the
+ * implementations allocate their results, the results are converted,
+ * and the errors they raise are allocated too.
+ */
+static const char *const xp3AllocExtension =
+    "(ex:args(@a, ('a', x[1]), xs:byte(3)), ex:double('integer'), "
+    "ex:string('node'), ex:det(2), ex:nondet(3), 2 => ex:f(), "
+    "ex:decimal('2.50'), ex:untyped-integer('7'), ex:same((1, 'a')))";
+
+static const char *const xp3AllocExtensionExpected =
+    "string:double:1 | string:a string:one | byte:3 double:1 string:one "
+    "integer:4 integer:6 string:one decimal:2.5 integer:7 integer:1 "
+    "string:a";
+
+static const char *const xp3AllocExtensionNames[] = {
+    "args", "double", "string", "det", "nondet", "f", "decimal",
+    "untyped-integer", "same", NULL
+};
+
+static const char *const xp3FailNames[] = { "fail", NULL };
+static const char *const xp3IntegerNames[] = { "integer", NULL };
+
+/* The work with only the functions in names registered, so the loop
+ * spends its time on the calls */
+static xp3Sequence *
+extensionWork(xmlDocPtr doc, const char *const *names, const char *text,
+              char *code, size_t size) {
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    xp3StaticContext *sctx;
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Sequence *result = NULL;
+    xp3Expr *expr = NULL;
+    xp3Error *err = NULL;
+    int counter = 0;
+
+    snprintf(code, size, "setup");
+    sctx = extContext(root->children, &counter, names);
+    if ((sctx == NULL) || (ctx == NULL) || (xp3SetContextNode(ctx, root) < 0))
+        goto done;
+    expr = xp3Compile(sctx, BAD_CAST text, &err);
+    if (expr != NULL)
+        result = xp3Evaluate(expr, ctx, &err);
+    snprintf(code, size, "%s", (err != NULL) ?
+             (const char *) xp3ErrorCode(err) : "");
+
+done:
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    return(result);
+}
+
+static void
+testExtensionAllocationFailures(const char *const *names, const char *text,
+                                const char *expected) {
+    xmlDocPtr doc = parseDoc(xp3TestDoc);
+    xp3Sequence *result;
+    char actual[1024];
+    char code[64];
+    int i;
+
+    if (doc == NULL)
+        return;
+    result = extensionWork(doc, names, text, code, sizeof(code));
+    describeOutcome(result, code, actual, sizeof(actual));
+    check(strcmp(actual, expected) == 0, text);
+    if (strcmp(actual, expected) != 0)
+        fprintf(stderr, "  actual: %s\n", actual);
+    xp3FreeSequence(result);
+
+    if (!xp3TestAllocInstall()) {
+        printf("testeval: extension allocation-failure tests skipped: this "
+               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestAllocRestore();
+        xmlFreeDoc(doc);
+        return;
+    }
+    for (i = 0; i < 5000; i++) {
+        int injected;
+
+        xp3TestAllocFailAt(i);
+        result = extensionWork(doc, names, text, code, sizeof(code));
+        injected = xp3TestAllocFailed();
+        xp3TestAllocFailAt(-1);
+
+        describeOutcome(result, code, actual, sizeof(actual));
+        if (!injected) {
+            check(strcmp(actual, expected) == 0,
+                  "extension calls complete after allocation failures");
+            xp3FreeSequence(result);
+            break;
+        }
+        check(result == NULL, "a failed allocation fails the extension call");
+        check((strcmp(code, "NO_MEMORY") == 0) ||
+              (strcmp(code, "setup") == 0),
+              "a failed allocation in an extension call reports NO_MEMORY");
+        xp3FreeSequence(result);
+    }
+    check(i > 0 && i < 5000, "extension allocation failure points exercised");
+    xp3TestAllocRestore();
+    xmlFreeDoc(doc);
+}
 /*
  * Numbers longer than the buffer for parsing them with a decimal comma:
  * a decimal promoted to a double, a cast to xs:float and a double
@@ -2251,18 +5670,74 @@ main(void) {
     testQNameComparison();
     testManyBindings();
     testFocus();
+    testFunctionFocus();
+    testAggregateLevels();
+    testStringLevels();
+    testDeepEqual();
+    testNodeNames();
+    testTreeShape();
+    testPath();
+    testNamespaces();
+    testUris();
+    testGenerateId();
+    testDeepTrees();
+    testTreeShapeSteps();
+    testPathSteps();
+    testNamespaceSteps();
+    testBaseUriSteps();
+    testUserErrors();
     testTreeChange();
     testInvalidUtf8();
+    testInvalidUtf8Matching();
     testVariables();
     testLimits();
+    testStepLimit();
+    testStringSteps();
     testBoolean();
     testErrorPositions();
     testSequences();
     testReadingItems();
     testBuildingSequences();
+    testAtomicSequences();
     testBindingAllocationFailures();
     testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
     testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
+    testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
+    testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
+    testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    /* The error fn:error raises is allocated too; when that fails, the
+     * evaluation fails with NO_MEMORY instead */
+    testAllocationFailures("error()", "error:FOER0000");
+    testAllocationFailures("error((), 'boom')", "error:FOER0000");
+    testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
+                             xp3AllocCompareExpected);
+    testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
+                             xp3AllocNamesExpected);
+    testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
+    testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
+    testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
+                             xp3AllocNamespacesExpected);
+#if LIBXML_VERSION >= 21300
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
+                             xp3AllocBaseUriExpected);
+#endif
+    testAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
+    testExtensionFunctions();
+    testExtensionErrors();
+    testExtensionUserData();
+    testExtensionFolding();
+    testExtensionAfterFree();
+    testExtensionLimits();
+    testExtensionKeep();
+    testSequenceRefAllocationFailures();
+    testExtensionAllocationFailures(xp3AllocExtensionNames, xp3AllocExtension,
+                                    xp3AllocExtensionExpected);
+    testExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
+                                    "error:oops");
+    testExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
+                                    "error:XPTY0004");
     testLocale();
 
     if (failures == 0)
