@@ -1,5 +1,62 @@
 NEWS file for libxpath3
 
+v0.2.0: Nov 11 2026
+
+### Function library, core
+
+libxpath3 0.2 evaluates function calls, with the core of the F&O 3.1
+function library and functions the application registers.
+
+- Function calls apply the function conversion rules. Calls with
+  constant arguments are folded when the function allows it.
+- The basic functions: `true`, `false`, `not`, `boolean`, `string`,
+  `data`, `number`, `position`, `last`, `error`, `default-collation`,
+  the cardinality checks and the sequence functions `empty`, `exists`,
+  `count`, `head`, `tail`, `reverse`, `subsequence`, `remove`,
+  `insert-before`, `distinct-values`, `index-of` and `deep-equal`.
+- Numeric functions: `abs`, `ceiling`, `floor`, `round`,
+  `round-half-to-even`, `sum`, `avg`, `min`, `max`, and the `math:`
+  functions.
+- String functions without regular expressions, including
+  `string-join`, `substring`, `contains`, `translate`, `compare`,
+  `normalize-space`, `contains-token` and `tokenize#1`, and the URI
+  functions `encode-for-uri`, `iri-to-uri` and `escape-html-uri`.
+  They work under the Unicode codepoint collation and the HTML ASCII
+  case-insensitive collation; UCA collation URIs fall back to
+  codepoint order.
+- Functions on nodes: `name`, `local-name`, `namespace-uri`,
+  `node-name`, `lang`, `root`, `path`, `has-children`, `innermost`,
+  `outermost`, `base-uri`, `document-uri`, `generate-id`,
+  `in-scope-prefixes` and `namespace-uri-for-prefix`.
+- `xp3RegisterFunction()` adds extension functions with an F&O-style
+  signature, such as `u:f($a as xs:string?) as xs:decimal`. Arguments
+  and results go through the same conversion rules as built-in
+  functions. `xp3FunctionError()` raises an error from inside one, and
+  `xp3SetDynamicContextUserData()` passes data to it per evaluation.
+- `xp3SetMaxSteps()` limits the work of one evaluation, for
+  applications that evaluate untrusted expressions. String work
+  counts by the bytes read and made. There is no limit by default.
+- `xp3SequenceRef()` keeps a sequence, and `xp3NewAtomicSequence()`
+  builds values of any built-in atomic type from their lexical forms.
+
+### Conformance
+
+Against the W3C QT3 test suite at commit 201a6e4, compiling passes all
+XPath 2.0 tests and all but one known failure at 3.0 and 3.1.
+Evaluating, XPath 3.1 has 11,171 tests passed, 59 failed and 10,801
+not judged yet. 56 of the failures need UCA collations with real
+tailorings.
+
+### Not yet supported
+
+- Regular expressions and the functions that use them.
+- Date, time and duration values.
+- Upper- and lower-case mapping, Unicode normalization, the QName
+  functions, `resolve-uri`, `format-number` and `doc`.
+- Maps, arrays, function items and the higher-order functions.
+
+The namespace axis is not supported by design (XPST0010).
+
 v0.1.0: Oct 29 2026
 
 ### First release
