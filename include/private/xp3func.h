@@ -359,6 +359,15 @@ xp3Value *
 xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
+xp3FnNormalizeUnicode(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnUpperCase(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnLowerCase(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
 xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *

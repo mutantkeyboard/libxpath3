@@ -23,6 +23,9 @@ int
 xp3NextChar(const xmlChar *str, size_t len, size_t *pos);
 
 int
+xp3EncodeChar(int c, xmlChar *out);
+
+int
 xp3IsValidUTF8(const xmlChar *str, size_t len);
 
 xmlChar *

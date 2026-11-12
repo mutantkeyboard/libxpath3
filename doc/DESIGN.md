@@ -60,7 +60,7 @@ libxpath3 lives in its own repository on GNOME GitLab (`mutantkeyboard/libxpath3
 
 Clones of libxml2 and libxslt are used for:
 
-1. **Reference:** coding conventions, error handling, the fuzz harness and the Unicode generator to adapt, and edge-case behaviour in `xpath.c`.
+1. **Reference:** coding conventions, error handling, the fuzz harness and the range-table layout of the Unicode tables, and edge-case behaviour in `xpath.c`.
 2. **CI:** libxpath3 is built and tested against libxml2 master built from source, as well as against the latest release.
 3. **Small upstream changes:** if libxpath3 needs something libxml2 does not expose, that becomes a separate, focused MR to libxml2, not a workaround or a dependency on internals.
 
@@ -74,7 +74,7 @@ libxpath3/
 │   ├── libxpath3/xpath3.h      public API (single header to start)
 │   └── private/                 internal headers, not installed
 ├── *.c                          sources at the top level, as in libxml2
-├── codegen/                     generators and their committed output (built-in function table; Unicode tables, adapted from libxml2)
+├── codegen/                     generators and their committed output (built-in function table; Unicode tables from the Unicode Character Database)
 ├── fuzz/                        fuzzers and dictionaries, libxml2 style
 ├── test/                        unit tests
 ├── doc/                         Doxygen configuration and this document

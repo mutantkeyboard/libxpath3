@@ -66,6 +66,7 @@ typedef enum
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */
     XP3_ERR_FOCH0001,  /* code point not allowed in XML */
     XP3_ERR_FOCH0002,  /* unsupported collation */
+    XP3_ERR_FOCH0003,  /* unsupported normalization form */
     XP3_ERR_FOTY0013,  /* atomizing a function item */
     XP3_ERR_FOTY0014,  /* the string value of a function item */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */

@@ -65,6 +65,7 @@ fuzz_eval_seed = files(
     'seed-eval/siblings',
     'seed-eval/simple_map',
     'seed-eval/skipped_error',
+    'seed-eval/unicode',
 )
 
 fuzz_eval_replay = executable(

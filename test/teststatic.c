@@ -624,9 +624,11 @@ static const struct {
     { "(1, 2, 3) => subsequence(2)", "(constant integer:2 integer:3)" },
     { "count($v)",
       "(call Q{http://www.w3.org/2005/xpath-functions}count (var v))" },
-    { "upper-case('a' || 'b')",
-      "(call Q{http://www.w3.org/2005/xpath-functions}upper-case "
-      "(constant string:ab))" },
+    { "QName('', 'a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}QName "
+      "(constant string:) (constant string:ab))" },
+    { "upper-case('a' || 'b'), normalize-unicode('A\xcc\x8a', 'nfd')",
+      "(constant string:AB string:A\xcc\x8a)" },
     { "position()",
       "(call Q{http://www.w3.org/2005/xpath-functions}position)" },
     { "string()", "(call Q{http://www.w3.org/2005/xpath-functions}string)" },

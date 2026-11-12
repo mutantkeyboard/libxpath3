@@ -74,6 +74,37 @@ xp3NextChar(const xmlChar *str, size_t len, size_t *pos) {
 }
 
 /**
+ * Encode a code point, at most U+10FFFF, as UTF-8.
+ *
+ * @param c    the code point
+ * @param out  room for 4 bytes
+ * @returns the number of bytes written
+ */
+int
+xp3EncodeChar(int c, xmlChar *out) {
+    if (c < 0x80) {
+        out[0] = (xmlChar) c;
+        return(1);
+    }
+    if (c < 0x800) {
+        out[0] = (xmlChar) (0xC0 | (c >> 6));
+        out[1] = (xmlChar) (0x80 | (c & 0x3F));
+        return(2);
+    }
+    if (c < 0x10000) {
+        out[0] = (xmlChar) (0xE0 | (c >> 12));
+        out[1] = (xmlChar) (0x80 | ((c >> 6) & 0x3F));
+        out[2] = (xmlChar) (0x80 | (c & 0x3F));
+        return(3);
+    }
+    out[0] = (xmlChar) (0xF0 | (c >> 18));
+    out[1] = (xmlChar) (0x80 | ((c >> 12) & 0x3F));
+    out[2] = (xmlChar) (0x80 | ((c >> 6) & 0x3F));
+    out[3] = (xmlChar) (0x80 | (c & 0x3F));
+    return(4);
+}
+
+/**
  * Check whether every byte of a string is part of a character that
  * xp3NextChar() decodes, so that no byte counts as U+FFFD. Unlike
  * xmlCheckUTF8(), it rejects overlong forms, surrogates and code

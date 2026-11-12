@@ -1066,6 +1066,38 @@ static const xp3EvalCase xp3Cases[] = {
       "'\xf0\x90\x80\x80')",
       "integer:97 integer:65536 integer:99 string:abc string:zyx "
       "string:xx string:\xf0\x90\x80\x80" },
+    /* Full case mappings, which may change the length; no final sigma */
+    { "upper-case('abCd0'), lower-case('ABc!D'), upper-case(()), "
+      "lower-case(()), upper-case(''), upper-case('\xc3\x9f'), "
+      "string-length(upper-case('stra\xc3\x9f" "e')), "
+      "string-to-codepoints(lower-case('\xc4\xb0')), "
+      "lower-case('\xce\x9f\xce\xa3'), upper-case('\xef\xac\x83'), "
+      "lower-case(upper-case('\xc4\xb1'))",
+      "string:ABCD0 string:abc!d string: string: string: string:SS "
+      "integer:7 integer:105 integer:775 string:\xce\xbf\xcf\x83 "
+      "string:FFI string:i" },
+    { "upper-case(1)", "error:XPTY0004" },
+    { "lower-case(('a', 'b'))", "error:XPTY0004" },
+    /* The form is upper-case(normalize-space($form)); the empty one
+     * leaves the string as it is */
+    { "string-to-codepoints(normalize-unicode('A\xcc\x8a')), "
+      "string-to-codepoints(normalize-unicode('\xc3\x85', 'NFD')), "
+      "normalize-unicode('\xef\xac\x81', ' nfkc '), "
+      "string-to-codepoints(normalize-unicode('\xef\xac\x81', 'NFKD')), "
+      "normalize-unicode('A\xcc\x8a', '') eq 'A\xcc\x8a', "
+      "normalize-unicode('A\xcc\x8a', ' \t') eq 'A\xcc\x8a', "
+      "normalize-unicode('\xef\xac\x81', 'NfC') eq '\xef\xac\x81', "
+      "normalize-unicode(()), normalize-unicode((), 'NFD'), "
+      "normalize-unicode('', 'NFKD')",
+      "integer:197 integer:65 integer:778 string:fi integer:102 integer:105 "
+      "boolean:true boolean:true boolean:true string: string: string:" },
+    { "normalize-unicode('a', 'FULLY-NORMALIZED')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'NF C')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'nfc2')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'NF')", "error:FOCH0003" },
+    { "normalize-unicode('a', ())", "error:XPTY0004" },
+    /* The empty sequence gives the empty string, whatever the form */
+    { "normalize-unicode((), 'x')", "string:" },
 
     /* Substring matching (5.5) */
     { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
@@ -1427,8 +1459,8 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1, 2) => exactly-one()", "error:FORG0005" },
 
     /* Not implemented yet */
-    { "upper-case('a')", "error:UNSUPPORTED" },
-    { "'a' => upper-case()", "error:UNSUPPORTED" },
+    { "QName('', 'a')", "error:UNSUPPORTED" },
+    { "'' => QName('a')", "error:UNSUPPORTED" },
     { "subsequence(?, 1)", "error:UNSUPPORTED" },
     { "count#1", "error:UNSUPPORTED" },
     { "map { 1: 2 }", "error:UNSUPPORTED" },
@@ -3241,7 +3273,11 @@ testInvalidUtf8Matching(void) {
         /* Results copy the bytes as they are */
         { "translate(@c, 'a', 'A'), normalize-space(@c), substring(@c, 2, 1), "
           "string-length(@c)",
-          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" }
+          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" },
+        { "upper-case(@c), lower-case(@c), normalize-unicode(@c), "
+          "normalize-unicode(@c, 'NFKD'), normalize-unicode(@b || '\xcc\x81')",
+          "string:A\x82" "B string:a\x82" "b string:a\x82" "b "
+          "string:a\x82" "b string:\x82\xcc\x81" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     xmlDocPtr doc = parseDoc("<r><e/><e/></r>");
@@ -3469,6 +3505,11 @@ testStringSteps(void) {
     checkEval(sctx, ctx, "normalize-space($s)", "error:LIMIT");
     checkEval(sctx, ctx, "contains($s, 'b')", "error:LIMIT");
     checkEval(sctx, ctx, "translate($s, 'a', 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "upper-case($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "lower-case($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode($s, '')", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode('a', $s)", "error:LIMIT");
     checkEval(sctx, ctx, "compare($s, $s)", "error:LIMIT");
     checkEval(sctx, ctx, "$s eq $s", "error:LIMIT");
     checkEval(sctx, ctx, "$s = $s", "error:LIMIT");
@@ -3545,12 +3586,12 @@ testErrorPositions(void) {
     check(xp3Evaluate(expr, NULL, NULL) == NULL, "no error wanted");
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "upper-case(())", NULL);
+    expr = xp3Compile(NULL, BAD_CAST "QName((), 'a')", NULL);
     err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
           xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED") &&
           (xp3ErrorNamespace(err) == NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), " upper-case#1 ") !=
+          (strstr((const char *) xp3ErrorMessage(err), " QName#2 ") !=
            NULL), "UNSUPPORTED names a function without its namespace");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
@@ -4569,6 +4610,20 @@ static const char *const xp3AllocStringsExpected =
     "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
     "string:%C3%A9x "
     "string:http://www.w3.org/2005/xpath-functions/collation/codepoint";
+
+/* The case mappings and normalization, with results that grow, and a
+ * run of combining marks longer than a segment kept on the stack */
+static const char *const xp3AllocUnicode =
+    "(upper-case('stra\xc3\x9f" "e'), lower-case(x[1]), "
+    "string-length(upper-case(string-join(for $i in 1 to 100 "
+    "return '\xc3\x9f'))), normalize-unicode('A\xcc\x8a') eq '\xc3\x85', "
+    "normalize-unicode('\xef\xac\x81', 'NFKC'), "
+    "string-length(normalize-unicode('a' || string-join(for $i in 1 to 40 "
+    "return '\xcc\x81\xcc\xa3'), 'NFD')), normalize-unicode((), 'x'))";
+
+static const char *const xp3AllocUnicodeExpected =
+    "string:STRASSE string:one integer:200 boolean:true string:fi "
+    "integer:81 string:";
 
 /* The functions that compare values in sequences, on xp3DeepDoc */
 static const char *const xp3AllocCompare =
@@ -5707,6 +5762,7 @@ main(void) {
     testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    testAllocationFailures(xp3AllocUnicode, xp3AllocUnicodeExpected);
     /* The error fn:error raises is allocated too; when that fails, the
      * evaluation fails with NO_MEMORY instead */
     testAllocationFailures("error()", "error:FOER0000");

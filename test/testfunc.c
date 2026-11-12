@@ -365,6 +365,8 @@ testImplementations(void) {
         { "string-join", 1, 0 }, { "string-join", 2, 0 },
         { "substring", 2, 0 }, { "substring", 3, 0 },
         { "string-length", 1, 0 }, { "normalize-space", 1, 0 },
+        { "normalize-unicode", 1, 0 }, { "normalize-unicode", 2, 0 },
+        { "upper-case", 1, 0 }, { "lower-case", 1, 0 },
         { "translate", 3, 0 }, { "tokenize", 1, 0 },
         { "encode-for-uri", 1, 0 }, { "iri-to-uri", 1, 0 },
         { "escape-html-uri", 1, 0 },
@@ -455,9 +457,9 @@ testImplementations(void) {
     check(count == sizeof(implemented) / sizeof(implemented[0]) +
                    sizeof(math) / sizeof(math[0]),
           "no other function implemented");
-    check(xp3FuncImplementation(lookup(FN, "upper-case", 1,
+    check(xp3FuncImplementation(lookup(FN, "QName", 2,
                                        XP3_XPATH_31)) == NULL,
-          "fn:upper-case is not implemented yet");
+          "fn:QName is not implemented yet");
     check(xp3FuncImplementation(lookup(FN, "tokenize", 2,
                                        XP3_XPATH_31)) == NULL,
           "fn:tokenize#2 is not implemented yet");
