@@ -2606,12 +2606,15 @@ static const char *
 paramTypeName(const xp3FuncType *type) {
     switch (type->kind) {
         case XP3_AST_ATOMIC_TYPE:
-            return((type->type == XP3_SCHEMA_NUMERIC) ? "numeric" :
-                   typeName((xp3TypeId) type->type));
+            if (type->type == XP3_SCHEMA_NUMERIC)
+                return("numeric");
+            return(typeName((xp3TypeId) type->type));
         case XP3_AST_KIND_TEST:
-            return((type->type == XP3_KIND_ELEMENT) ? "element()" :
-                   (type->type == XP3_KIND_DOCUMENT) ? "document-node()" :
-                   "node()");
+            if (type->type == XP3_KIND_ELEMENT)
+                return("element()");
+            if (type->type == XP3_KIND_DOCUMENT)
+                return("document-node()");
+            return("node()");
         case XP3_AST_FUNCTION_TEST:
             return("function(*)");
         case XP3_AST_MAP_TEST:
@@ -2675,6 +2678,21 @@ paramItemMatches(xp3Item item, const xp3FuncType *type) {
     }
 }
 
+/* The occurrence indicator of a parameter type, for messages */
+static const char *
+occurrenceIndicator(const xp3FuncType *type) {
+    switch (type->occurrence) {
+        case XP3_OCC_OPTIONAL:
+            return("?");
+        case XP3_OCC_ZERO_OR_MORE:
+            return("*");
+        case XP3_OCC_ONE_OR_MORE:
+            return("+");
+        default:
+            return("");
+    }
+}
+
 /* Record an XPTY0004 for argument index (1-based) of a call, or for
  * its result if index is 0 */
 static void
@@ -2683,20 +2701,21 @@ argumentError(xp3Eval *ev, const xp3AstNode *call, int index,
               const xp3FuncType *type) {
     char name[XP3_NAME_BUF];
     char what[32];
+    const char *prefix;
 
     if (index > 0)
         snprintf(what, sizeof(what), "argument %d", index);
     else
         snprintf(what, sizeof(what), "the result");
+    if (type->kind == XP3_AST_ATOMIC_TYPE)
+        prefix = "xs:";
+    else
+        prefix = "";
     evalError(ev, XP3_ERR_XPTY0004, arg, "%s of %s#%d %s, where "
               "%s%s%s is expected", what,
               displayName(call, name, sizeof(name)),
-              (int) xp3AstChildCount(call), problem,
-              (type->kind == XP3_AST_ATOMIC_TYPE) ? "xs:" : "",
-              paramTypeName(type),
-              (type->occurrence == XP3_OCC_OPTIONAL) ? "?" :
-              (type->occurrence == XP3_OCC_ZERO_OR_MORE) ? "*" :
-              (type->occurrence == XP3_OCC_ONE_OR_MORE) ? "+" : "");
+              (int) xp3AstChildCount(call), problem, prefix,
+              paramTypeName(type), occurrenceIndicator(type));
 }
 
 /*
@@ -3338,10 +3357,15 @@ xp3FuncString(const xp3Value *value) {
 void
 xp3FunctionError(xp3FunctionCall *call, const xmlChar *uri,
                  const xmlChar *localName, const xmlChar *message) {
+    const xmlChar *ns;
+
     if (call == NULL)
         return;
-    xp3FuncUserError(&call->base, (uri != NULL) ? uri : BAD_CAST XP3_ERR_NS,
-                     localName, message);
+    if (uri != NULL)
+        ns = uri;
+    else
+        ns = BAD_CAST XP3_ERR_NS;
+    xp3FuncUserError(&call->base, ns, localName, message);
 }
 
 /**
