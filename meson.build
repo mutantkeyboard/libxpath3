@@ -43,6 +43,7 @@ xpath3_src = files(
     'xp3nodes.c',
     'xp3ops.c',
     'xp3parser.c',
+    'xp3regex.c',
     'xp3static.c',
     'xp3types.c',
     'xp3unicode.c',

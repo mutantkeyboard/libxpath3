@@ -171,12 +171,13 @@ coverage:
         coverage_format: cobertura
         path: coverage.xml
 
-# Fuzzing smoke test: two minutes of libFuzzer on compiling (xp3parse)
-# and two on evaluation (xp3eval, which also checks that optimizing
-# never changes a result), with ASan and UBSan, seeded with the corpora
-# and the dictionary. This catches regressions that the replayed corpora
-# miss; longer runs are fuzz:long below, and overnight runs happen
-# outside CI (.gitlab-ci/fuzz-long.sh).
+# Fuzzing smoke test: two minutes of libFuzzer on compiling (xp3parse),
+# two on evaluation (xp3eval, which also checks that optimizing never
+# changes a result) and two on regular expressions (xp3regex, which
+# compares the two matchers), with ASan and UBSan, seeded with the
+# corpora and the dictionaries. This catches regressions that the
+# replayed corpora miss; longer runs are fuzz:long below, and overnight
+# runs happen outside CI (.gitlab-ci/fuzz-long.sh).
 fuzz:
   stage: build
   variables:
@@ -185,9 +186,10 @@ fuzz:
   script:
     - meson setup build --werror -Dfuzzer=true -Db_sanitize=address,undefined -Db_lundef=false
     - meson compile -C build
-    - mkdir corpus corpus-eval && cp fuzz/seed/* corpus/ && cp fuzz/seed-eval/* corpus-eval/
+    - mkdir corpus corpus-eval corpus-regex && cp fuzz/seed/* corpus/ && cp fuzz/seed-eval/* corpus-eval/ && cp fuzz/seed-regex/* corpus-regex/
     - ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus
     - ./build/fuzz/xp3eval-fuzz -dict=fuzz/xp3.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus-eval
+    - ./build/fuzz/xp3regex-fuzz -dict=fuzz/regex.dict -max_len=10000 -max_total_time=120 -print_final_stats=1 corpus-regex
   artifacts:
     when: on_failure
     expire_in: 1 week
@@ -197,7 +199,7 @@ fuzz:
       - timeout-*
       - oom-*
 
-# Long fuzzing on demand: started by hand, it runs both fuzzers for 50
+# Long fuzzing on demand: started by hand, it runs the fuzzers for 50
 # minutes each in a child pipeline (.gitlab-ci/fuzz-long.yml). The job
 # succeeds once the child pipeline is created, so this pipeline never
 # waits for the fuzzers; their results are in the child pipeline.

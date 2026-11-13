@@ -289,3 +289,5 @@ Related upstream discussions:
 MIT. See [COPYING](COPYING).
 
 `codegen/unicode.inc` is derived from the Unicode Character Database, under the Unicode License v3 (see [COPYING](COPYING)).
+
+The two regular expression matchers in `xp3regex.c` are adapted from [re1](https://github.com/rsc/re1) by Russ Cox, under its BSD-3 licence (see [COPYING](COPYING)).
