@@ -15,10 +15,14 @@
  * A pattern is parsed by recursive descent into a tree, which is
  * compiled into a program for a small virtual machine: characters,
  * classes, anchors, back-references, SPLIT with a preferred branch,
- * JMP, SAVE for the positions of groups, and MATCH. Counted repetition
- * is expanded, so the parser limits the size of the program as well
- * as the nesting of groups and class subtractions; past either limit
- * it raises LIMIT.
+ * JMP, SAVE for the positions of groups, and MATCH. The parser limits
+ * the nesting of groups and class subtractions and the number of parts
+ * of a pattern; past either limit it raises LIMIT. Counted repetition
+ * is expanded, so a program can grow too large to build. Such a
+ * pattern still compiles, without a program, and keeps the fewest
+ * characters it can match: a search finds nothing where the rest of
+ * the subject is shorter than that, as for a{2147483647} on a short
+ * string, and fails with XP3_REGEX_TOO_LARGE otherwise.
  *
  * Character classes stay lists of items: ranges, blocks, categories
  * and the multi-character escapes, each with its complement. A class
@@ -118,6 +122,7 @@
 #include "private/xp3error.h"
 #include "private/xp3regex.h"
 #include "private/xp3unicode.h"
+#include "private/xp3value.h"
 
 /* Nesting of groups and class subtractions. The parser recurses a few
  * functions deep per level, and compiling the tree a few more. */
@@ -214,6 +219,9 @@ struct _xp3Regex {
     int multiline;          /* the m flag */
     int backrefs;           /* back-references: the backtracking matcher
                              * runs it */
+    int tooLarge;           /* the program was too large to build, and
+                             * there is none */
+    int64_t minLength;      /* the fewest characters a match takes */
 };
 
 /*
@@ -246,6 +254,8 @@ typedef struct {
     int32_t next;           /* the next sibling, or -1 */
     int64_t size;           /* instructions, at most
                              * XP3_REGEX_MAX_PROGRAM + 1 */
+    int64_t minLength;      /* the fewest characters it matches, at most
+                             * XP3_STRING_MAX + 1 */
 } xp3RegexNode;
 
 typedef struct {
@@ -437,23 +447,24 @@ checkParts(xp3RegexParser *p, int count) {
     return(-1);
 }
 
-/* Fail with LIMIT if a node compiles to too many instructions */
-static int
-checkSize(xp3RegexParser *p, int node) {
-    if (p->nodes[node].size <= XP3_REGEX_MAX_PROGRAM)
-        return(0);
-    parserError(p, XP3_ERR_LIMIT, p->pos,
-                "regular expression too large: more than %d instructions",
-                XP3_REGEX_MAX_PROGRAM);
-    return(-1);
-}
-
 /* A size, or the limit plus one if it is larger */
 static int64_t
 capSize(int64_t size) {
     if (size > XP3_REGEX_MAX_PROGRAM)
         return(XP3_REGEX_MAX_PROGRAM + 1);
     return(size);
+}
+
+/* A minimum length, or the longest string plus one if it is longer.
+ * Lengths stay at most 2^31, so neither the sum of two nor one times a
+ * count of at most INT32_MAX overflows before it is capped. */
+static int64_t
+capLength(int64_t length) {
+    int64_t limit = (int64_t) XP3_STRING_MAX + 1;
+
+    if (length > limit)
+        return(limit);
+    return(length);
 }
 
 /*
@@ -487,10 +498,13 @@ newNode(xp3RegexParser *p, xp3RegexNodeKind kind) {
         case XP3_RE_NODE_ANY:
         case XP3_RE_NODE_CLASS:
             node->size = 1;
+            node->minLength = 1;
             break;
         case XP3_RE_NODE_LINE_START:
         case XP3_RE_NODE_LINE_END:
         case XP3_RE_NODE_BACKREF:
+            /* Anchors take no character, and a back-reference may
+             * match the empty string, so their minimum length is 0 */
             node->size = 1;
             node->nullable = 1;
             break;
@@ -513,9 +527,9 @@ newValueNode(xp3RegexParser *p, xp3RegexNodeKind kind, int value) {
 }
 
 /* Append a child to a concatenation or alternation, and update its
- * size: an alternation takes a SPLIT and a JMP per alternative but the
- * last one. Returns 0, or -1 if the result is too large. */
-static int
+ * size, an alternation taking a SPLIT and a JMP per alternative but
+ * the last one, and its minimum length */
+static void
 appendChild(xp3RegexParser *p, int parent, int child) {
     xp3RegexNode *parentNode = &p->nodes[parent];
     const xp3RegexNode *childNode = &p->nodes[child];
@@ -529,17 +543,21 @@ appendChild(xp3RegexParser *p, int parent, int child) {
 
     if (parentNode->kind == XP3_RE_NODE_CONCAT) {
         parentNode->size = capSize(parentNode->size + childNode->size);
+        parentNode->minLength = capLength(parentNode->minLength +
+                                          childNode->minLength);
         if (!childNode->nullable)
             parentNode->nullable = 0;
     } else if (first) {
         parentNode->size = childNode->size;
+        parentNode->minLength = childNode->minLength;
         parentNode->nullable = childNode->nullable;
     } else {
         parentNode->size = capSize(parentNode->size + childNode->size + 2);
+        if (childNode->minLength < parentNode->minLength)
+            parentNode->minLength = childNode->minLength;
         if (childNode->nullable)
             parentNode->nullable = 1;
     }
-    return(checkSize(p, parent));
 }
 
 /* The size of a repetition of a body of size bodySize: the copies
@@ -1054,9 +1072,8 @@ parseGroup(xp3RegexParser *p, size_t offset) {
         return(-1);
     p->nodes[node].child = child;
     p->nodes[node].size = capSize(p->nodes[child].size + 2);
+    p->nodes[node].minLength = p->nodes[child].minLength;
     p->nodes[node].nullable = p->nodes[child].nullable;
-    if (checkSize(p, node) < 0)
-        return(-1);
     return(node);
 }
 
@@ -1160,8 +1177,8 @@ parseAtom(xp3RegexParser *p) {
 }
 
 /* Parse the digits of a quantity. A number above INT32_MAX is
- * FORX0002, as QT3 allows, since no program could hold that many
- * copies anyway. */
+ * FORX0002, as QT3 allows: no string is that long, so the pattern
+ * could only match by repeating something empty. */
 static int
 parseNumber(xp3RegexParser *p, size_t offset, int64_t *value) {
     int64_t number = 0;
@@ -1258,9 +1275,9 @@ parsePiece(xp3RegexParser *p) {
     p->nodes[node].min = min;
     p->nodes[node].max = max;
     p->nodes[node].size = repeatSize(p->nodes[atom].size, min, max);
+    p->nodes[node].minLength = capLength((int64_t) min *
+                                         p->nodes[atom].minLength);
     p->nodes[node].nullable = (min == 0) || p->nodes[atom].nullable;
-    if (checkSize(p, node) < 0)
-        return(-1);
     return(node);
 }
 
@@ -1280,8 +1297,7 @@ parseBranch(xp3RegexParser *p) {
         piece = parsePiece(p);
         if (piece < 0)
             return(-1);
-        if (appendChild(p, concat, piece) < 0)
-            return(-1);
+        appendChild(p, concat, piece);
     }
     return(concat);
 }
@@ -1300,15 +1316,13 @@ parseRegExp(xp3RegexParser *p) {
     alt = newNode(p, XP3_RE_NODE_ALT);
     if (alt < 0)
         return(-1);
-    if (appendChild(p, alt, branch) < 0)
-        return(-1);
+    appendChild(p, alt, branch);
     while (peekChar(p) == '|') {
         nextChar(p);
         branch = parseBranch(p);
         if (branch < 0)
             return(-1);
-        if (appendChild(p, alt, branch) < 0)
-            return(-1);
+        appendChild(p, alt, branch);
     }
     return(alt);
 }
@@ -1326,8 +1340,7 @@ parseLiteral(xp3RegexParser *p) {
 
         if (node < 0)
             return(-1);
-        if (appendChild(p, concat, node) < 0)
-            return(-1);
+        appendChild(p, concat, node);
     }
     return(concat);
 }
@@ -1627,7 +1640,10 @@ parsePattern(xp3RegexParser *p, const xp3RegexFlags *flags) {
 }
 
 /* Build the program of a parsed pattern: SAVE 0, the pattern, SAVE 1,
- * MATCH. Takes the classes and items of the parser. */
+ * MATCH. Takes the classes and items of the parser. A program with too
+ * many instructions, or too many for its groups, isn't built: the
+ * regular expression has none, and searches with it fail unless the
+ * subject is too short to match. */
 static xp3Regex *
 buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
     xp3RegexEmitter e;
@@ -1635,20 +1651,23 @@ buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
     int64_t length = p->nodes[root].size + 3;
     int64_t slots = 2 * ((int64_t) p->groupCount + 1);
 
-    if ((length > XP3_REGEX_MAX_PROGRAM) ||
-        (length * slots > XP3_REGEX_MAX_CAPTURE_CELLS)) {
-        parserError(p, XP3_ERR_LIMIT, p->len,
-                    "regular expression too large: too many instructions "
-                    "or groups");
-        return(NULL);
-    }
-
     regex = xmlMalloc(sizeof(*regex));
     if (regex == NULL) {
         parserNoMemory(p);
         return(NULL);
     }
     memset(regex, 0, sizeof(*regex));
+    regex->groupCount = p->groupCount;
+    regex->fold = flags->fold;
+    regex->multiline = flags->multiline;
+    regex->backrefs = p->backrefs;
+    regex->minLength = p->nodes[root].minLength;
+    if ((length > XP3_REGEX_MAX_PROGRAM) ||
+        (length * slots > XP3_REGEX_MAX_CAPTURE_CELLS)) {
+        regex->tooLarge = 1;
+        return(regex);
+    }
+
     regex->program = xmlMalloc((size_t) length * sizeof(xp3RegexInst));
     if (regex->program == NULL) {
         xmlFree(regex);
@@ -1670,10 +1689,6 @@ buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
     regex->markCount = e.markCount;
     regex->classes = p->classes;
     regex->items = p->items;
-    regex->groupCount = p->groupCount;
-    regex->fold = flags->fold;
-    regex->multiline = flags->multiline;
-    regex->backrefs = p->backrefs;
     p->classes = NULL;
     p->items = NULL;
     return(regex);
@@ -1691,11 +1706,12 @@ buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
  * @param level     the language level: the q flag needs XPath 3.0
  * @param error     set on failure: FORX0001 for the flags, FORX0002 for
  *                  the pattern, LIMIT for a pattern nested too deeply
- *                  or one whose program would be too large, or
- *                  NO_MEMORY. The message names the byte offset in the
- *                  pattern.
+ *                  or with too many parts, or NO_MEMORY. The message
+ *                  names the byte offset in the pattern.
  * @returns the compiled regular expression, to free with
- *          xp3RegexFree(), or NULL on error
+ *          xp3RegexFree(), or NULL on error. A pattern whose program
+ *          would be too large compiles too, and its searches return
+ *          XP3_REGEX_TOO_LARGE.
  */
 xp3Regex *
 xp3RegexCompile(const xmlChar *pattern, size_t len, const xmlChar *flags,
@@ -2743,6 +2759,19 @@ backtrackSearch(xp3RegexRun *run, size_t start, xp3RegexSpan *groups) {
  * Searching
  */
 
+/* Search with a regular expression that has no program: no match if
+ * the rest of the subject has fewer bytes than the fewest characters
+ * a match takes, which is exact, since every character takes at least
+ * one byte; otherwise XP3_REGEX_TOO_LARGE */
+static int
+searchTooLarge(const xp3Regex *regex, size_t len, size_t start) {
+    uint64_t left = (uint64_t) (len - start);
+
+    if (left < (uint64_t) regex->minLength)
+        return(0);
+    return(XP3_REGEX_TOO_LARGE);
+}
+
 static int
 search(const xp3Regex *regex, xp3RegexScratch *scratch,
        const xmlChar *subject, size_t len, size_t start,
@@ -2753,6 +2782,8 @@ search(const xp3Regex *regex, xp3RegexScratch *scratch,
 
     if (start > len)
         return(0);
+    if (regex->tooLarge)
+        return(searchTooLarge(regex, len, start));
     if (scratch == NULL) {
         own = xp3RegexNewScratch(regex);
         if (own == NULL)
@@ -2790,8 +2821,10 @@ search(const xp3Regex *regex, xp3RegexScratch *scratch,
  *                 for a match, group 0 being the whole match
  * @param steps    counts the work and charges it, or NULL
  * @returns 1 for a match, 0 for none, XP3_REGEX_NO_MEMORY if memory
- *          allocation failed, or XP3_REGEX_LIMIT if the charge function
- *          stopped the search
+ *          allocation failed, XP3_REGEX_LIMIT if the charge function
+ *          stopped the search, or XP3_REGEX_TOO_LARGE if the program of
+ *          the regular expression was too large to build and the rest
+ *          of the subject isn't too short for a match
  */
 int
 xp3RegexSearch(const xp3Regex *regex, xp3RegexScratch *scratch,

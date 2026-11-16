@@ -15,7 +15,9 @@
  * finish and disagree on whether there is a match or on any group.
  * Both run with a step budget, so that slow patterns end with LIMIT
  * instead of a timeout; the backtracking matcher may hit its budget
- * where the Pike VM doesn't, as it can take exponential time. The
+ * where the Pike VM doesn't, as it can take exponential time. A
+ * pattern whose program is too large to build ends its searches with
+ * XP3_REGEX_TOO_LARGE, unless the subject is too short to match. The
  * target also aborts on an error code compiling can't raise, and on a
  * group outside the subject.
  *

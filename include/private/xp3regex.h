@@ -81,11 +81,18 @@ typedef struct {
 #define XP3_REGEX_NO_MEMORY (-1)
 /** The charge function of xp3RegexSteps stopped the search */
 #define XP3_REGEX_LIMIT (-2)
+/**
+ * The program would be too large to build; the caller raises LIMIT.
+ * Kept apart from XP3_REGEX_LIMIT, the steps, so that the caller can
+ * say which limit it was.
+ */
+#define XP3_REGEX_TOO_LARGE (-3)
 
 /**
  * Compile a pattern with flags (F&O 3.1, 5.6). Errors are FORX0001 for
  * the flags, FORX0002 for the pattern, LIMIT for one nested too deeply
- * or one whose program is too large, and NO_MEMORY.
+ * or with too many parts, and NO_MEMORY. A pattern whose program would
+ * be too large compiles, and its searches return XP3_REGEX_TOO_LARGE.
  */
 xp3Regex *
 xp3RegexCompile(const xmlChar *pattern, size_t len, const xmlChar *flags,
@@ -110,8 +117,11 @@ xp3RegexFreeScratch(xp3RegexScratch *scratch);
 /**
  * Find the leftmost match at or after an offset of the subject, with a
  * scratch state, or NULL to allocate one for this search. Returns 1
- * and the groups for a match, 0 for none, or XP3_REGEX_NO_MEMORY or
- * XP3_REGEX_LIMIT.
+ * and the groups for a match, 0 for none, or XP3_REGEX_NO_MEMORY,
+ * XP3_REGEX_LIMIT or XP3_REGEX_TOO_LARGE. A regular expression whose
+ * program was too large to build finds no match where the rest of the
+ * subject has fewer bytes than the fewest characters it matches, and
+ * returns XP3_REGEX_TOO_LARGE otherwise.
  */
 int
 xp3RegexSearch(const xp3Regex *regex, xp3RegexScratch *scratch,

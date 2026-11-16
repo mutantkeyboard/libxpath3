@@ -210,6 +210,7 @@ static const struct {
     { "(a|ab)(c|bcd)(d*)", "", "abcd", "0,4 0,1 1,4 4,4" },
     { "(?:a|b)+?c", "", "abc", "0,3" },
     { "(?:){99999999}x", "", "x", "0,1" },
+    { "(a{200000}){0}b", "", "ab", "1,2 -1,-1" },
     /* Groups, numbered by their opening parenthesis (5.6.1.3) */
     { "A(BC(?:D(EF(GH[()]))))", "", "ABCDEFGH(", "0,9 1,9 4,9 6,9" },
     { "(a)(?:b)(c)", "", "abc", "0,3 0,1 2,3" },
@@ -474,6 +475,8 @@ static const struct {
     { "a\\b", "", XP3_XPATH_31, "FORX0002", 1 },
     { "\\0", "", XP3_XPATH_31, "FORX0002", 0 },
     { "\\x41", "", XP3_XPATH_31, "FORX0002", 0 },
+    /* A part too large to build doesn't hide a later syntax error */
+    { "a{200000}(", "", XP3_XPATH_31, "FORX0002", 9 },
     /* Classes */
     { "[a", "", XP3_XPATH_31, "FORX0002", 0 },
     { "[]", "", XP3_XPATH_31, "FORX0002", 0 },
@@ -639,17 +642,130 @@ testLimits(void) {
     expectError(pattern, "LIMIT", "1000 nested subtractions are too deep");
     free(pattern);
 
-    expectError("(a{1000}){1000}", "LIMIT", "a program of a million");
-    expectError("a{100001}", "LIMIT", "a program of 100001");
-    expectError("(?:a{100}|b){2000}", "LIMIT", "a large alternation");
-    expectError("((((((((((a{100}){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}",
-                "LIMIT", "doubling repetitions");
-    expectError("(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a).{50000}",
-                "LIMIT", "many instructions with many groups");
     regex = compile("a{50000}", "", XP3_XPATH_31);
     xp3RegexFree(regex);
     regex = compile("(?:(?:){1000}){1000}", "", XP3_XPATH_31);
     xp3RegexFree(regex);
+}
+
+/* Instructions over the capture-cell limit with 16 groups, though not
+ * over the program limit, and at least 50016 characters to match */
+#define XP3_TEST_MANY_GROUPS \
+    "(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a)(a).{50000}"
+
+/*
+ * Patterns whose program would be too large compile without one. A
+ * search finds nothing where the rest of the subject is shorter than
+ * the fewest characters the pattern matches, and otherwise fails with
+ * XP3_REGEX_TOO_LARGE.
+ */
+static const struct {
+    const char *pattern;
+    const char *subject;
+    size_t start;
+    int groupCount;
+    int expect;                 /* 0 for no match, or a search error */
+} tooLargeCases[] = {
+    { "a{2147483647}", "aaa", 0, 0, 0 },
+    { "(a{1000}){1000}", "aaa", 0, 1, 0 },
+    { "a{200000}", "aaaa", 2, 0, 0 },
+    { "(a?){200000}", "", 0, 1, XP3_REGEX_TOO_LARGE },
+    { "b|a{200000}", "", 0, 0, 0 },
+    { "b|a{200000}", "b", 0, 0, XP3_REGEX_TOO_LARGE },
+    { "(?:a{100}|b){2000}", "aaa", 0, 0, 0 },
+    { "((((((((((a{100}){2}){2}){2}){2}){2}){2}){2}){2}){2}){2}", "aaa", 0,
+      10, 0 },
+    { XP3_TEST_MANY_GROUPS, "aaa", 0, 16, 0 },
+    { "(a)\\1{200000}", "aa", 0, 1, XP3_REGEX_TOO_LARGE }
+};
+
+/* Search with both matchers, with a scratch and without, and check
+ * that each returns expect and leaves the groups as they were */
+static void
+expectSearch(const xp3Regex *regex, const char *subject, size_t len,
+             size_t start, int expect, const char *what) {
+    int groupCount = xp3RegexGroupCount(regex);
+    xp3RegexSpan *groups = calloc((size_t) groupCount + 1, sizeof(*groups));
+    xp3RegexScratch *scratch = xp3RegexNewScratch(regex);
+    int rets[4];
+    int i;
+
+    if ((groups == NULL) || (scratch == NULL)) {
+        fprintf(stderr, "testregex: out of memory\n");
+        exit(1);
+    }
+    groups[0].start = 7;
+    groups[0].end = 7;
+    rets[0] = xp3RegexSearch(regex, NULL, BAD_CAST subject, len, start,
+                             groups, NULL);
+    rets[1] = xp3RegexSearch(regex, scratch, BAD_CAST subject, len, start,
+                             groups, NULL);
+    rets[2] = xp3RegexSearchBacktracking(regex, NULL, BAD_CAST subject, len,
+                                         start, groups, NULL);
+    rets[3] = xp3RegexSearchBacktracking(regex, scratch, BAD_CAST subject,
+                                         len, start, groups, NULL);
+    for (i = 0; i < 4; i++)
+        check(rets[i] == expect, what);
+    check((groups[0].start == 7) && (groups[0].end == 7), what);
+    xp3RegexFreeScratch(scratch);
+    free(groups);
+}
+
+static void
+testTooLarge(void) {
+    size_t len = 100001;
+    char *subject = malloc(len + 1);
+    xp3Regex *regex;
+    size_t i;
+
+    if (subject == NULL) {
+        fprintf(stderr, "testregex: out of memory\n");
+        exit(1);
+    }
+    memset(subject, 'a', len);
+    subject[len] = 0;
+
+    for (i = 0; i < sizeof(tooLargeCases) / sizeof(tooLargeCases[0]); i++) {
+        char what[300];
+
+        regex = compile(tooLargeCases[i].pattern, "", XP3_XPATH_31);
+        if (regex == NULL)
+            continue;
+        snprintf(what, sizeof(what), "/%s/ on \"%s\" from %zu returns %d",
+                 tooLargeCases[i].pattern, tooLargeCases[i].subject,
+                 tooLargeCases[i].start, tooLargeCases[i].expect);
+        expectSearch(regex, tooLargeCases[i].subject,
+                     strlen(tooLargeCases[i].subject),
+                     tooLargeCases[i].start, tooLargeCases[i].expect, what);
+        snprintf(what, sizeof(what), "/%s/ has %d groups",
+                 tooLargeCases[i].pattern, tooLargeCases[i].groupCount);
+        check(xp3RegexGroupCount(regex) == tooLargeCases[i].groupCount,
+              what);
+        xp3RegexFree(regex);
+    }
+
+    /* The subject is long enough only from 100001 characters on */
+    regex = compile("a{100001}", "", XP3_XPATH_31);
+    if (regex != NULL) {
+        expectSearch(regex, subject, len, 0, XP3_REGEX_TOO_LARGE,
+                     "a{100001} on 100001 a is too large");
+        expectSearch(regex, subject, len - 1, 0, 0,
+                     "a{100001} on 100000 a finds nothing");
+        expectSearch(regex, subject, len, 1, 0,
+                     "a{100001} on 100001 a from 1 finds nothing");
+        xp3RegexFree(regex);
+    }
+
+    /* The same for too many capture cells, from 50016 characters on */
+    regex = compile(XP3_TEST_MANY_GROUPS, "", XP3_XPATH_31);
+    if (regex != NULL) {
+        expectSearch(regex, subject, 50016, 0, XP3_REGEX_TOO_LARGE,
+                     "many groups on 50016 a are too large");
+        expectSearch(regex, subject, 50015, 0, 0,
+                     "many groups on 50015 a find nothing");
+        xp3RegexFree(regex);
+    }
+    free(subject);
 }
 
 /*
@@ -807,7 +923,8 @@ testAllocationFailures(void) {
         { "(a|b)*(c)[\\p{Lu}-[X]]", 0 },
         { "(a|b)*(c)[\\p{Lu}-[X]]", 1 },
         { "(a+)\\1(?:x|y)*", 0 },
-        { "((((a)))){3}", 0 }
+        { "((((a)))){3}", 0 },
+        { "(a)|[b-c]{200000}", 0 }
     };
     const char *subject = "zzababcBaaaaxyx";
     size_t i;
@@ -907,6 +1024,7 @@ main(void) {
     testErrors();
     testFlags();
     testLimits();
+    testTooLarge();
     testPathological();
     testBacktrackingLimit();
     testSteps();
