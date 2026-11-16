@@ -24,6 +24,7 @@
 #include "private/xp3error.h"
 #include "private/xp3regex.h"
 #include "testalloc.h"
+#include "testtap.h"
 
 /* The steps the backtracking matcher may take when it is compared */
 #define XP3_TEST_BACKTRACK_STEPS 100000
@@ -31,14 +32,9 @@
 /* Room for the description of a match */
 #define XP3_TEST_SPANS 400
 
-static int failures = 0;
-
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /* Stops a search after a number of steps */
@@ -930,8 +926,7 @@ testAllocationFailures(void) {
     size_t i;
 
     if (!xp3TestAllocInstall()) {
-        printf("testregex: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -1019,19 +1014,16 @@ int
 main(void) {
     xmlInitParser();
 
-    testSearches();
-    testStartOffsets();
-    testErrors();
-    testFlags();
-    testLimits();
-    testTooLarge();
-    testPathological();
-    testBacktrackingLimit();
-    testSteps();
-    testAllocationFailures();
+    XP3_TEST_RUN(testSearches);
+    XP3_TEST_RUN(testStartOffsets);
+    XP3_TEST_RUN(testErrors);
+    XP3_TEST_RUN(testFlags);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testTooLarge);
+    XP3_TEST_RUN(testPathological);
+    XP3_TEST_RUN(testBacktrackingLimit);
+    XP3_TEST_RUN(testSteps);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    if (failures != 0)
-        return(1);
-    printf("testregex: OK\n");
-    return(0);
+    return(xp3TestDone());
 }

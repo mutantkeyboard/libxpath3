@@ -20,15 +20,11 @@
 #include "private/xp3context.h"
 #include "private/xp3func.h"
 #include "private/xp3static.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 #define FN BAD_CAST XP3_NS_FN
@@ -469,14 +465,12 @@ int
 main(void) {
     xmlInitParser();
 
-    testTable();
-    testLookup();
-    testFlags();
-    testNames();
-    testTypes();
-    testImplementations();
+    XP3_TEST_RUN(testTable);
+    XP3_TEST_RUN(testLookup);
+    XP3_TEST_RUN(testFlags);
+    XP3_TEST_RUN(testNames);
+    XP3_TEST_RUN(testTypes);
+    XP3_TEST_RUN(testImplementations);
 
-    if (failures == 0)
-        printf("testfunc: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

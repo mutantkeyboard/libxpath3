@@ -1,9 +1,12 @@
+# The unit tests report each test function as a TAP test, which Meson
+# lists one by one in its JUnit report (meson-logs/testlog.junit.xml).
 testbasic = executable(
     'testbasic',
     'testbasic.c',
+    'testtap.c',
     dependencies: xpath3_dep,
 )
-test('basic', testbasic)
+test('basic', testbasic, protocol: 'tap')
 
 # Tests of internal functions compile the library sources directly,
 # because the shared library only exports the public API.
@@ -16,13 +19,14 @@ foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
         'test' + name,
         'test' + name + '.c',
         'testalloc.c',
+        'testtap.c',
         xpath3_src,
         xp3version_h,
         include_directories: inc,
         dependencies: [libxml2_dep, m_dep],
         c_args: internal_test_args,
     )
-    test(name, exe)
+    test(name, exe, protocol: 'tap')
 endforeach
 
 # Several threads evaluating one compiled expression; the clang:tsan CI
@@ -32,7 +36,8 @@ if threads_dep.found() and host_machine.system() != 'windows'
     testthreads = executable(
         'testthreads',
         'testthreads.c',
+        'testtap.c',
         dependencies: [xpath3_dep, threads_dep],
     )
-    test('threads', testthreads)
+    test('threads', testthreads, protocol: 'tap')
 endif
