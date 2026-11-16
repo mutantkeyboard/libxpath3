@@ -26,7 +26,13 @@ foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
         dependencies: [libxml2_dep, m_dep],
         c_args: internal_test_args,
     )
-    test(name, exe, protocol: 'tap')
+    # testeval is the largest: under ASan with leak detection it needs
+    # more than Meson's default of 30 seconds
+    test_timeout = 30
+    if name == 'eval'
+        test_timeout = 120
+    endif
+    test(name, exe, protocol: 'tap', timeout: test_timeout)
 endforeach
 
 # Several threads evaluating one compiled expression; the clang:tsan CI
