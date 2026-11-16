@@ -24,15 +24,11 @@
 #include "private/xp3chars.h"
 #include "private/xp3unicode.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /*
@@ -495,8 +491,7 @@ testNormalizationAllocationFailures(void) {
     int i;
 
     if (!xp3TestAllocInstall()) {
-        printf("testunicode: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -529,16 +524,13 @@ main(void) {
     xmlInitParser();
     makeLongRun();
 
-    testCategories();
-    testBlocks();
-    testCaseMappings();
-    testCaseVariants();
-    testNormalization();
-    testNormalizationStops();
-    testNormalizationAllocationFailures();
+    XP3_TEST_RUN(testCategories);
+    XP3_TEST_RUN(testBlocks);
+    XP3_TEST_RUN(testCaseMappings);
+    XP3_TEST_RUN(testCaseVariants);
+    XP3_TEST_RUN(testNormalization);
+    XP3_TEST_RUN(testNormalizationStops);
+    XP3_TEST_RUN(testNormalizationAllocationFailures);
 
-    if (failures != 0)
-        return(1);
-    printf("testunicode: OK\n");
-    return(0);
+    return(xp3TestDone());
 }

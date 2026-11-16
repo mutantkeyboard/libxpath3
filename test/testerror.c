@@ -15,15 +15,11 @@
 #include <libxpath3/xpath3.h>
 #include "private/xp3error.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 static int
@@ -110,8 +106,7 @@ testAllocationFailures(void) {
     int i;
 
     if (!xp3TestAllocInstall()) {
-        printf("testerror: allocation-failure tests skipped: this libxml2 "
-               "ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -196,14 +191,12 @@ testReport(void) {
 
 int
 main(void) {
-    testCodeNames();
-    testNew();
-    testUser();
-    testNoMemoryAndNull();
-    testAllocationFailures();
-    testReport();
+    XP3_TEST_RUN(testCodeNames);
+    XP3_TEST_RUN(testNew);
+    XP3_TEST_RUN(testUser);
+    XP3_TEST_RUN(testNoMemoryAndNull);
+    XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testReport);
 
-    if (failures == 0)
-        printf("testerror: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

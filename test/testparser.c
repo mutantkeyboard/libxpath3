@@ -20,16 +20,15 @@
 #include "private/xp3error.h"
 #include "private/xp3parser.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
+
+/* The default static context, created in main() for the tests */
+static xp3StaticContext *sharedCtx;
 
 /*
  * Parse expr and print the tree. Returns the printed tree, to be freed
@@ -443,7 +442,8 @@ static const struct {
 };
 
 static void
-testTrees(const xp3StaticContext *ctx) {
+testTrees(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     size_t i;
 
     for (i = 0; i < sizeof(treeCases) / sizeof(treeCases[0]); i++) {
@@ -602,7 +602,8 @@ static const struct {
 };
 
 static void
-testErrors(const xp3StaticContext *ctx) {
+testErrors(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     size_t i;
 
     for (i = 0; i < sizeof(errorCases) / sizeof(errorCases[0]); i++) {
@@ -650,7 +651,9 @@ expectMessage(const xp3StaticContext *ctx, const char *expr,
 }
 
 static void
-testMessages(const xp3StaticContext *ctx) {
+testMessages(void) {
+    const xp3StaticContext *ctx = sharedCtx;
+
     expectMessage(ctx, "1 2", "unexpected '2'");
     expectMessage(ctx, "(1", "expected ')', found end of expression");
     expectMessage(ctx, "foo::a", "unknown axis 'foo'");
@@ -763,7 +766,8 @@ testLevels(void) {
 }
 
 static void
-testPositions(const xp3StaticContext *ctx) {
+testPositions(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     static const char expr[] = "1 +\n  foo[2]";
     xp3Ast *ast;
     xp3AstNode *path;
@@ -784,7 +788,8 @@ testPositions(const xp3StaticContext *ctx) {
 }
 
 static void
-testArguments(const xp3StaticContext *ctx) {
+testArguments(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     xp3Error *err = NULL;
     xp3Ast *ast;
     xmlChar *tree;
@@ -899,7 +904,8 @@ expectLimit(const xp3StaticContext *ctx, char *expr, int column,
 }
 
 static void
-testLimits(const xp3StaticContext *defaultCtx) {
+testLimits(void) {
+    const xp3StaticContext *defaultCtx = sharedCtx;
     xp3StaticContext *ctx = xp3NewStaticContext();
 
     /* With a limit of 30, three expressions can nest (cost 10 each),
@@ -962,7 +968,7 @@ static const char largeExpr[] =
     "if (1) then some $v in () satisfies true() else 0";
 
 static void
-testAllocationFailures(const xp3StaticContext *ctx, const char *expr) {
+checkAllocationFailures(const xp3StaticContext *ctx, const char *expr) {
     xmlChar *expected;
     xp3Error *err = NULL;
     int i;
@@ -972,8 +978,7 @@ testAllocationFailures(const xp3StaticContext *ctx, const char *expr) {
     xp3ErrorFree(err);
 
     if (!xp3TestAllocInstall()) {
-        printf("testparser: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFree(expected);
         return;
@@ -1011,35 +1016,35 @@ testAllocationFailures(const xp3StaticContext *ctx, const char *expr) {
     xmlFree(expected);
 }
 
+static void
+testAllocationFailures(void) {
+    char *literal;
+
+    checkAllocationFailures(sharedCtx, largeExpr);
+    /* A string longer than an arena block gets its own allocation */
+    literal = repeat("x", 5000, "'");
+    if (literal != NULL) {
+        literal[0] = '\'';
+        checkAllocationFailures(sharedCtx, literal);
+        free(literal);
+    }
+}
+
 int
 main(void) {
-    xp3StaticContext *ctx;
-
     xmlInitParser();
-    ctx = xp3NewStaticContext();
+    sharedCtx = xp3NewStaticContext();
 
-    testTrees(ctx);
-    testErrors(ctx);
-    testMessages(ctx);
-    testLevels();
-    testPositions(ctx);
-    testArguments(ctx);
-    testLimits(ctx);
-    testAllocationFailures(ctx, largeExpr);
-    /* A string longer than an arena block gets its own allocation */
-    {
-        char *literal = repeat("x", 5000, "'");
+    XP3_TEST_RUN(testTrees);
+    XP3_TEST_RUN(testErrors);
+    XP3_TEST_RUN(testMessages);
+    XP3_TEST_RUN(testLevels);
+    XP3_TEST_RUN(testPositions);
+    XP3_TEST_RUN(testArguments);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testAllocationFailures);
 
-        if (literal != NULL) {
-            literal[0] = '\'';
-            testAllocationFailures(ctx, literal);
-            free(literal);
-        }
-    }
+    xp3FreeStaticContext(sharedCtx);
 
-    xp3FreeStaticContext(ctx);
-
-    if (failures == 0)
-        printf("testparser: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }
