@@ -16,25 +16,25 @@
 
 #include <libxpath3/xpath3.h>
 
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
-int
-main(void) {
-    static const char xml[] = "<root><item>1</item></root>";
-    xmlDocPtr doc;
-
+static void
+testVersion(void) {
     check(strcmp(xp3GetVersion(), XP3_VERSION_STRING) == 0,
           "run-time version string matches headers");
     check(xp3GetVersionNumber() == XP3_VERSION_NUMBER,
           "run-time version number matches headers");
+}
+
+static void
+testLibxml2(void) {
+    static const char xml[] = "<root><item>1</item></root>";
+    xmlDocPtr doc;
 
     doc = xmlReadMemory(xml, (int) sizeof(xml) - 1, "test.xml", NULL, 0);
     check(doc != NULL, "libxml2 parses a document");
@@ -46,9 +46,15 @@ main(void) {
               "root element is <root>");
         xmlFreeDoc(doc);
     }
+}
 
-    if (failures == 0)
-        printf("libxpath3 %s, libxml2 %s: OK\n",
-               xp3GetVersion(), xmlParserVersion);
-    return(failures == 0 ? 0 : 1);
+int
+main(void) {
+    printf("# libxpath3 %s, libxml2 %s\n", xp3GetVersion(),
+           xmlParserVersion);
+
+    XP3_TEST_RUN(testVersion);
+    XP3_TEST_RUN(testLibxml2);
+
+    return(xp3TestDone());
 }

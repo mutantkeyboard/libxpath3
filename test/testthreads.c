@@ -28,6 +28,8 @@
 
 #include <libxpath3/xpath3.h>
 
+#include "testtap.h"
+
 #define XP3_THREADS 8
 #define XP3_EVALUATIONS 300
 
@@ -164,17 +166,11 @@ evaluateMany(void *arg) {
     return(NULL);
 }
 
-int
-main(void) {
-    pthread_t threads[XP3_THREADS];
-    xp3ThreadState states[XP3_THREADS];
+/* The shared document and expressions */
+static void
+testSetUp(void) {
     xp3StaticContext *sctx;
-    xp3DynamicContext *ctx;
-    xp3Sequence *result;
-    int failures = 0;
-    int i;
 
-    xmlInitParser();
     threadDoc = xmlReadMemory(xp3ThreadDoc, (int) strlen(xp3ThreadDoc),
                               "threads.xml", NULL, 0);
     sctx = xp3NewStaticContext();
@@ -188,22 +184,27 @@ main(void) {
         (xp3RegisterFunction(sctx, BAD_CAST "ex:twice($a as xs:integer) as "
                              "xs:integer", XP3_FUNCTION_DETERMINISTIC,
                              threadTwice, NULL, NULL) < 0)) {
-        fprintf(stderr, "FAIL: test set up\n");
-        return(1);
+        xp3TestFail("test set up");
+        xp3FreeStaticContext(sctx);
+        return;
     }
     threadExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExpr, NULL);
     threadExtExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExtExpr, NULL);
     xp3FreeStaticContext(sctx);
-    if ((threadExpr == NULL) || (threadExtExpr == NULL)) {
-        fprintf(stderr, "FAIL: expression compiled\n");
-        return(1);
-    }
+    xp3TestCheck((threadExpr != NULL) && (threadExtExpr != NULL),
+                 "expression compiled");
+}
 
-    /* The expected result, from one thread first */
+/* The expected result, from one thread first */
+static void
+testOneThread(void) {
+    xp3DynamicContext *ctx;
+    xp3Sequence *result;
+
     ctx = newThreadContext();
     if (ctx == NULL) {
-        fprintf(stderr, "FAIL: dynamic context set up\n");
-        return(1);
+        xp3TestFail("dynamic context set up");
+        return;
     }
     result = xp3Evaluate(threadExpr, ctx, NULL);
     describe(result, expected, sizeof(expected));
@@ -217,33 +218,48 @@ main(void) {
                "1 7.5 yes 0.1 4 5 two three shared 5.5 "
                "a 10 yes 0.1 4 5 two three shared 5.5 "
                "2.5 12.5 yes 0.1 4 5 two three shared 5.5 "
-               "1 15 yes 0.1 4 5 two three shared 5.5") != 0) {
-        fprintf(stderr, "FAIL: unexpected result %s\n", expected);
-        failures++;
-    }
+               "1 15 yes 0.1 4 5 two three shared 5.5") != 0)
+        xp3TestFail("unexpected result %s", expected);
+}
+
+static void
+testManyThreads(void) {
+    pthread_t threads[XP3_THREADS];
+    xp3ThreadState states[XP3_THREADS];
+    int created = 0;
+    int i;
 
     for (i = 0; i < XP3_THREADS; i++) {
         snprintf(states[i].label, sizeof(states[i].label), "t%d", i);
         states[i].mismatches = 0;
         if (pthread_create(&threads[i], NULL, evaluateMany,
                            &states[i]) != 0) {
-            fprintf(stderr, "FAIL: thread %d not created\n", i);
-            return(1);
+            xp3TestFail("thread %d not created", i);
+            break;
         }
+        created++;
     }
-    for (i = 0; i < XP3_THREADS; i++) {
+    for (i = 0; i < created; i++) {
         pthread_join(threads[i], NULL);
-        if (states[i].mismatches > 0) {
-            fprintf(stderr, "FAIL: thread %d got %d wrong results\n", i,
-                    states[i].mismatches);
-            failures++;
-        }
+        if (states[i].mismatches > 0)
+            xp3TestFail("thread %d got %d wrong results", i,
+                        states[i].mismatches);
+    }
+}
+
+int
+main(void) {
+    xmlInitParser();
+
+    XP3_TEST_RUN(testSetUp);
+    /* Without the shared expressions, there is nothing to evaluate */
+    if (xp3TestFailures() == 0) {
+        XP3_TEST_RUN(testOneThread);
+        XP3_TEST_RUN(testManyThreads);
     }
 
     xp3FreeExpr(threadExpr);
     xp3FreeExpr(threadExtExpr);
     xmlFreeDoc(threadDoc);
-    if (failures == 0)
-        printf("testthreads: OK\n");
-    return((failures == 0) ? 0 : 1);
+    return(xp3TestDone());
 }

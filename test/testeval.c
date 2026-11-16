@@ -35,15 +35,11 @@
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 static const char xp3TestDoc[] =
@@ -158,9 +154,8 @@ checkEval(const xp3StaticContext *sctx, xp3DynamicContext *ctx,
 
     run(sctx, ctx, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s\n  expected: %s\n  actual:   %s\n",
-                expr, expected, actual);
-        failures++;
+        xp3TestFail("%s\n  expected: %s\n  actual:   %s",
+                    expr, expected, actual);
     }
 }
 
@@ -1620,8 +1615,7 @@ checkRepeated(const char *head, const char *part, size_t count,
     }
     run(NULL, NULL, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s: %s\n", what, actual);
-        failures++;
+        xp3TestFail("%s: %s", what, actual);
     }
     xmlFree(expr);
 }
@@ -1742,9 +1736,8 @@ checkManyBindings(const char *head, const char *part, const char *tail,
     snprintf(expr + used, size - used, "%s", tail);
     run(NULL, NULL, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s with %lu bindings: %s\n", head,
-                (unsigned long) count, actual);
-        failures++;
+        xp3TestFail("%s with %lu bindings: %s", head,
+                    (unsigned long) count, actual);
     }
     xmlFree(expr);
 }
@@ -3954,9 +3947,8 @@ checkAtomicSequence(xp3AtomicType type, const char *first,
         snprintf(actual, sizeof(actual), "error:%s",
                  (err != NULL) ? (const char *) xp3ErrorCode(err) : "none");
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: atomic sequence of %s\n  expected: %s\n"
-                "  actual:   %s\n", first, expected, actual);
-        failures++;
+        xp3TestFail("atomic sequence of %s\n  expected: %s\n"
+                    "  actual:   %s", first, expected, actual);
     }
     check((seq == NULL) == (err != NULL), "an error exactly on failure");
     xp3FreeSequence(seq);
@@ -4028,8 +4020,7 @@ testAtomicSequences(void) {
 
     /* Allocation failures: NULL with NO_MEMORY */
     if (!xp3TestAllocInstall()) {
-        printf("testeval: atomic sequence allocation-failure test "
-               "skipped\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -4107,8 +4098,7 @@ testBindingAllocationFailures(void) {
 
     check(bindingWork(decimal), "binding work without failures");
     if (!xp3TestAllocInstall()) {
-        printf("testeval: binding allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xp3FreeSequence(decimal);
         return;
@@ -4441,7 +4431,8 @@ testRandomPaths(void) {
         goto done;
     }
     plain->noOptimize = 1;
-    for (docIndex = 0; (docIndex < XP3_RANDOM_DOCS) && (failures < 20);
+    for (docIndex = 0;
+         (docIndex < XP3_RANDOM_DOCS) && (xp3TestFailures() < 20);
          docIndex++) {
         char xml[16384];
         xmlDocPtr doc;
@@ -4481,10 +4472,9 @@ testRandomPaths(void) {
             if (strchr(unoptimized, '#') != NULL)
                 withNodes++;
             if (strcmp(optimized, unoptimized) != 0) {
-                fprintf(stderr, "FAIL: optimizing changes %s on %s\n"
-                        "  optimized:   %s\n  unoptimized: %s\n", expr, xml,
-                        optimized, unoptimized);
-                failures++;
+                xp3TestFail("optimizing changes %s on %s\n"
+                            "  optimized:   %s\n  unoptimized: %s", expr, xml,
+                            optimized, unoptimized);
             }
         }
         xmlFreeDoc(doc);
@@ -4498,9 +4488,8 @@ testRandomPaths(void) {
      * means the generator has drifted and tests little.
      */
     if (withNodes * 4 < compared) {
-        fprintf(stderr, "FAIL: only %d of %d random paths find nodes\n",
-                withNodes, compared);
-        failures++;
+        xp3TestFail("only %d of %d random paths find nodes",
+                    withNodes, compared);
     }
 
 done:
@@ -4779,8 +4768,8 @@ describeOutcome(const xp3Sequence *result, const char *code, char *out,
  * a failed allocation must still end in NO_MEMORY, never that error.
  */
 static void
-testAllocationFailuresIn(const char *xml, const char *text,
-                         const char *expected) {
+checkAllocationFailuresIn(const char *xml, const char *text,
+                          const char *expected) {
     xmlDocPtr doc = parseDoc(xml);
     char actual[2048];
     char code[64];
@@ -4797,8 +4786,7 @@ testAllocationFailuresIn(const char *xml, const char *text,
     xp3FreeSequence(result);
 
     if (!xp3TestAllocInstall()) {
-        printf("testeval: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFreeDoc(doc);
         return;
@@ -4831,8 +4819,37 @@ testAllocationFailuresIn(const char *xml, const char *text,
 }
 
 static void
-testAllocationFailures(const char *text, const char *expected) {
-    testAllocationFailuresIn(xp3TestDoc, text, expected);
+checkAllocationFailures(const char *text, const char *expected) {
+    checkAllocationFailuresIn(xp3TestDoc, text, expected);
+}
+
+static void
+testAllocationFailures(void) {
+    checkAllocationFailures(xp3AllocExpr, xp3AllocExpected);
+    checkAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    checkAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
+    checkAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    checkAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
+    checkAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
+    checkAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    checkAllocationFailures(xp3AllocUnicode, xp3AllocUnicodeExpected);
+    /* The error fn:error raises is allocated too; when that fails, the
+     * evaluation fails with NO_MEMORY instead */
+    checkAllocationFailures("error()", "error:FOER0000");
+    checkAllocationFailures("error((), 'boom')", "error:FOER0000");
+    checkAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
+                              xp3AllocCompareExpected);
+    checkAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
+                              xp3AllocNamesExpected);
+    checkAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
+    checkAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
+    checkAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
+                              xp3AllocNamespacesExpected);
+#if LIBXML_VERSION >= 21300
+    checkAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
+                              xp3AllocBaseUriExpected);
+#endif
+    checkAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
 }
 
 /*
@@ -5534,7 +5551,7 @@ testSequenceRefAllocationFailures(void) {
         goto done;
     }
     if (!xp3TestAllocInstall()) {
-        printf("testeval: xp3SequenceRef allocation-failure test skipped\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         goto done;
     }
@@ -5569,7 +5586,7 @@ done:
 
 /*
  * Register, compile and evaluate with each allocation failing in turn,
- * as testAllocationFailuresIn() does: the arguments are converted, the
+ * as checkAllocationFailuresIn() does: the arguments are converted, the
  * implementations allocate their results, the results are converted,
  * and the errors they raise are allocated too.
  */
@@ -5623,8 +5640,8 @@ done:
 }
 
 static void
-testExtensionAllocationFailures(const char *const *names, const char *text,
-                                const char *expected) {
+checkExtensionAllocationFailures(const char *const *names,
+                                 const char *text, const char *expected) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3Sequence *result;
     char actual[1024];
@@ -5641,8 +5658,7 @@ testExtensionAllocationFailures(const char *const *names, const char *text,
     xp3FreeSequence(result);
 
     if (!xp3TestAllocInstall()) {
-        printf("testeval: extension allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFreeDoc(doc);
         return;
@@ -5671,6 +5687,17 @@ testExtensionAllocationFailures(const char *const *names, const char *text,
     check(i > 0 && i < 5000, "extension allocation failure points exercised");
     xp3TestAllocRestore();
     xmlFreeDoc(doc);
+}
+
+static void
+testExtensionAllocationFailures(void) {
+    checkExtensionAllocationFailures(xp3AllocExtensionNames,
+                                     xp3AllocExtension,
+                                     xp3AllocExtensionExpected);
+    checkExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
+                                     "error:oops");
+    checkExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
+                                     "error:XPTY0004");
 }
 /*
  * Numbers longer than the buffer for parsing them with a decimal comma:
@@ -5702,13 +5729,12 @@ testLocale(void) {
     }
     if (i == sizeof(names) / sizeof(names[0]) ||
         strcmp(localeconv()->decimal_point, ",") != 0) {
-        printf("testeval: locale test skipped: no locale with a decimal "
-               "comma\n");
+        xp3TestSkip("no locale with a decimal comma");
         setlocale(LC_NUMERIC, "C");
         return;
     }
     checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
-    testAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
+    checkAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
     setlocale(LC_NUMERIC, "C");
 }
 
@@ -5716,87 +5742,56 @@ int
 main(void) {
     xmlInitParser();
 
-    testCases();
-    testConstants();
-    testRandomPaths();
-    testEffectiveBoolean();
-    testHugeLiteral();
-    testHugeNumbers();
-    testQNameComparison();
-    testManyBindings();
-    testFocus();
-    testFunctionFocus();
-    testAggregateLevels();
-    testStringLevels();
-    testDeepEqual();
-    testNodeNames();
-    testTreeShape();
-    testPath();
-    testNamespaces();
-    testUris();
-    testGenerateId();
-    testDeepTrees();
-    testTreeShapeSteps();
-    testPathSteps();
-    testNamespaceSteps();
-    testBaseUriSteps();
-    testUserErrors();
-    testTreeChange();
-    testInvalidUtf8();
-    testInvalidUtf8Matching();
-    testVariables();
-    testLimits();
-    testStepLimit();
-    testStringSteps();
-    testBoolean();
-    testErrorPositions();
-    testSequences();
-    testReadingItems();
-    testBuildingSequences();
-    testAtomicSequences();
-    testBindingAllocationFailures();
-    testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
-    testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
-    testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
-    testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
-    testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
-    testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
-    testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
-    testAllocationFailures(xp3AllocUnicode, xp3AllocUnicodeExpected);
-    /* The error fn:error raises is allocated too; when that fails, the
-     * evaluation fails with NO_MEMORY instead */
-    testAllocationFailures("error()", "error:FOER0000");
-    testAllocationFailures("error((), 'boom')", "error:FOER0000");
-    testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
-                             xp3AllocCompareExpected);
-    testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
-                             xp3AllocNamesExpected);
-    testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
-    testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
-    testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
-                             xp3AllocNamespacesExpected);
-#if LIBXML_VERSION >= 21300
-    testAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
-                             xp3AllocBaseUriExpected);
-#endif
-    testAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
-    testExtensionFunctions();
-    testExtensionErrors();
-    testExtensionUserData();
-    testExtensionFolding();
-    testExtensionAfterFree();
-    testExtensionLimits();
-    testExtensionKeep();
-    testSequenceRefAllocationFailures();
-    testExtensionAllocationFailures(xp3AllocExtensionNames, xp3AllocExtension,
-                                    xp3AllocExtensionExpected);
-    testExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
-                                    "error:oops");
-    testExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
-                                    "error:XPTY0004");
-    testLocale();
+    XP3_TEST_RUN(testCases);
+    XP3_TEST_RUN(testConstants);
+    XP3_TEST_RUN(testRandomPaths);
+    XP3_TEST_RUN(testEffectiveBoolean);
+    XP3_TEST_RUN(testHugeLiteral);
+    XP3_TEST_RUN(testHugeNumbers);
+    XP3_TEST_RUN(testQNameComparison);
+    XP3_TEST_RUN(testManyBindings);
+    XP3_TEST_RUN(testFocus);
+    XP3_TEST_RUN(testFunctionFocus);
+    XP3_TEST_RUN(testAggregateLevels);
+    XP3_TEST_RUN(testStringLevels);
+    XP3_TEST_RUN(testDeepEqual);
+    XP3_TEST_RUN(testNodeNames);
+    XP3_TEST_RUN(testTreeShape);
+    XP3_TEST_RUN(testPath);
+    XP3_TEST_RUN(testNamespaces);
+    XP3_TEST_RUN(testUris);
+    XP3_TEST_RUN(testGenerateId);
+    XP3_TEST_RUN(testDeepTrees);
+    XP3_TEST_RUN(testTreeShapeSteps);
+    XP3_TEST_RUN(testPathSteps);
+    XP3_TEST_RUN(testNamespaceSteps);
+    XP3_TEST_RUN(testBaseUriSteps);
+    XP3_TEST_RUN(testUserErrors);
+    XP3_TEST_RUN(testTreeChange);
+    XP3_TEST_RUN(testInvalidUtf8);
+    XP3_TEST_RUN(testInvalidUtf8Matching);
+    XP3_TEST_RUN(testVariables);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testStepLimit);
+    XP3_TEST_RUN(testStringSteps);
+    XP3_TEST_RUN(testBoolean);
+    XP3_TEST_RUN(testErrorPositions);
+    XP3_TEST_RUN(testSequences);
+    XP3_TEST_RUN(testReadingItems);
+    XP3_TEST_RUN(testBuildingSequences);
+    XP3_TEST_RUN(testAtomicSequences);
+    XP3_TEST_RUN(testBindingAllocationFailures);
+    XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testExtensionFunctions);
+    XP3_TEST_RUN(testExtensionErrors);
+    XP3_TEST_RUN(testExtensionUserData);
+    XP3_TEST_RUN(testExtensionFolding);
+    XP3_TEST_RUN(testExtensionAfterFree);
+    XP3_TEST_RUN(testExtensionLimits);
+    XP3_TEST_RUN(testExtensionKeep);
+    XP3_TEST_RUN(testSequenceRefAllocationFailures);
+    XP3_TEST_RUN(testExtensionAllocationFailures);
+    XP3_TEST_RUN(testLocale);
 
-    if (failures == 0)
-        printf("testeval: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

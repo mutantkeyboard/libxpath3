@@ -17,16 +17,15 @@
 #include "private/xp3context.h"
 #include "private/xp3error.h"
 #include "private/xp3lexer.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
+
+/* The default static context, created in main() for the tests */
+static xp3StaticContext *sharedCtx;
 
 /* Token kinds whose text is shown in the description */
 static int
@@ -126,7 +125,8 @@ static const struct {
 };
 
 static void
-testTokens(const xp3StaticContext *ctx) {
+testTokens(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     size_t i;
 
     for (i = 0; i < sizeof(tokenCases) / sizeof(tokenCases[0]); i++) {
@@ -188,7 +188,8 @@ static const struct {
 };
 
 static void
-testErrors(const xp3StaticContext *ctx) {
+testErrors(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     size_t i;
 
     for (i = 0; i < sizeof(errorCases) / sizeof(errorCases[0]); i++) {
@@ -218,7 +219,8 @@ testErrors(const xp3StaticContext *ctx) {
 }
 
 static void
-testPositions(const xp3StaticContext *ctx) {
+testPositions(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     static const char expr[] = "a\n  bb\r\nc größe x";
     static const struct { int line; int column; } expected[] = {
         { 1, 1 },   /* a */
@@ -249,7 +251,8 @@ testPositions(const xp3StaticContext *ctx) {
 }
 
 static void
-testSeparators(const xp3StaticContext *ctx) {
+testSeparators(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     static const char expr[] = "pre:local *:any Q{urn:x}name";
     xp3Lexer lex;
     xp3Token tok;
@@ -270,7 +273,8 @@ testSeparators(const xp3StaticContext *ctx) {
 }
 
 static void
-testPeekAndRestore(const xp3StaticContext *ctx) {
+testPeekAndRestore(void) {
+    const xp3StaticContext *ctx = sharedCtx;
     static const char expr[] = "if (x)";
     xp3Lexer lex;
     xp3Lexer saved;
@@ -397,23 +401,19 @@ testNameChars(void) {
 
 int
 main(void) {
-    xp3StaticContext *ctx;
-
     xmlInitParser();
-    ctx = xp3NewStaticContext();
+    sharedCtx = xp3NewStaticContext();
 
-    testTokens(ctx);
-    testErrors(ctx);
-    testPositions(ctx);
-    testSeparators(ctx);
-    testPeekAndRestore(ctx);
-    testLimits();
-    testKindNames();
-    testNameChars();
+    XP3_TEST_RUN(testTokens);
+    XP3_TEST_RUN(testErrors);
+    XP3_TEST_RUN(testPositions);
+    XP3_TEST_RUN(testSeparators);
+    XP3_TEST_RUN(testPeekAndRestore);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testKindNames);
+    XP3_TEST_RUN(testNameChars);
 
-    xp3FreeStaticContext(ctx);
+    xp3FreeStaticContext(sharedCtx);
 
-    if (failures == 0)
-        printf("testlexer: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

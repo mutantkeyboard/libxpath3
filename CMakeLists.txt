@@ -88,14 +88,14 @@ set_target_properties(xpath3 PROPERTIES
 )
 
 if(BUILD_TESTING)
-    add_executable(testbasic test/testbasic.c)
+    add_executable(testbasic test/testbasic.c test/testtap.c)
     target_link_libraries(testbasic PRIVATE xpath3)
     add_test(NAME basic COMMAND testbasic)
 
     # Several threads evaluating one compiled expression, POSIX only
     find_package(Threads)
     if(CMAKE_USE_PTHREADS_INIT AND NOT WIN32)
-        add_executable(testthreads test/testthreads.c)
+        add_executable(testthreads test/testthreads.c test/testtap.c)
         target_link_libraries(testthreads PRIVATE xpath3 Threads::Threads)
         add_test(NAME threads COMMAND testthreads)
     endif()
@@ -104,7 +104,8 @@ if(BUILD_TESTING)
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval
             unicode regex)
-        add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
+        add_executable(test${name} test/test${name}.c test/testalloc.c
+            test/testtap.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
         target_include_directories(test${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include

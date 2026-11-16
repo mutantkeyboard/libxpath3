@@ -18,15 +18,11 @@
 #include "private/xp3func.h"
 #include "private/xp3static.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 static int
@@ -499,8 +495,7 @@ testAllocationFailures(void) {
     int i;
 
     if (!xp3TestAllocInstall()) {
-        printf("testcontext: allocation-failure tests skipped: this libxml2 "
-               "ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -710,15 +705,13 @@ int
 main(void) {
     xmlInitParser();
 
-    testDefaults();
-    testLanguageLevel();
-    testDeclareNamespace();
-    testRegisterFunction();
-    testSignatureTypes();
-    testRegisterErrors();
-    testAllocationFailures();
+    XP3_TEST_RUN(testDefaults);
+    XP3_TEST_RUN(testLanguageLevel);
+    XP3_TEST_RUN(testDeclareNamespace);
+    XP3_TEST_RUN(testRegisterFunction);
+    XP3_TEST_RUN(testSignatureTypes);
+    XP3_TEST_RUN(testRegisterErrors);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    if (failures == 0)
-        printf("testcontext: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }
