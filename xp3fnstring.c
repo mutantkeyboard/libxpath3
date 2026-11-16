@@ -96,17 +96,14 @@ contextString(xp3FuncCall *call) {
     return(xp3FnString(call, NULL, 0));
 }
 
-/* A string being built, in one buffer that doubles as it grows */
-typedef struct {
-    xmlChar *data;
-    size_t len;
-    size_t cap;
-    size_t counted;             /* bytes counted as steps so far */
-    const char *name;           /* the function, for messages */
-} xp3StrBuf;
-
-static void
-bufInit(xp3StrBuf *buf, const char *name) {
+/**
+ * Start building a string (xp3StrBuf), as the result of a function.
+ *
+ * @param buf   the buffer
+ * @param name  the function, for messages, such as "fn:concat"
+ */
+void
+xp3StrBufInit(xp3StrBuf *buf, const char *name) {
     buf->data = NULL;
     buf->len = 0;
     buf->cap = 0;
@@ -114,12 +111,20 @@ bufInit(xp3StrBuf *buf, const char *name) {
     buf->name = name;
 }
 
-/* Append bytes, counted as made, stopping before the string passes
- * the byte limit or the steps run out. Returns 0, or -1 after
- * recording LIMIT or NO_MEMORY; the caller then frees buf->data. */
-static int
-bufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
-          size_t len) {
+/**
+ * Append bytes to a string being built, counted as made, stopping
+ * before the string passes the byte limit or the steps run out.
+ *
+ * @param call  the call
+ * @param buf   the buffer, from xp3StrBufInit()
+ * @param str   the bytes
+ * @param len   their number
+ * @returns 0, or -1 after recording LIMIT or NO_MEMORY; the caller then
+ *          frees buf->data
+ */
+int
+xp3StrBufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
+                size_t len) {
     size_t total;
 
     if (len > XP3_STRING_MAX - buf->len) {
@@ -167,22 +172,28 @@ bufAppendAtomic(xp3FuncCall *call, xp3StrBuf *buf,
 
     /* Casting a string type to xs:string keeps its value */
     if (xp3TypeRepresentation(atomic->type) == XP3_REP_STRING)
-        return(bufAppend(call, buf, atomic->u.str,
-                         strlen((const char *) atomic->u.str)));
+        return(xp3StrBufAppend(call, buf, atomic->u.str,
+                               strlen((const char *) atomic->u.str)));
     str = xp3AtomicToString(atomic);
     if (str == NULL) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         return(-1);
     }
-    ret = bufAppend(call, buf, str, strlen((const char *) str));
+    ret = xp3StrBufAppend(call, buf, str, strlen((const char *) str));
     xmlFree(str);
     return(ret);
 }
 
-/* The string built, as the result; frees the buffer. bufAppend()
- * checked and counted it already. */
-static xp3Value *
-bufFinish(xp3FuncCall *call, xp3StrBuf *buf) {
+/**
+ * Make the string built the result, and free the buffer.
+ * xp3StrBufAppend() checked and counted it already.
+ *
+ * @param call  the call
+ * @param buf   the buffer, empty afterwards
+ * @returns an xs:string, or NULL after recording NO_MEMORY
+ */
+xp3Value *
+xp3StrBufFinish(xp3FuncCall *call, xp3StrBuf *buf) {
     xp3Value *result = xp3FuncAtomic(call, xp3AtomicNewString(
         XP3_TYPE_STRING, (buf->data != NULL) ? buf->data : BAD_CAST "",
         buf->len));
@@ -508,7 +519,7 @@ xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count) {
     (void) count;
     if (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)
         return(NULL);
-    bufInit(&buf, "fn:codepoints-to-string");
+    xp3StrBufInit(&buf, "fn:codepoints-to-string");
     xp3IterInit(&iter, args[0]);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
         xmlChar bytes[4];
@@ -530,15 +541,15 @@ xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count) {
         }
         xp3ItemUnref(item);
         if ((!valid) ||
-            (bufAppend(call, &buf, bytes,
-                       (size_t) xp3EncodeChar((int) c, bytes)) < 0))
+            (xp3StrBufAppend(call, &buf, bytes,
+                             (size_t) xp3EncodeChar((int) c, bytes)) < 0))
             goto error;
     }
     if (found < 0) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -740,7 +751,7 @@ xp3FnConcat(xp3FuncCall *call, xp3Value **args, int count) {
     xp3StrBuf buf;
     int i;
 
-    bufInit(&buf, "fn:concat");
+    xp3StrBufInit(&buf, "fn:concat");
     for (i = 0; i < count; i++) {
         xp3Item item;
         int ret;
@@ -756,7 +767,7 @@ xp3FnConcat(xp3FuncCall *call, xp3Value **args, int count) {
         if (ret < 0)
             goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -787,13 +798,13 @@ xp3FnStringJoin(xp3FuncCall *call, xp3Value **args, int count) {
 
     if (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)
         return(NULL);
-    bufInit(&buf, "fn:string-join");
+    xp3StrBufInit(&buf, "fn:string-join");
     xp3IterInit(&iter, args[0]);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
         int ret = 0;
 
         if (!first)
-            ret = bufAppend(call, &buf, separator, separatorLen);
+            ret = xp3StrBufAppend(call, &buf, separator, separatorLen);
         if (ret == 0)
             ret = bufAppendAtomic(call, &buf, item.u.atomic);
         xp3ItemUnref(item);
@@ -805,7 +816,7 @@ xp3FnStringJoin(xp3FuncCall *call, xp3Value **args, int count) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -1044,7 +1055,7 @@ static int
 normalizedOutput(void *data, const xmlChar *bytes, size_t len) {
     xp3NormalizedText *text = data;
 
-    return(bufAppend(text->call, &text->buf, bytes, len));
+    return(xp3StrBufAppend(text->call, &text->buf, bytes, len));
 }
 
 /**
@@ -1083,7 +1094,7 @@ xp3FnNormalizeUnicode(xp3FuncCall *call, xp3Value **args, int count) {
     if (!normalize)
         return(newString(call, str, len));
     text.call = call;
-    bufInit(&text.buf, "fn:normalize-unicode");
+    xp3StrBufInit(&text.buf, "fn:normalize-unicode");
     ret = xp3UnicodeNormalize(str, len, form, normalizedOutput, &text);
     if (ret == XP3_UNICODE_NO_MEMORY)
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
@@ -1091,7 +1102,7 @@ xp3FnNormalizeUnicode(xp3FuncCall *call, xp3Value **args, int count) {
         xmlFree(text.buf.data);
         return(NULL);
     }
-    return(bufFinish(call, &text.buf));
+    return(xp3StrBufFinish(call, &text.buf));
 }
 
 /*
@@ -1111,7 +1122,7 @@ changeCase(xp3FuncCall *call, const xp3Value *arg, int upper,
 
     if (xp3FuncBytes(call, len) < 0)
         return(NULL);
-    bufInit(&buf, name);
+    xp3StrBufInit(&buf, name);
     while (pos < len) {
         size_t start = pos;
         int c = xp3NextChar(str, len, &pos);
@@ -1129,18 +1140,18 @@ changeCase(xp3FuncCall *call, const xp3Value *arg, int upper,
             continue;
         for (i = 0; i < count; i++)
             used += (size_t) xp3EncodeChar(mapped[i], bytes + used);
-        if ((bufAppend(call, &buf, str + run, start - run) < 0) ||
-            (bufAppend(call, &buf, bytes, used) < 0)) {
+        if ((xp3StrBufAppend(call, &buf, str + run, start - run) < 0) ||
+            (xp3StrBufAppend(call, &buf, bytes, used) < 0)) {
             xmlFree(buf.data);
             return(NULL);
         }
         run = pos;
     }
-    if (bufAppend(call, &buf, str + run, len - run) < 0) {
+    if (xp3StrBufAppend(call, &buf, str + run, len - run) < 0) {
         xmlFree(buf.data);
         return(NULL);
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 }
 
 /**
@@ -1317,7 +1328,7 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     if (table == NULL)
         return(newString(call, str, len));
-    bufInit(&buf, "fn:translate");
+    xp3StrBufInit(&buf, "fn:translate");
     while (pos < len) {
         size_t start = pos;
         const xp3Translation *entry;
@@ -1325,13 +1336,13 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
 
         entry = findTranslation(table, entries, xp3NextChar(str, len, &pos));
         if (entry == NULL) {
-            ret = bufAppend(call, &buf, str + start, pos - start);
+            ret = xp3StrBufAppend(call, &buf, str + start, pos - start);
         } else if (entry->to != XP3_TRANSLATE_REMOVE) {
             size_t end = entry->to;
 
             xp3NextChar(trans, transLen, &end);
-            ret = bufAppend(call, &buf, trans + entry->to,
-                            end - entry->to);
+            ret = xp3StrBufAppend(call, &buf, trans + entry->to,
+                                  end - entry->to);
         }
         if (ret < 0) {
             xmlFree(buf.data);
@@ -1340,7 +1351,7 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
         }
     }
     xmlFree(table);
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 }
 
 /*
@@ -1630,7 +1641,7 @@ escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
 
     if (xp3FuncBytes(call, len) < 0)
         return(NULL);
-    bufInit(&buf, name);
+    xp3StrBufInit(&buf, name);
     while (pos < len) {
         size_t start = pos;
         int c = xp3NextChar(str, len, &pos);
@@ -1647,18 +1658,19 @@ escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
             escaped[3 * i + 1] = (xmlChar) hex[bytes[i] >> 4];
             escaped[3 * i + 2] = (xmlChar) hex[bytes[i] & 0xF];
         }
-        if ((bufAppend(call, &buf, str + run, start - run) < 0) ||
-            (bufAppend(call, &buf, escaped, (size_t) (3 * count)) < 0)) {
+        if ((xp3StrBufAppend(call, &buf, str + run, start - run) < 0) ||
+            (xp3StrBufAppend(call, &buf, escaped,
+                             (size_t) (3 * count)) < 0)) {
             xmlFree(buf.data);
             return(NULL);
         }
         run = pos;
     }
-    if (bufAppend(call, &buf, str + run, len - run) < 0) {
+    if (xp3StrBufAppend(call, &buf, str + run, len - run) < 0) {
         xmlFree(buf.data);
         return(NULL);
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 }
 
 /**

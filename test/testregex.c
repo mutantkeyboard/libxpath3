@@ -239,6 +239,16 @@ static const struct {
     { "[a-]+", "", "x-a-", "1,4" },
     { "[--]", "", "a-", "1,2" },
     { "[a--[a]]", "", "a-", "1,2" },
+    /* Hyphens follow XSD 1.1, G.4.1: one where no range can start, as
+     * after a range or a class escape, is a character */
+    { "[a-c-e]+", "", "xa-ebdy", "1,5" },
+    { "[0-9-.]+", "", "x1-2.3y", "1,6" },
+    { "[\\d-z]+", "", "a1-z", "1,4" },
+    { "[-a-c]+", "", "x-bd", "1,3" },
+    { "[a-a-x-x]+", "", "ja-xb", "1,4" },
+    { "[a-c-1-4x-z-7-9]+", "", "da-1y-8k", "1,7" },
+    { "[^a-d-b-c]", "", "a-e", "2,3" },
+    { "[\\d--[1]]+", "", "1-2x", "1,3" },
     { "[\\--/]+", "", "a-./b", "1,4" },
     { "[\\n\\r\\t\\\\\\[\\]\\^\\-]+", "", "a\n\r\t\\[]^-b", "1,9" },
     { "[\\^]", "", "a^", "1,2" },
@@ -482,9 +492,13 @@ static const struct {
     { "[--z]", "", XP3_XPATH_31, "FORX0002", 1 },
     { "[!--]", "", XP3_XPATH_31, "FORX0002", 1 },
     { "[a-\\d]", "", XP3_XPATH_31, "FORX0002", 1 },
-    { "[0-9-.]", "", XP3_XPATH_31, "FORX0002", 4 },
-    { "[a-c-e]", "", XP3_XPATH_31, "FORX0002", 4 },
-    { "[\\d-z]", "", XP3_XPATH_31, "FORX0002", 3 },
+    /* XSD 1.1, G.4.1: a hyphen that starts a range must be followed by
+     * a single character other than an unescaped hyphen, and neither
+     * end of a range may be an unescaped hyphen */
+    { "[---]", "", XP3_XPATH_31, "FORX0002", 1 },
+    { "[a-c--e]", "", XP3_XPATH_31, "FORX0002", 4 },
+    { "[\\d--a]", "", XP3_XPATH_31, "FORX0002", 3 },
+    { "[a-\\p{Lu}]", "", XP3_XPATH_31, "FORX0002", 1 },
     { "[a-[b]c]", "", XP3_XPATH_31, "FORX0002", 0 },
     { "[-[b]]", "", XP3_XPATH_31, "FORX0002", 0 },
     { "[\\1]", "", XP3_XPATH_31, "FORX0002", 1 },
@@ -905,6 +919,43 @@ testSteps(void) {
 }
 
 /*
+ * Compiling reports its work in operations, for the caller to charge
+ * with those of searches: the instructions built, or only the nodes
+ * parsed when the program is too large to build.
+ */
+static void
+testCompileOperations(void) {
+    xp3Regex *built = compile("a{1000}", "", XP3_XPATH_31);
+    xp3Regex *tooLarge = compile("a{200000}", "", XP3_XPATH_31);
+    xp3TestBudget budget = { 0, 1000000 };
+    xp3RegexSteps steps;
+
+    if ((built == NULL) || (tooLarge == NULL)) {
+        xp3RegexFree(built);
+        xp3RegexFree(tooLarge);
+        return;
+    }
+    check(xp3RegexCompileOperations(built) >= 1000,
+          "an operation per instruction built");
+    check(xp3RegexCompileOperations(tooLarge) < 10,
+          "a program too large to build costs its parse");
+
+    memset(&steps, 0, sizeof(steps));
+    steps.charge = chargeBudget;
+    steps.data = &budget;
+    check(xp3RegexChargeOperations(&steps, 300) == 0, "300 charged");
+    check(budget.steps == 1, "a step for 256 operations");
+    check(xp3RegexChargeOperations(&steps, 212) == 0, "212 charged");
+    check(budget.steps == 2, "the 44 left over count with the next");
+    budget.max = 2;
+    check(xp3RegexChargeOperations(&steps, 256) == -1,
+          "the charge function stops the work");
+    check(xp3RegexChargeOperations(NULL, 1000) == 0, "no steps to count");
+    xp3RegexFree(built);
+    xp3RegexFree(tooLarge);
+}
+
+/*
  * Allocation failures
  */
 
@@ -1023,6 +1074,7 @@ main(void) {
     XP3_TEST_RUN(testPathological);
     XP3_TEST_RUN(testBacktrackingLimit);
     XP3_TEST_RUN(testSteps);
+    XP3_TEST_RUN(testCompileOperations);
     XP3_TEST_RUN(testAllocationFailures);
 
     return(xp3TestDone());

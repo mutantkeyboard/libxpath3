@@ -269,6 +269,7 @@ typedef struct {
     int slotCount;
     xp3Focus focus;
     xp3DocOrder *order;         /* created when first needed */
+    xp3RegexCache *regexes;     /* created when first needed */
     size_t maxItems;
     xp3LanguageLevel level;
     uint64_t operations;        /* steps taken so far */
@@ -3282,6 +3283,26 @@ xp3FuncNodePosition(xp3FuncCall *call, xmlNodePtr node, size_t *position) {
 }
 
 /**
+ * Get the cache of compiled regular expressions of the evaluation,
+ * created when first needed and freed with the evaluation, so that a
+ * pattern used in a loop is compiled once (doc/DESIGN.md 6.4).
+ *
+ * @param call  the call
+ * @returns the cache, or NULL after recording NO_MEMORY
+ */
+xp3RegexCache *
+xp3FuncRegexCache(xp3FuncCall *call) {
+    xp3Eval *ev = call->ev;
+
+    if (ev->regexes == NULL) {
+        ev->regexes = xp3RegexCacheNew();
+        if (ev->regexes == NULL)
+            evalNoMemory(ev);
+    }
+    return(ev->regexes);
+}
+
+/**
  * Finish a sequence being built.
  *
  * @param call     the call
@@ -3615,6 +3636,7 @@ evalCleanup(xp3Eval *ev) {
         xp3ValueUnref(ev->slots[i]);
     xmlFree(ev->slots);
     xp3DocOrderFree(ev->order);
+    xp3RegexCacheFree(ev->regexes);
 }
 
 /**

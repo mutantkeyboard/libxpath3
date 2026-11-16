@@ -63,6 +63,8 @@ typedef enum
     XP3_ERR_FORG0006,  /* no effective boolean value */
     XP3_ERR_FORX0001,  /* invalid regular expression flags */
     XP3_ERR_FORX0002,  /* invalid regular expression */
+    XP3_ERR_FORX0003,  /* regular expression matches the empty string */
+    XP3_ERR_FORX0004,  /* invalid replacement string */
     XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
     XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */

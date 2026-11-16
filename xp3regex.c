@@ -6,11 +6,10 @@
  * quantifiers, non-capturing groups, back-references, and an unknown
  * block name as an error (FORX0002). Where XSD 1.0 is unclear, F&O
  * points to XSD 1.1, Appendix G, as for the braces that F&O adds to
- * the metacharacters. For hyphens in character classes, where XSD 1.1
- * allows more, the rule of XSD 1.0 holds, the one QT3 tests for XSD
- * 1.0: an unescaped hyphen is a character only as the first or the
- * last of a group. The flags s, m, i, x and q are those of F&O 3.1,
- * 5.6.2.
+ * the metacharacters, and for hyphens in character classes, which
+ * follow the rules of XSD 1.1, G.4.1: an unescaped hyphen where no
+ * range can start, as in [a-c-e], is a character. The flags s, m, i, x
+ * and q are those of F&O 3.1, 5.6.2.
  *
  * A pattern is parsed by recursive descent into a tree, which is
  * compiled into a program for a small virtual machine: characters,
@@ -222,6 +221,9 @@ struct _xp3Regex {
     int tooLarge;           /* the program was too large to build, and
                              * there is none */
     int64_t minLength;      /* the fewest characters a match takes */
+    int compileOperations;  /* the work of compiling: the instructions
+                             * built, or the nodes parsed if the program
+                             * was too large to build */
 };
 
 /*
@@ -906,14 +908,16 @@ atGroupEnd(const xp3RegexParser *p, size_t ahead) {
 
 /*
  * Parse the parts of a positive character group, up to the ']' or the
- * '-[' of a subtraction. A hyphen between two single characters makes
- * a range; an unescaped hyphen is a character only as the first or the
- * last part of the group (XSD 1.0, F.1).
+ * '-[' of a subtraction, with the hyphen rules of XSD 1.1, G.4.1,
+ * productions [76] to [82]. A hyphen after a single character is the
+ * subtraction operator if '[' follows it, a character if ']' or '-['
+ * follows it, and otherwise makes a range with the single character
+ * after it, which parseRangeEnd() checks. Neither end of a range may be
+ * an unescaped hyphen. Anywhere else, as first in the group, or after
+ * a range or a class escape, a hyphen is a single character itself.
  */
 static int
 parseClassParts(xp3RegexParser *p, size_t offset) {
-    int parts = 0;
-
     while (1) {
         xp3RegexItem item;
         size_t partOffset = p->pos;
@@ -931,7 +935,6 @@ parseClassParts(xp3RegexParser *p, size_t offset) {
         kind = readClassChar(p, &first, &item, &plainHyphen);
         if (kind < 0)
             return(-1);
-        parts++;
         if (kind == XP3_REGEX_ESCAPE_ITEM) {
             if (addItem(p, &item) < 0)
                 return(-1);
@@ -942,12 +945,6 @@ parseClassParts(xp3RegexParser *p, size_t offset) {
             if (parseRangeEnd(p, partOffset, first, plainHyphen) < 0)
                 return(-1);
             continue;
-        }
-        if (plainHyphen && (parts > 1) && (!atGroupEnd(p, 0))) {
-            parserError(p, XP3_ERR_FORX0002, partOffset,
-                        "an unescaped '-' must be the first or the last "
-                        "character of a character group");
-            return(-1);
         }
         if (addRange(p, first, first) < 0)
             return(-1);
@@ -1665,6 +1662,7 @@ buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
     if ((length > XP3_REGEX_MAX_PROGRAM) ||
         (length * slots > XP3_REGEX_MAX_CAPTURE_CELLS)) {
         regex->tooLarge = 1;
+        regex->compileOperations = p->nodeCount;
         return(regex);
     }
 
@@ -1686,6 +1684,7 @@ buildRegex(xp3RegexParser *p, int root, const xp3RegexFlags *flags) {
     emitInst(&e, XP3_RE_MATCH, 0);
 
     regex->programLength = e.count;
+    regex->compileOperations = e.count;
     regex->markCount = e.markCount;
     regex->classes = p->classes;
     regex->items = p->items;
@@ -1769,6 +1768,21 @@ xp3RegexFree(xp3Regex *regex) {
 int
 xp3RegexGroupCount(const xp3Regex *regex) {
     return(regex->groupCount);
+}
+
+/**
+ * Get the work compiling a regular expression took, in operations as
+ * searches count them, for the caller to charge with
+ * xp3RegexChargeOperations(): an operation per instruction of the
+ * program built, or, for a program too large to build, per node of
+ * the pattern parsed.
+ *
+ * @param regex  the regular expression
+ * @returns the number of operations
+ */
+int
+xp3RegexCompileOperations(const xp3Regex *regex) {
+    return(regex->compileOperations);
 }
 
 /*
@@ -1975,17 +1989,25 @@ matchBackref(const xp3Regex *regex, const ptrdiff_t *slots, int group,
  * Counting work
  */
 
-/* Count an operation, and charge a step for each
- * XP3_REGEX_OPERATIONS_PER_STEP of them. Returns 0, or -1 if the
- * caller stops the search. */
-static int
-countOperation(xp3RegexSteps *steps) {
+/**
+ * Count operations, and charge a step for each
+ * XP3_REGEX_OPERATIONS_PER_STEP of them, together with those that
+ * earlier searches or charges left over. Searches count their own;
+ * callers charge other work with it, such as compiling
+ * (xp3RegexCompileOperations()).
+ *
+ * @param steps       counts the work and charges it, or NULL
+ * @param operations  the number of operations
+ * @returns 0, or -1 if the charge function stops the work
+ */
+int
+xp3RegexChargeOperations(xp3RegexSteps *steps, uint64_t operations) {
     uint64_t pending;
     uint64_t due;
 
     if (steps == NULL)
         return(0);
-    steps->operations++;
+    steps->operations += operations;
     pending = steps->operations - steps->charged;
     if (pending < XP3_REGEX_OPERATIONS_PER_STEP)
         return(0);
@@ -1994,6 +2016,13 @@ countOperation(xp3RegexSteps *steps) {
     if (steps->charge == NULL)
         return(0);
     return(steps->charge(steps->data, due));
+}
+
+/* Count one operation of a search. Returns 0, or -1 if the caller
+ * stops the search. */
+static int
+countOperation(xp3RegexSteps *steps) {
+    return(xp3RegexChargeOperations(steps, 1));
 }
 
 /*

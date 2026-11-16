@@ -624,6 +624,17 @@ static const struct {
       "(constant string:) (constant string:ab))" },
     { "upper-case('a' || 'b'), normalize-unicode('A\xcc\x8a', 'nfd')",
       "(constant string:AB string:A\xcc\x8a)" },
+    /* Regular expressions compile while folding; an invalid one is a
+     * dynamic error, so its call stays */
+    { "matches('abc', 'B', 'i'), replace('abc', '(b)', '[$1]'), "
+      "tokenize('a,b', ',')",
+      "(constant boolean:true string:a[b]c string:a string:b)" },
+    { "matches('a', '(')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}matches "
+      "(constant string:a) (constant string:())" },
+    { "tokenize('a', 'a*')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}tokenize "
+      "(constant string:a) (constant string:a*))" },
     { "position()",
       "(call Q{http://www.w3.org/2005/xpath-functions}position)" },
     { "string()", "(call Q{http://www.w3.org/2005/xpath-functions}string)" },

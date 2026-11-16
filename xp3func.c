@@ -119,6 +119,13 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_SUBSTRING_AFTER_2] = xp3FnSubstringAfter,
     [XP3_FN_SUBSTRING_AFTER_3] = xp3FnSubstringAfter,
     [XP3_FN_TOKENIZE_1] = xp3FnTokenize,
+    /* Regular expressions (5.6) */
+    [XP3_FN_MATCHES_2] = xp3FnMatches,
+    [XP3_FN_MATCHES_3] = xp3FnMatches,
+    [XP3_FN_REPLACE_3] = xp3FnReplace,
+    [XP3_FN_REPLACE_4] = xp3FnReplace,
+    [XP3_FN_TOKENIZE_2] = xp3FnTokenizeRegex,
+    [XP3_FN_TOKENIZE_3] = xp3FnTokenizeRegex,
     /* URIs (6) */
     [XP3_FN_ENCODE_FOR_URI_1] = xp3FnEncodeForUri,
     [XP3_FN_IRI_TO_URI_1] = xp3FnIriToUri,

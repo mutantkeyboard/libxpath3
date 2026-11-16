@@ -364,6 +364,8 @@ testImplementations(void) {
         { "normalize-unicode", 1, 0 }, { "normalize-unicode", 2, 0 },
         { "upper-case", 1, 0 }, { "lower-case", 1, 0 },
         { "translate", 3, 0 }, { "tokenize", 1, 0 },
+        { "matches", 2, 0 }, { "matches", 3, 0 }, { "replace", 3, 0 },
+        { "replace", 4, 0 }, { "tokenize", 2, 0 }, { "tokenize", 3, 0 },
         { "encode-for-uri", 1, 0 }, { "iri-to-uri", 1, 0 },
         { "escape-html-uri", 1, 0 },
         { "node-name", 1, 0 }, { "name", 1, 0 }, { "local-name", 1, 0 },
@@ -456,9 +458,9 @@ testImplementations(void) {
     check(xp3FuncImplementation(lookup(FN, "QName", 2,
                                        XP3_XPATH_31)) == NULL,
           "fn:QName is not implemented yet");
-    check(xp3FuncImplementation(lookup(FN, "tokenize", 2,
+    check(xp3FuncImplementation(lookup(FN, "analyze-string", 2,
                                        XP3_XPATH_31)) == NULL,
-          "fn:tokenize#2 is not implemented yet");
+          "fn:analyze-string#2 is not implemented yet");
 }
 
 int

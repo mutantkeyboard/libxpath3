@@ -209,6 +209,46 @@ const xmlChar *
 xp3FuncString(const xp3Value *value);
 
 /*
+ * The compiled regular expressions of an evaluation, in xp3fnregex.c.
+ * The evaluation creates the cache when a call first asks for it
+ * (xp3FuncRegexCache()) and frees it at its end, as it does its
+ * document order, so compiled expressions stay immutable.
+ */
+typedef struct _xp3RegexCache xp3RegexCache;
+
+xp3RegexCache *
+xp3RegexCacheNew(void);
+
+void
+xp3RegexCacheFree(xp3RegexCache *cache);
+
+xp3RegexCache *
+xp3FuncRegexCache(xp3FuncCall *call);
+
+/*
+ * A string being built as the result of a function, in one buffer
+ * that doubles as it grows, in xp3fnstring.c. Appending counts the
+ * bytes as made and checks them against the byte limit of a fold.
+ */
+typedef struct {
+    xmlChar *data;
+    size_t len;
+    size_t cap;
+    size_t counted;             /* bytes counted as steps so far */
+    const char *name;           /* the function, for messages */
+} xp3StrBuf;
+
+void
+xp3StrBufInit(xp3StrBuf *buf, const char *name);
+
+int
+xp3StrBufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
+                size_t len);
+
+xp3Value *
+xp3StrBufFinish(xp3FuncCall *call, xp3StrBuf *buf);
+
+/*
  * Collations (F&O 3.1, 5.3), in xp3fnstring.c. The Unicode codepoint
  * collation is the default. The URIs of the UCA family (5.3.3) are
  * accepted with fallback to it, and the HTML ASCII case-insensitive
@@ -396,6 +436,16 @@ xp3FnIriToUri(xp3FuncCall *call, xp3Value **args, int count);
 
 xp3Value *
 xp3FnEscapeHtmlUri(xp3FuncCall *call, xp3Value **args, int count);
+
+/* Implementations in xp3fnregex.c */
+xp3Value *
+xp3FnMatches(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnReplace(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnTokenizeRegex(xp3FuncCall *call, xp3Value **args, int count);
 
 /* Implementations in xp3fnnode.c */
 xp3Value *

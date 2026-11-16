@@ -29,7 +29,8 @@
  * which belongs to one thread; reusing it for the searches of one
  * function call saves allocating it again for each. The work of a
  * search is counted in operations and charged to the caller, a step
- * per XP3_REGEX_OPERATIONS_PER_STEP of them, through xp3RegexSteps.
+ * per XP3_REGEX_OPERATIONS_PER_STEP of them, through xp3RegexSteps;
+ * the caller charges the work of compiling the same way.
  *
  * Strings are UTF-8 with a length in bytes, and offsets are byte
  * offsets into them. A byte that isn't UTF-8 is one character, U+FFFD,
@@ -105,6 +106,22 @@ xp3RegexFree(xp3Regex *regex);
 /** The number of capturing groups, not counting the whole match */
 int
 xp3RegexGroupCount(const xp3Regex *regex);
+
+/**
+ * The work of compiling, in operations as searches count them: the
+ * instructions of the program, or the nodes parsed if it was too large
+ * to build. The caller charges them (xp3RegexChargeOperations()).
+ */
+int
+xp3RegexCompileOperations(const xp3Regex *regex);
+
+/**
+ * Count operations done outside a search, such as compiling, with the
+ * operations searches left over, and charge the steps due. Returns 0,
+ * or -1 if the charge function stops the work.
+ */
+int
+xp3RegexChargeOperations(xp3RegexSteps *steps, uint64_t operations);
 
 /** Create the scratch state for searches with one regular expression */
 xp3RegexScratch *
