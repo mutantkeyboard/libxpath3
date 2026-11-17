@@ -17,15 +17,11 @@
 
 #include "private/xp3ast.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /* Create a node with an operator and optional text. NULL on failure. */
@@ -383,8 +379,7 @@ testAllocationFailures(void) {
     check(expected != NULL, "reference tree printed");
 
     if (!xp3TestAllocInstall()) {
-        printf("testast: allocation-failure tests skipped: this libxml2 "
-               "ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFree(expected);
         return;
@@ -424,12 +419,10 @@ int
 main(void) {
     xmlInitParser();
 
-    testPrinter();
-    testNodes();
-    testArena();
-    testAllocationFailures();
+    XP3_TEST_RUN(testPrinter);
+    XP3_TEST_RUN(testNodes);
+    XP3_TEST_RUN(testArena);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    if (failures == 0)
-        printf("testast: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

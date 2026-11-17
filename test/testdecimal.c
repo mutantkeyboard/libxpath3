@@ -23,15 +23,11 @@
 
 #include "private/xp3decimal.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 static const char *
@@ -760,8 +756,7 @@ testAllocationFailures(void) {
     check(expected != NULL, "reference chain computed");
 
     if (!xp3TestAllocInstall()) {
-        printf("testdecimal: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFree(expected);
         return;
@@ -795,18 +790,16 @@ int
 main(void) {
     xmlInitParser();
 
-    testParse();
-    testArithmetic();
-    testDivisionByZero();
-    testAddBack();
-    testDivisionProperties();
-    testRound();
-    testCompare();
-    testConversions();
-    testLimits();
-    testAllocationFailures();
+    XP3_TEST_RUN(testParse);
+    XP3_TEST_RUN(testArithmetic);
+    XP3_TEST_RUN(testDivisionByZero);
+    XP3_TEST_RUN(testAddBack);
+    XP3_TEST_RUN(testDivisionProperties);
+    XP3_TEST_RUN(testRound);
+    XP3_TEST_RUN(testCompare);
+    XP3_TEST_RUN(testConversions);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    if (failures == 0)
-        printf("testdecimal: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

@@ -62,16 +62,20 @@ atomicAlloc(xp3TypeId type, xp3Representation rep) {
 xp3Atomic *
 xp3AtomicNewString(xp3TypeId type, const xmlChar *str, size_t len) {
     xp3Atomic *atomic;
+    const xmlChar *text;
 
     if ((str == NULL) && (len > 0))
         return(NULL);
-    if (len > INT32_MAX)
+    if (len > XP3_STRING_MAX)
         return(NULL);
     atomic = atomicAlloc(type, XP3_REP_STRING);
     if (atomic == NULL)
         return(NULL);
-    atomic->u.str = xmlStrndup((str != NULL) ? str : BAD_CAST "",
-                               (int) len);
+    if (str != NULL)
+        text = str;
+    else
+        text = BAD_CAST "";
+    atomic->u.str = xmlStrndup(text, (int) len);
     if (atomic->u.str == NULL) {
         xmlFree(atomic);
         return(NULL);

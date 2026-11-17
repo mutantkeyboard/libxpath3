@@ -61,11 +61,16 @@ typedef enum
     XP3_ERR_FORG0004,  /* fn:one-or-more with the empty sequence */
     XP3_ERR_FORG0005,  /* fn:exactly-one without exactly one item */
     XP3_ERR_FORG0006,  /* no effective boolean value */
+    XP3_ERR_FORX0001,  /* invalid regular expression flags */
+    XP3_ERR_FORX0002,  /* invalid regular expression */
+    XP3_ERR_FORX0003,  /* regular expression matches the empty string */
+    XP3_ERR_FORX0004,  /* invalid replacement string */
     XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
     XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */
     XP3_ERR_FOCH0001,  /* code point not allowed in XML */
     XP3_ERR_FOCH0002,  /* unsupported collation */
+    XP3_ERR_FOCH0003,  /* unsupported normalization form */
     XP3_ERR_FOTY0013,  /* atomizing a function item */
     XP3_ERR_FOTY0014,  /* the string value of a function item */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */

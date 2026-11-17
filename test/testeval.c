@@ -31,19 +31,16 @@
 #include "private/xp3eval.h"
 #include "private/xp3nodes.h"
 #include "private/xp3ops.h"
+#include "private/xp3regex.h"
 #include "private/xp3static.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 static const char xp3TestDoc[] =
@@ -158,9 +155,8 @@ checkEval(const xp3StaticContext *sctx, xp3DynamicContext *ctx,
 
     run(sctx, ctx, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s\n  expected: %s\n  actual:   %s\n",
-                expr, expected, actual);
-        failures++;
+        xp3TestFail("%s\n  expected: %s\n  actual:   %s",
+                    expr, expected, actual);
     }
 }
 
@@ -1066,6 +1062,38 @@ static const xp3EvalCase xp3Cases[] = {
       "'\xf0\x90\x80\x80')",
       "integer:97 integer:65536 integer:99 string:abc string:zyx "
       "string:xx string:\xf0\x90\x80\x80" },
+    /* Full case mappings, which may change the length; no final sigma */
+    { "upper-case('abCd0'), lower-case('ABc!D'), upper-case(()), "
+      "lower-case(()), upper-case(''), upper-case('\xc3\x9f'), "
+      "string-length(upper-case('stra\xc3\x9f" "e')), "
+      "string-to-codepoints(lower-case('\xc4\xb0')), "
+      "lower-case('\xce\x9f\xce\xa3'), upper-case('\xef\xac\x83'), "
+      "lower-case(upper-case('\xc4\xb1'))",
+      "string:ABCD0 string:abc!d string: string: string: string:SS "
+      "integer:7 integer:105 integer:775 string:\xce\xbf\xcf\x83 "
+      "string:FFI string:i" },
+    { "upper-case(1)", "error:XPTY0004" },
+    { "lower-case(('a', 'b'))", "error:XPTY0004" },
+    /* The form is upper-case(normalize-space($form)); the empty one
+     * leaves the string as it is */
+    { "string-to-codepoints(normalize-unicode('A\xcc\x8a')), "
+      "string-to-codepoints(normalize-unicode('\xc3\x85', 'NFD')), "
+      "normalize-unicode('\xef\xac\x81', ' nfkc '), "
+      "string-to-codepoints(normalize-unicode('\xef\xac\x81', 'NFKD')), "
+      "normalize-unicode('A\xcc\x8a', '') eq 'A\xcc\x8a', "
+      "normalize-unicode('A\xcc\x8a', ' \t') eq 'A\xcc\x8a', "
+      "normalize-unicode('\xef\xac\x81', 'NfC') eq '\xef\xac\x81', "
+      "normalize-unicode(()), normalize-unicode((), 'NFD'), "
+      "normalize-unicode('', 'NFKD')",
+      "integer:197 integer:65 integer:778 string:fi integer:102 integer:105 "
+      "boolean:true boolean:true boolean:true string: string: string:" },
+    { "normalize-unicode('a', 'FULLY-NORMALIZED')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'NF C')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'nfc2')", "error:FOCH0003" },
+    { "normalize-unicode('a', 'NF')", "error:FOCH0003" },
+    { "normalize-unicode('a', ())", "error:XPTY0004" },
+    /* The empty sequence gives the empty string, whatever the form */
+    { "normalize-unicode((), 'x')", "string:" },
 
     /* Substring matching (5.5) */
     { "contains('tattoo', 'tat'), contains('tattoo', 'ttt'), "
@@ -1108,7 +1136,120 @@ static const xp3EvalCase xp3Cases[] = {
     { "tokenize(' red green\tblue  '), tokenize(''), tokenize(()), "
       "tokenize('   '), tokenize('a'), tokenize(x[2])",
       "string:red string:green string:blue string:a string:two" },
-    { "tokenize('a b', ' ')", "error:UNSUPPORTED" },
+
+    /* Regular expressions: the examples of F&O 3.1, 5.6.2 to 5.6.5 */
+    { "matches('helloworld', 'hello world', 'x'), "
+      "matches('helloworld', 'hello[ ]world', 'x'), "
+      "matches('hello world', 'hello\\ sworld', 'x'), "
+      "matches('hello world', 'hello world', 'x')",
+      "boolean:true boolean:false boolean:true boolean:false" },
+    { "tokenize('12.3.5.6', '.', 'q'), replace('a\\b\\c', '\\', '\\\\', 'q'), "
+      "replace('a/b/c', '/', '$', 'q'), matches('abcd', '.*', 'q'), "
+      "matches('Mr. B. Obama', 'B. OBAMA', 'iq')",
+      "string:12 string:3 string:5 string:6 string:a\\\\b\\\\c "
+      "string:a$b$c boolean:false boolean:true" },
+    { "matches('abracadabra', 'bra'), matches('abracadabra', '^a.*a$'), "
+      "matches('abracadabra', '^bra')",
+      "boolean:true boolean:true boolean:false" },
+    { "let $poem := '\nKaum hat dies der Hahn gesehen,\n"
+      "F\xc3\xa4ngt er auch schon an zu kr\xc3\xa4hen:\n"
+      "Kikeriki! Kikikerikih!!\nTak, tak, tak! - da kommen sie.\n' "
+      "return (matches($poem, 'Kaum.*kr\xc3\xa4hen'), "
+      "matches($poem, 'Kaum.*kr\xc3\xa4hen', 's'), "
+      "matches($poem, '^Kaum.*gesehen,$', 'm'), "
+      "matches($poem, '^Kaum.*gesehen,$'), matches($poem, 'kiki', 'i'))",
+      "boolean:false boolean:true boolean:true boolean:false "
+      "boolean:true" },
+    { "replace('abracadabra', 'bra', '*'), "
+      "replace('abracadabra', 'a.*a', '*'), "
+      "replace('abracadabra', 'a.*?a', '*'), replace('abracadabra', 'a', ''), "
+      "replace('abracadabra', 'a(.)', 'a$1$1'), replace('AAAA', 'A+', 'b'), "
+      "replace('AAAA', 'A+?', 'b'), "
+      "replace('darted', '^(.*?)d(.*)$', '$1c$2'), "
+      "replace('abcd', '(ab)|(a)', '[1=$1][2=$2]')",
+      "string:a*cada* string:* string:*c*bra string:brcdbr "
+      "string:abbraccaddabbra string:b string:bbbb string:carted "
+      "string:[1=ab][2=]cd" },
+    { "replace('abracadabra', '.*?', '$1')", "error:FORX0003" },
+    { "tokenize('The cat sat on the mat', '\\s+'), "
+      "tokenize(' red green blue ', '\\s+'), "
+      "tokenize('1, 15, 24, 50', ',\\s*'), "
+      "tokenize('1,15,,24,50,', ',')",
+      "string:The string:cat string:sat string:on string:the string:mat "
+      "string: string:red string:green string:blue string: "
+      "string:1 string:15 string:24 string:50 "
+      "string:1 string:15 string: string:24 string:50 string:" },
+    { "tokenize('abba', '.?')", "error:FORX0003" },
+    { "tokenize('Some unparsed <br> HTML <BR> text', '\\s*<br>\\s*', 'i'), "
+      "tokenize('abracadabra', '(ab)|(a)')",
+      "string:Some unparsed string:HTML string:text "
+      "string: string:r string:c string:d string:r string:" },
+    /* $N takes the most digits that name a group, or 9 at least, and
+     * the digits after it are text; a group that took no part, or a
+     * number above the groups up to 9, is the empty string */
+    { "replace('abc', '(b)', '[$10]'), replace('abc', 'b', '[$1]'), "
+      "replace('abc', '(b)', '[$05]'), replace('abc', 'b', '[$0|$00]'), "
+      "replace('ab', '(a)|(b)', '[$2]'), "
+      "replace('abcdefghijk', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)', "
+      "'$10|$11|$010|$100')",
+      "string:a[b0]c string:a[]c string:a[]c string:a[b|b]c "
+      "string:[][b] string:j|a1|j|j0k" },
+    { "replace('a$b\\c', '[$\\\\]', '\\\\\\$'), "
+      "replace('abc', 'b', '\\$1\\\\2')",
+      "string:a\\$b\\$c string:a$1\\2c" },
+    { "replace('a', 'a', '$')", "error:FORX0004" },
+    { "replace('a', 'a', 'x$y')", "error:FORX0004" },
+    { "replace('a', 'a', '\\')", "error:FORX0004" },
+    { "replace('a', 'a', '\\n')", "error:FORX0004" },
+    /* Raised without a match too */
+    { "replace('a', 'b', '$')", "error:FORX0004" },
+    /* q: the replacement as it is */
+    { "replace('a.b', '.', '$1\\', 'q'), replace('a.b', '.', '$1', 'qi')",
+      "string:a$1\\b string:a$1b" },
+    { "replace('abc', '', 'x')", "error:FORX0003" },
+    { "replace('abc', 'x*', 'y')", "error:FORX0003" },
+    { "replace('abc', '^$', 'y')", "error:FORX0003" },
+    { "tokenize('a\nb', '^', 'm')", "error:FORX0003" },
+    { "tokenize('a\nb', '$', 'm')", "error:FORX0003" },
+    /* Whatever the input */
+    { "replace((), '', 'x')", "error:FORX0003" },
+    { "tokenize((), 'a*')", "error:FORX0003" },
+    { "tokenize('', 'a?')", "error:FORX0003" },
+    /* Separators at the ends, and next to each other */
+    { "tokenize(',a,,b,', ','), count(tokenize(',', ',')), "
+      "tokenize('a', ','), tokenize('aXbXXc', 'X+')",
+      "string: string:a string: string:b string: integer:2 string:a "
+      "string:a string:b string:c" },
+    /* The empty sequence is the empty string */
+    { "matches((), 'a'), matches((), '^$'), replace((), 'a', 'b'), "
+      "tokenize((), 'a'), tokenize('', 'a'), count(replace((), 'a', 'b'))",
+      "boolean:false boolean:true string: integer:1" },
+    { "matches('ABC', 'b'), matches('ABC', 'b', 'i'), "
+      "matches('\xe2\x84\xaa', '[a-z]', 'i'), replace('Kak', 'K', 'x', 'i'), "
+      "tokenize('aXbxc', 'x', 'i')",
+      "boolean:false boolean:true boolean:true string:xax string:a "
+      "string:b string:c" },
+    { "matches('a\nb', '^b$', 'm'), matches('a\nb', '^b$'), "
+      "matches('a\nb', 'a.b'), matches('a\nb', 'a.b', 's')",
+      "boolean:true boolean:false boolean:false boolean:true" },
+    /* Back-references run on the backtracking matcher */
+    { "matches('abab', '^(ab)\\1$'), matches('abba', '^(ab)\\1$'), "
+      "replace('aa bb cd', '(.)\\1', '<$1>'), tokenize('xaaybbz', '(.)\\1'), "
+      "matches('Mum', '^([md])[aeiou]\\1$', 'i')",
+      "boolean:true boolean:false string:<a> <b> cd string:x string:y "
+      "string:z boolean:true" },
+    /* Too long to match where the program would be too large to build */
+    { "matches('aaa', 'a{2147483647}')", "boolean:false" },
+    { "matches(x[1], 'n'), replace(x[1], '(o)(n)', '$2$1'), "
+      "tokenize(x[2], 'w'), tokenize(@a, '1')",
+      "boolean:true string:noe string:t string:o string: string:" },
+    { "matches('a', '(')", "error:FORX0002" },
+    { "matches('a', 'a', 'z')", "error:FORX0001" },
+    { "replace('a', '\\p{IsNoSuchBlock}', 'b')", "error:FORX0002" },
+    { "tokenize('a', 'a', 'Q')", "error:FORX0001" },
+    { "matches('a', ())", "error:XPTY0004" },
+    { "replace('a', 'a', ())", "error:XPTY0004" },
+    { "tokenize('a', 'a', ())", "error:XPTY0004" },
 
     /* Functions on URIs (6) */
     { "encode-for-uri('http://www.example.com/00/Weather/CA/"
@@ -1427,8 +1568,8 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1, 2) => exactly-one()", "error:FORG0005" },
 
     /* Not implemented yet */
-    { "upper-case('a')", "error:UNSUPPORTED" },
-    { "'a' => upper-case()", "error:UNSUPPORTED" },
+    { "QName('', 'a')", "error:UNSUPPORTED" },
+    { "'' => QName('a')", "error:UNSUPPORTED" },
     { "subsequence(?, 1)", "error:UNSUPPORTED" },
     { "count#1", "error:UNSUPPORTED" },
     { "map { 1: 2 }", "error:UNSUPPORTED" },
@@ -1588,8 +1729,7 @@ checkRepeated(const char *head, const char *part, size_t count,
     }
     run(NULL, NULL, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s: %s\n", what, actual);
-        failures++;
+        xp3TestFail("%s: %s", what, actual);
     }
     xmlFree(expr);
 }
@@ -1710,9 +1850,8 @@ checkManyBindings(const char *head, const char *part, const char *tail,
     snprintf(expr + used, size - used, "%s", tail);
     run(NULL, NULL, expr, actual, sizeof(actual));
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s with %lu bindings: %s\n", head,
-                (unsigned long) count, actual);
-        failures++;
+        xp3TestFail("%s with %lu bindings: %s", head,
+                    (unsigned long) count, actual);
     }
     xmlFree(expr);
 }
@@ -1849,11 +1988,19 @@ testStringLevels(void) {
         checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
         checkEval(sctx, NULL, "contains-token('a b', 'a')",
                   "error:XPST0017");
+        /* The regular expression functions are there, without the q
+         * flag, which XPath 3.0 added */
+        checkEval(sctx, NULL, "tokenize('a b', ' '), matches('a', 'A', 'i')",
+                  "string:a string:b boolean:true");
+        checkEval(sctx, NULL, "matches('a.', '.', 'q')", "error:FORX0001");
+        checkEval(sctx, NULL, "replace('a', 'a', '$', 'q')",
+                  "error:FORX0001");
     }
     if ((sctx != NULL) &&
         (xp3SetStaticContextLanguageLevel(sctx, XP3_XPATH_30) == 0)) {
         checkEval(sctx, NULL, "string-join(('a', 'b'))", "string:ab");
         checkEval(sctx, NULL, "tokenize('a b')", "error:XPST0017");
+        checkEval(sctx, NULL, "replace('a', 'a', '$', 'q')", "string:$");
     }
     xp3FreeStaticContext(sctx);
 }
@@ -3241,7 +3388,14 @@ testInvalidUtf8Matching(void) {
         /* Results copy the bytes as they are */
         { "translate(@c, 'a', 'A'), normalize-space(@c), substring(@c, 2, 1), "
           "string-length(@c)",
-          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" }
+          "string:A\x82" "b string:a\x82" "b string:\x82 integer:3" },
+        { "upper-case(@c), lower-case(@c), normalize-unicode(@c), "
+          "normalize-unicode(@c, 'NFKD'), normalize-unicode(@b || '\xcc\x81')",
+          "string:A\x82" "B string:a\x82" "b string:a\x82" "b "
+          "string:a\x82" "b string:\x82\xcc\x81" },
+        { "matches(@c, '^a.b$'), matches(@b, '^\xef\xbf\xbd$'), "
+          "replace(@c, 'b', 'B'), tokenize(@c, '\xef\xbf\xbd')",
+          "boolean:true boolean:true string:a\x82" "B string:a string:b" }
     };
     xp3DynamicContext *ctx = xp3NewDynamicContext();
     xmlDocPtr doc = parseDoc("<r><e/><e/></r>");
@@ -3469,6 +3623,11 @@ testStringSteps(void) {
     checkEval(sctx, ctx, "normalize-space($s)", "error:LIMIT");
     checkEval(sctx, ctx, "contains($s, 'b')", "error:LIMIT");
     checkEval(sctx, ctx, "translate($s, 'a', 'b')", "error:LIMIT");
+    checkEval(sctx, ctx, "upper-case($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "lower-case($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode($s)", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode($s, '')", "error:LIMIT");
+    checkEval(sctx, ctx, "normalize-unicode('a', $s)", "error:LIMIT");
     checkEval(sctx, ctx, "compare($s, $s)", "error:LIMIT");
     checkEval(sctx, ctx, "$s eq $s", "error:LIMIT");
     checkEval(sctx, ctx, "$s = $s", "error:LIMIT");
@@ -3482,6 +3641,322 @@ done:
     xmlFree(str);
     xp3FreeDynamicContext(ctx);
     xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Regular expressions
+ */
+
+/* Bind a variable to a string of count copies of a character */
+static int
+bindRepeated(xp3DynamicContext *ctx, const char *name, char c, size_t count) {
+    xmlChar *str = xmlMalloc(count + 1);
+    xp3Sequence *seq = NULL;
+    int ret = -1;
+
+    if (str != NULL) {
+        memset(str, c, count);
+        str[count] = 0;
+        seq = xp3NewStringSequence((const xmlChar **) &str, 1);
+    }
+    if (seq != NULL)
+        ret = xp3BindVariable(ctx, NULL, BAD_CAST name, seq);
+    xp3FreeSequence(seq);
+    xmlFree(str);
+    return(ret);
+}
+
+static int
+bindInteger(xp3DynamicContext *ctx, const char *name, int64_t value) {
+    xp3Sequence *seq = xp3NewIntegerSequence(&value, 1);
+    int ret = -1;
+
+    if (seq != NULL)
+        ret = xp3BindVariable(ctx, NULL, BAD_CAST name, seq);
+    xp3FreeSequence(seq);
+    return(ret);
+}
+
+/* The steps an evaluation takes: the lowest limit that lets it end */
+static uint64_t
+stepsTaken(const xp3Expr *expr, xp3DynamicContext *ctx) {
+    uint64_t low = 1;
+    uint64_t high = 100000000;
+
+    while (low < high) {
+        uint64_t mid = low + (high - low) / 2;
+        xp3Sequence *result;
+
+        xp3SetMaxSteps(ctx, mid);
+        result = xp3Evaluate(expr, ctx, NULL);
+        if (result != NULL)
+            high = mid;
+        else
+            low = mid + 1;
+        xp3FreeSequence(result);
+    }
+    xp3SetMaxSteps(ctx, 0);
+    return(low);
+}
+
+/* Whether an evaluation fails with an error code and message */
+static int
+failsWith(const xp3StaticContext *sctx, xp3DynamicContext *ctx,
+          const char *text, const char *code, const char *message) {
+    xp3Expr *expr = xp3Compile(sctx, BAD_CAST text, NULL);
+    xp3Sequence *result = NULL;
+    xp3Error *err = NULL;
+    int ret = 0;
+
+    if (expr != NULL)
+        result = xp3Evaluate(expr, ctx, &err);
+    if ((result == NULL) && (err != NULL))
+        ret = xmlStrEqual(xp3ErrorCode(err), BAD_CAST code) &&
+              xmlStrEqual(xp3ErrorMessage(err), BAD_CAST message);
+    xp3FreeSequence(result);
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    return(ret);
+}
+
+/*
+ * Matching counts against the steps of the evaluation, and a program
+ * too large to build raises LIMIT only where it could match. $s holds
+ * 200,000 bytes, which take 781 steps to read; $t is set per check.
+ */
+static void
+testRegexSteps(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *expr = NULL;
+    uint64_t empty;
+    uint64_t full;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "s") != 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "t") != 0) ||
+        (bindRepeated(ctx, "s", 'a', 200000) != 0)) {
+        check(0, "regex step test set up");
+        goto done;
+    }
+
+    /* 100,001 instructions are past the limit of the program, but a
+     * subject of fewer bytes can't match */
+    checkEval(sctx, ctx, "matches(substring($s, 1, 100000), 'a{100001}')",
+              "boolean:false");
+    check(failsWith(sctx, ctx, "matches($s, 'a{100001}')", "LIMIT",
+                    "regular expression too large"),
+          "a program too large to build raises LIMIT");
+    checkEval(sctx, ctx, "tokenize($s, 'b{100001}')", "error:LIMIT");
+
+    /* Reading $s fits the limit, matching it doesn't */
+    xp3SetMaxSteps(ctx, 900);
+    checkEval(sctx, ctx, "string-length($s)", "integer:200000");
+    check(failsWith(sctx, ctx, "matches($s, 'b')", "LIMIT",
+                    "the evaluation needs more than 900 steps"),
+          "matching raises the step limit of the evaluation");
+    checkEval(sctx, ctx, "matches($s, '(a)b\\1')", "error:LIMIT");
+    /* Exponential on the backtracking matcher, which only the steps
+     * stop */
+    xp3SetMaxSteps(ctx, 100000);
+    checkEval(sctx, ctx, "matches(substring($s, 1, 40), '^(a|a)*\\1b')",
+              "error:LIMIT");
+    xp3SetMaxSteps(ctx, 0);
+
+    /* A search of 50 bytes takes less than a step, but the operations
+     * left over add up over the calls of the evaluation */
+    expr = xp3Compile(sctx, BAD_CAST "count(for $i in 1 to 2000 "
+                      "return matches($t, 'x'))", NULL);
+    if ((expr == NULL) || (bindRepeated(ctx, "t", 'a', 0) != 0)) {
+        check(0, "regex step loop set up");
+        goto done;
+    }
+    empty = stepsTaken(expr, ctx);
+    if (bindRepeated(ctx, "t", 'a', 50) != 0) {
+        check(0, "regex step loop set up");
+        goto done;
+    }
+    full = stepsTaken(expr, ctx);
+    /* At least an operation per byte */
+    check(full >= empty + 2000 * 50 / XP3_REGEX_OPERATIONS_PER_STEP,
+          "short searches add up to steps");
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/* The allocations an evaluation makes: the first one it can do
+ * without, failing each in turn by bisection */
+static int
+allocationsMade(const xp3Expr *expr, xp3DynamicContext *ctx) {
+    int low = 0;
+    int high = 1000000;
+
+    while (low < high) {
+        int mid = low + (high - low) / 2;
+        xp3Sequence *result;
+        int injected;
+
+        xp3TestAllocFailAt(mid);
+        result = xp3Evaluate(expr, ctx, NULL);
+        injected = xp3TestAllocFailed();
+        xp3TestAllocFailAt(-1);
+        xp3FreeSequence(result);
+        if (injected)
+            low = mid + 1;
+        else
+            high = mid;
+    }
+    return(low);
+}
+
+/* The allocations of $n calls cycling through $k patterns */
+static int
+patternAllocations(const xp3Expr *expr, xp3DynamicContext *ctx, int64_t n,
+                   int64_t k) {
+    if ((bindInteger(ctx, "n", n) != 0) || (bindInteger(ctx, "k", k) != 0))
+        return(-1);
+    return(allocationsMade(expr, ctx));
+}
+
+/*
+ * The compiled patterns of an evaluation are kept, by pattern and
+ * flags. Allocations show it: eight patterns in a loop compile once
+ * each, however long the loop, while nine replace each other and
+ * compile on every call.
+ */
+static void
+testRegexCache(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *expr = NULL;
+    int one40;
+    int one80;
+    int eight40;
+    int eight80;
+    int nine40;
+    int nine80;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "n") != 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "k") != 0)) {
+        check(0, "regex cache test set up");
+        goto done;
+    }
+
+    /* Results are those of each pattern and flags, also for flags of
+     * the same length */
+    checkEval(sctx, NULL, "for $i in 1 to 4 return "
+              "matches('A', 'a', ('s', 'i')[$i mod 2 + 1])",
+              "boolean:true boolean:false boolean:true boolean:false");
+    checkEval(sctx, NULL, "for $i in 1 to 4 return "
+              "replace('a.b', '.', '-', ('q', 'x')[$i mod 2 + 1])",
+              "string:--- string:a-b string:--- string:a-b");
+    checkEval(sctx, NULL, "(1 to 3) ! replace(string(.), '(\\d)', '<$1>'), "
+              "for $i in 1 to 20 return tokenize('a1b', string($i mod 10))",
+              "string:<1> string:<2> string:<3> string:a string:b "
+              "string:a1b string:a1b string:a1b string:a1b string:a1b "
+              "string:a1b string:a1b string:a1b string:a1b "
+              "string:a string:b "
+              "string:a1b string:a1b string:a1b string:a1b string:a1b "
+              "string:a1b string:a1b string:a1b string:a1b");
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    expr = xp3Compile(sctx, BAD_CAST "for $i in 1 to $n return "
+                      "matches('ab', ('a+b', 'a+c', 'a+d', 'a+e', 'a+f', "
+                      "'a+g', 'a+h', 'a+i', 'a+j')[$i mod $k + 1])", NULL);
+    if (expr == NULL) {
+        check(0, "regex cache expression compiled");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    one40 = patternAllocations(expr, ctx, 40, 1);
+    one80 = patternAllocations(expr, ctx, 80, 1);
+    eight40 = patternAllocations(expr, ctx, 40, 8);
+    eight80 = patternAllocations(expr, ctx, 80, 8);
+    nine40 = patternAllocations(expr, ctx, 40, 9);
+    nine80 = patternAllocations(expr, ctx, 80, 9);
+    xp3TestAllocRestore();
+    check((one40 > 0) && (eight40 > one40),
+          "each new pattern compiles");
+    check(eight80 - one80 == eight40 - one40,
+          "eight patterns compile once each");
+    check(nine80 - one80 > nine40 - one40,
+          "nine patterns replace each other");
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Compiling counts as steps, an operation per instruction built, and a
+ * pattern found in the cache costs nothing more. Each pattern below
+ * builds 60,003 instructions, 234 steps: 100 calls cycling through
+ * eight of them compile eight times and fit 10,000 steps, through nine
+ * they compile on every call and don't.
+ */
+static void
+testRegexCompileSteps(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "k") != 0)) {
+        check(0, "regex compile step test set up");
+        goto done;
+    }
+    xp3SetMaxSteps(ctx, 10000);
+    if (bindInteger(ctx, "k", 8) != 0) {
+        check(0, "$k bound");
+        goto done;
+    }
+    checkEval(sctx, ctx, "count(for $i in 1 to 100 return "
+              "matches('x', ('a{60000}', 'b{60000}', 'c{60000}', 'd{60000}', "
+              "'e{60000}', 'f{60000}', 'g{60000}', 'h{60000}', "
+              "'i{60000}')[$i mod $k + 1]))", "integer:100");
+    if (bindInteger(ctx, "k", 9) != 0) {
+        check(0, "$k bound");
+        goto done;
+    }
+    checkEval(sctx, ctx, "count(for $i in 1 to 100 return "
+              "matches('x', ('a{60000}', 'b{60000}', 'c{60000}', 'd{60000}', "
+              "'e{60000}', 'f{60000}', 'g{60000}', 'h{60000}', "
+              "'i{60000}')[$i mod $k + 1]))", "error:LIMIT");
+
+done:
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
+ * Constant folding runs the regular expression functions, and an
+ * error in the pattern stays an error of the evaluation
+ */
+static void
+testRegexFolding(void) {
+    xp3Error *err = NULL;
+    xp3Expr *expr = xp3Compile(NULL, BAD_CAST "matches('a', '(')", &err);
+    xp3Sequence *result = NULL;
+
+    check(expr != NULL, "an invalid pattern compiles");
+    if (expr != NULL)
+        result = xp3Evaluate(expr, NULL, &err);
+    check((result == NULL) && (err != NULL) &&
+          xmlStrEqual(xp3ErrorCode(err), BAD_CAST "FORX0002"),
+          "an invalid pattern raises FORX0002 when evaluated");
+    xp3FreeSequence(result);
+    xp3ErrorFree(err);
+    xp3FreeExpr(expr);
+    checkEval(NULL, NULL, "if (true()) then 1 else matches('a', '(')",
+              "integer:1");
 }
 
 static int
@@ -3545,12 +4020,12 @@ testErrorPositions(void) {
     check(xp3Evaluate(expr, NULL, NULL) == NULL, "no error wanted");
     xp3FreeExpr(expr);
 
-    expr = xp3Compile(NULL, BAD_CAST "upper-case(())", NULL);
+    expr = xp3Compile(NULL, BAD_CAST "QName((), 'a')", NULL);
     err = NULL;
     check((xp3Evaluate(expr, NULL, &err) == NULL) && (err != NULL) &&
           xmlStrEqual(xp3ErrorCode(err), BAD_CAST "UNSUPPORTED") &&
           (xp3ErrorNamespace(err) == NULL) &&
-          (strstr((const char *) xp3ErrorMessage(err), " upper-case#1 ") !=
+          (strstr((const char *) xp3ErrorMessage(err), " QName#2 ") !=
            NULL), "UNSUPPORTED names a function without its namespace");
     xp3ErrorFree(err);
     xp3FreeExpr(expr);
@@ -3913,9 +4388,8 @@ checkAtomicSequence(xp3AtomicType type, const char *first,
         snprintf(actual, sizeof(actual), "error:%s",
                  (err != NULL) ? (const char *) xp3ErrorCode(err) : "none");
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: atomic sequence of %s\n  expected: %s\n"
-                "  actual:   %s\n", first, expected, actual);
-        failures++;
+        xp3TestFail("atomic sequence of %s\n  expected: %s\n"
+                    "  actual:   %s", first, expected, actual);
     }
     check((seq == NULL) == (err != NULL), "an error exactly on failure");
     xp3FreeSequence(seq);
@@ -3987,8 +4461,7 @@ testAtomicSequences(void) {
 
     /* Allocation failures: NULL with NO_MEMORY */
     if (!xp3TestAllocInstall()) {
-        printf("testeval: atomic sequence allocation-failure test "
-               "skipped\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -4066,8 +4539,7 @@ testBindingAllocationFailures(void) {
 
     check(bindingWork(decimal), "binding work without failures");
     if (!xp3TestAllocInstall()) {
-        printf("testeval: binding allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xp3FreeSequence(decimal);
         return;
@@ -4400,7 +4872,8 @@ testRandomPaths(void) {
         goto done;
     }
     plain->noOptimize = 1;
-    for (docIndex = 0; (docIndex < XP3_RANDOM_DOCS) && (failures < 20);
+    for (docIndex = 0;
+         (docIndex < XP3_RANDOM_DOCS) && (xp3TestFailures() < 20);
          docIndex++) {
         char xml[16384];
         xmlDocPtr doc;
@@ -4440,10 +4913,9 @@ testRandomPaths(void) {
             if (strchr(unoptimized, '#') != NULL)
                 withNodes++;
             if (strcmp(optimized, unoptimized) != 0) {
-                fprintf(stderr, "FAIL: optimizing changes %s on %s\n"
-                        "  optimized:   %s\n  unoptimized: %s\n", expr, xml,
-                        optimized, unoptimized);
-                failures++;
+                xp3TestFail("optimizing changes %s on %s\n"
+                            "  optimized:   %s\n  unoptimized: %s", expr, xml,
+                            optimized, unoptimized);
             }
         }
         xmlFreeDoc(doc);
@@ -4457,9 +4929,8 @@ testRandomPaths(void) {
      * means the generator has drifted and tests little.
      */
     if (withNodes * 4 < compared) {
-        fprintf(stderr, "FAIL: only %d of %d random paths find nodes\n",
-                withNodes, compared);
-        failures++;
+        xp3TestFail("only %d of %d random paths find nodes",
+                    withNodes, compared);
     }
 
 done:
@@ -4569,6 +5040,48 @@ static const char *const xp3AllocStringsExpected =
     "boolean:true integer:0 integer:1 string:a%20b%C3%A9 string:a%20b "
     "string:%C3%A9x "
     "string:http://www.w3.org/2005/xpath-functions/collation/codepoint";
+
+/* The case mappings and normalization, with results that grow, and a
+ * run of combining marks longer than a segment kept on the stack */
+static const char *const xp3AllocUnicode =
+    "(upper-case('stra\xc3\x9f" "e'), lower-case(x[1]), "
+    "string-length(upper-case(string-join(for $i in 1 to 100 "
+    "return '\xc3\x9f'))), normalize-unicode('A\xcc\x8a') eq '\xc3\x85', "
+    "normalize-unicode('\xef\xac\x81', 'NFKC'), "
+    "string-length(normalize-unicode('a' || string-join(for $i in 1 to 40 "
+    "return '\xcc\x81\xcc\xa3'), 'NFD')), normalize-unicode((), 'x'))";
+
+static const char *const xp3AllocUnicodeExpected =
+    "string:STRASSE string:one integer:200 boolean:true string:fi "
+    "integer:81 string:";
+
+/* The regular expression functions, with a pattern compiled once for
+ * a loop, a back-reference for the backtracking matcher, and a program
+ * too large to build */
+static const char *const xp3AllocMatches =
+    "(matches(x[1], 'o.e'), matches(x[2], '^(t)w\\1?o', 'i'), "
+    "for $i in 1 to 3 return matches(string($i), '[12]'), "
+    "matches('aaa', 'a{2147483647}'))";
+
+static const char *const xp3AllocMatchesExpected =
+    "boolean:true boolean:true boolean:true boolean:true boolean:false "
+    "boolean:false";
+
+/* A result longer than the first buffer, and the q flag */
+static const char *const xp3AllocReplace =
+    "(replace(x[1], '(o)(n)?', '[$2$1]'), replace(x[2], 'w', '\\$', 'q'), "
+    "string-length(replace(string-join(for $i in 1 to 40 return 'ab'), 'b', "
+    "'cc')), replace(x[1], '(.)\\1|e', 'E'))";
+
+static const char *const xp3AllocReplaceExpected =
+    "string:[no]e string:t\\$o integer:120 string:onE";
+
+static const char *const xp3AllocTokenize =
+    "(tokenize(x[1], 'n'), count(tokenize(string-join(for $i in 1 to 40 "
+    "return 'a,'), ',')), tokenize(x[2], '(w)\\1?'), tokenize((), 'a'))";
+
+static const char *const xp3AllocTokenizeExpected =
+    "string:o string:e integer:41 string:t string:o";
 
 /* The functions that compare values in sequences, on xp3DeepDoc */
 static const char *const xp3AllocCompare =
@@ -4724,8 +5237,8 @@ describeOutcome(const xp3Sequence *result, const char *code, char *out,
  * a failed allocation must still end in NO_MEMORY, never that error.
  */
 static void
-testAllocationFailuresIn(const char *xml, const char *text,
-                         const char *expected) {
+checkAllocationFailuresIn(const char *xml, const char *text,
+                          const char *expected) {
     xmlDocPtr doc = parseDoc(xml);
     char actual[2048];
     char code[64];
@@ -4742,8 +5255,7 @@ testAllocationFailuresIn(const char *xml, const char *text,
     xp3FreeSequence(result);
 
     if (!xp3TestAllocInstall()) {
-        printf("testeval: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFreeDoc(doc);
         return;
@@ -4776,8 +5288,43 @@ testAllocationFailuresIn(const char *xml, const char *text,
 }
 
 static void
-testAllocationFailures(const char *text, const char *expected) {
-    testAllocationFailuresIn(xp3TestDoc, text, expected);
+checkAllocationFailures(const char *text, const char *expected) {
+    checkAllocationFailuresIn(xp3TestDoc, text, expected);
+}
+
+static void
+testAllocationFailures(void) {
+    checkAllocationFailures(xp3AllocExpr, xp3AllocExpected);
+    checkAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
+    checkAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
+    checkAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    checkAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
+    checkAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
+    checkAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
+    checkAllocationFailures(xp3AllocUnicode, xp3AllocUnicodeExpected);
+    checkAllocationFailures(xp3AllocMatches, xp3AllocMatchesExpected);
+    checkAllocationFailures(xp3AllocReplace, xp3AllocReplaceExpected);
+    checkAllocationFailures(xp3AllocTokenize, xp3AllocTokenizeExpected);
+    checkAllocationFailures("matches(x[1], '(')", "error:FORX0002");
+    checkAllocationFailures("replace(x[1], 'o', '$')", "error:FORX0004");
+    checkAllocationFailures("tokenize(x[1], 'o?')", "error:FORX0003");
+    /* The error fn:error raises is allocated too; when that fails, the
+     * evaluation fails with NO_MEMORY instead */
+    checkAllocationFailures("error()", "error:FOER0000");
+    checkAllocationFailures("error((), 'boom')", "error:FOER0000");
+    checkAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
+                              xp3AllocCompareExpected);
+    checkAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
+                              xp3AllocNamesExpected);
+    checkAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
+    checkAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
+    checkAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
+                              xp3AllocNamespacesExpected);
+#if LIBXML_VERSION >= 21300
+    checkAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
+                              xp3AllocBaseUriExpected);
+#endif
+    checkAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
 }
 
 /*
@@ -5479,7 +6026,7 @@ testSequenceRefAllocationFailures(void) {
         goto done;
     }
     if (!xp3TestAllocInstall()) {
-        printf("testeval: xp3SequenceRef allocation-failure test skipped\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         goto done;
     }
@@ -5514,7 +6061,7 @@ done:
 
 /*
  * Register, compile and evaluate with each allocation failing in turn,
- * as testAllocationFailuresIn() does: the arguments are converted, the
+ * as checkAllocationFailuresIn() does: the arguments are converted, the
  * implementations allocate their results, the results are converted,
  * and the errors they raise are allocated too.
  */
@@ -5568,8 +6115,8 @@ done:
 }
 
 static void
-testExtensionAllocationFailures(const char *const *names, const char *text,
-                                const char *expected) {
+checkExtensionAllocationFailures(const char *const *names,
+                                 const char *text, const char *expected) {
     xmlDocPtr doc = parseDoc(xp3TestDoc);
     xp3Sequence *result;
     char actual[1024];
@@ -5586,8 +6133,7 @@ testExtensionAllocationFailures(const char *const *names, const char *text,
     xp3FreeSequence(result);
 
     if (!xp3TestAllocInstall()) {
-        printf("testeval: extension allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFreeDoc(doc);
         return;
@@ -5616,6 +6162,17 @@ testExtensionAllocationFailures(const char *const *names, const char *text,
     check(i > 0 && i < 5000, "extension allocation failure points exercised");
     xp3TestAllocRestore();
     xmlFreeDoc(doc);
+}
+
+static void
+testExtensionAllocationFailures(void) {
+    checkExtensionAllocationFailures(xp3AllocExtensionNames,
+                                     xp3AllocExtension,
+                                     xp3AllocExtensionExpected);
+    checkExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
+                                     "error:oops");
+    checkExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
+                                     "error:XPTY0004");
 }
 /*
  * Numbers longer than the buffer for parsing them with a decimal comma:
@@ -5647,13 +6204,12 @@ testLocale(void) {
     }
     if (i == sizeof(names) / sizeof(names[0]) ||
         strcmp(localeconv()->decimal_point, ",") != 0) {
-        printf("testeval: locale test skipped: no locale with a decimal "
-               "comma\n");
+        xp3TestSkip("no locale with a decimal comma");
         setlocale(LC_NUMERIC, "C");
         return;
     }
     checkEval(NULL, NULL, xp3LocaleExpr, xp3LocaleExpected);
-    testAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
+    checkAllocationFailures(xp3LocaleExpr, xp3LocaleExpected);
     setlocale(LC_NUMERIC, "C");
 }
 
@@ -5661,86 +6217,60 @@ int
 main(void) {
     xmlInitParser();
 
-    testCases();
-    testConstants();
-    testRandomPaths();
-    testEffectiveBoolean();
-    testHugeLiteral();
-    testHugeNumbers();
-    testQNameComparison();
-    testManyBindings();
-    testFocus();
-    testFunctionFocus();
-    testAggregateLevels();
-    testStringLevels();
-    testDeepEqual();
-    testNodeNames();
-    testTreeShape();
-    testPath();
-    testNamespaces();
-    testUris();
-    testGenerateId();
-    testDeepTrees();
-    testTreeShapeSteps();
-    testPathSteps();
-    testNamespaceSteps();
-    testBaseUriSteps();
-    testUserErrors();
-    testTreeChange();
-    testInvalidUtf8();
-    testInvalidUtf8Matching();
-    testVariables();
-    testLimits();
-    testStepLimit();
-    testStringSteps();
-    testBoolean();
-    testErrorPositions();
-    testSequences();
-    testReadingItems();
-    testBuildingSequences();
-    testAtomicSequences();
-    testBindingAllocationFailures();
-    testAllocationFailures(xp3AllocExpr, xp3AllocExpected);
-    testAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
-    testAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
-    testAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
-    testAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
-    testAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
-    testAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
-    /* The error fn:error raises is allocated too; when that fails, the
-     * evaluation fails with NO_MEMORY instead */
-    testAllocationFailures("error()", "error:FOER0000");
-    testAllocationFailures("error((), 'boom')", "error:FOER0000");
-    testAllocationFailuresIn(xp3DeepDoc, xp3AllocCompare,
-                             xp3AllocCompareExpected);
-    testAllocationFailuresIn(xp3NameDoc, xp3AllocNames,
-                             xp3AllocNamesExpected);
-    testAllocationFailuresIn(xp3TreeDoc, xp3AllocTree, xp3AllocTreeExpected);
-    testAllocationFailuresIn(xp3PathDoc, xp3AllocPath, xp3AllocPathExpected);
-    testAllocationFailuresIn(xp3NamespaceDoc, xp3AllocNamespaces,
-                             xp3AllocNamespacesExpected);
-#if LIBXML_VERSION >= 21300
-    testAllocationFailuresIn(xp3UriDoc, xp3AllocBaseUri,
-                             xp3AllocBaseUriExpected);
-#endif
-    testAllocationFailuresIn(xp3UriDoc, xp3AllocIds, xp3AllocIdsExpected);
-    testExtensionFunctions();
-    testExtensionErrors();
-    testExtensionUserData();
-    testExtensionFolding();
-    testExtensionAfterFree();
-    testExtensionLimits();
-    testExtensionKeep();
-    testSequenceRefAllocationFailures();
-    testExtensionAllocationFailures(xp3AllocExtensionNames, xp3AllocExtension,
-                                    xp3AllocExtensionExpected);
-    testExtensionAllocationFailures(xp3FailNames, "ex:fail('user')",
-                                    "error:oops");
-    testExtensionAllocationFailures(xp3IntegerNames, "ex:integer('string')",
-                                    "error:XPTY0004");
-    testLocale();
+    XP3_TEST_RUN(testCases);
+    XP3_TEST_RUN(testConstants);
+    XP3_TEST_RUN(testRandomPaths);
+    XP3_TEST_RUN(testEffectiveBoolean);
+    XP3_TEST_RUN(testHugeLiteral);
+    XP3_TEST_RUN(testHugeNumbers);
+    XP3_TEST_RUN(testQNameComparison);
+    XP3_TEST_RUN(testManyBindings);
+    XP3_TEST_RUN(testFocus);
+    XP3_TEST_RUN(testFunctionFocus);
+    XP3_TEST_RUN(testAggregateLevels);
+    XP3_TEST_RUN(testStringLevels);
+    XP3_TEST_RUN(testDeepEqual);
+    XP3_TEST_RUN(testNodeNames);
+    XP3_TEST_RUN(testTreeShape);
+    XP3_TEST_RUN(testPath);
+    XP3_TEST_RUN(testNamespaces);
+    XP3_TEST_RUN(testUris);
+    XP3_TEST_RUN(testGenerateId);
+    XP3_TEST_RUN(testDeepTrees);
+    XP3_TEST_RUN(testTreeShapeSteps);
+    XP3_TEST_RUN(testPathSteps);
+    XP3_TEST_RUN(testNamespaceSteps);
+    XP3_TEST_RUN(testBaseUriSteps);
+    XP3_TEST_RUN(testUserErrors);
+    XP3_TEST_RUN(testTreeChange);
+    XP3_TEST_RUN(testInvalidUtf8);
+    XP3_TEST_RUN(testInvalidUtf8Matching);
+    XP3_TEST_RUN(testVariables);
+    XP3_TEST_RUN(testLimits);
+    XP3_TEST_RUN(testStepLimit);
+    XP3_TEST_RUN(testStringSteps);
+    XP3_TEST_RUN(testRegexSteps);
+    XP3_TEST_RUN(testRegexCache);
+    XP3_TEST_RUN(testRegexCompileSteps);
+    XP3_TEST_RUN(testRegexFolding);
+    XP3_TEST_RUN(testBoolean);
+    XP3_TEST_RUN(testErrorPositions);
+    XP3_TEST_RUN(testSequences);
+    XP3_TEST_RUN(testReadingItems);
+    XP3_TEST_RUN(testBuildingSequences);
+    XP3_TEST_RUN(testAtomicSequences);
+    XP3_TEST_RUN(testBindingAllocationFailures);
+    XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testExtensionFunctions);
+    XP3_TEST_RUN(testExtensionErrors);
+    XP3_TEST_RUN(testExtensionUserData);
+    XP3_TEST_RUN(testExtensionFolding);
+    XP3_TEST_RUN(testExtensionAfterFree);
+    XP3_TEST_RUN(testExtensionLimits);
+    XP3_TEST_RUN(testExtensionKeep);
+    XP3_TEST_RUN(testSequenceRefAllocationFailures);
+    XP3_TEST_RUN(testExtensionAllocationFailures);
+    XP3_TEST_RUN(testLocale);
 
-    if (failures == 0)
-        printf("testeval: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }
