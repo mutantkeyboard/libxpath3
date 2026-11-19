@@ -34,7 +34,7 @@ xp3NegateNumber(const xp3Atomic *value, xp3Atomic **res);
 
 xp3ErrCode
 xp3CompareAtomics(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
-                  xp3LanguageLevel level, int *result);
+                  xp3LanguageLevel level, xp3Clock *clock, int *result);
 
 xp3ErrCode
 xp3CastAtomic(const xp3Atomic *value, xp3TypeId target, xp3Atomic **res);

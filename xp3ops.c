@@ -3,9 +3,10 @@
  *
  * Arithmetic on numbers with type promotion (F&O 3.1, 4.2), value
  * comparison (XPath 3.1, 3.7.1, and the comparison operators of F&O
- * 3.1), and casting between the atomic types implemented so far (F&O
- * 3.1, 19). The evaluator atomizes the operands and handles the empty
- * sequence; the functions here take single atomic values.
+ * 3.1, also those of dates, times and durations in 8.2 and 9.4), and
+ * casting between the atomic types (F&O 3.1, 19). The evaluator
+ * atomizes the operands and handles the empty sequence; the functions
+ * here take single atomic values.
  *
  * Two casts follow choices recorded in doc/DESIGN.md 4.2: xs:double
  * to xs:decimal gives the shortest decimal that reads back as the
@@ -107,6 +108,22 @@ static xp3ErrCode
 newBoolean(int value, xp3Atomic **res) {
     *res = xp3AtomicNewBoolean(value);
     return((*res != NULL) ? XP3_ERR_OK : XP3_ERR_NO_MEMORY);
+}
+
+static xp3ErrCode
+newDateTime(xp3TypeId type, const xp3DateTime *value, xp3Atomic **res) {
+    *res = xp3AtomicNewDateTime(type, value);
+    if (*res == NULL)
+        return(XP3_ERR_NO_MEMORY);
+    return(XP3_ERR_OK);
+}
+
+static xp3ErrCode
+newDuration(xp3TypeId type, const xp3Duration *value, xp3Atomic **res) {
+    *res = xp3AtomicNewDuration(type, value);
+    if (*res == NULL)
+        return(XP3_ERR_NO_MEMORY);
+    return(XP3_ERR_OK);
 }
 
 /*
@@ -464,7 +481,10 @@ typedef enum {
     XP3_CMP_BOOLEAN,
     XP3_CMP_HEX_BINARY,
     XP3_CMP_BASE64_BINARY,
-    XP3_CMP_QNAME
+    XP3_CMP_QNAME,
+    XP3_CMP_DURATION,           /* all three duration types */
+    XP3_CMP_DATE_TIME           /* the date and time types, each
+                                 * primitive type only with itself */
 } xp3CompareClass;
 
 static xp3CompareClass
@@ -474,6 +494,10 @@ compareClass(xp3TypeId type) {
     if (xp3TypeDerivesFrom(type, XP3_TYPE_STRING) ||
         (type == XP3_TYPE_ANY_URI) || (type == XP3_TYPE_UNTYPED_ATOMIC))
         return(XP3_CMP_STRING);
+    if (xp3TypeRepresentation(type) == XP3_REP_DURATION)
+        return(XP3_CMP_DURATION);
+    if (xp3TypeRepresentation(type) == XP3_REP_DATE_TIME)
+        return(XP3_CMP_DATE_TIME);
     switch (type) {
         case XP3_TYPE_BOOLEAN:
             return(XP3_CMP_BOOLEAN);
@@ -531,6 +555,51 @@ compareBytes(const xp3Atomic *left, const xp3Atomic *right) {
     return((left->u.bin.len < right->u.bin.len) ? -1 : 1);
 }
 
+/* Whether two durations are ordered: both xs:yearMonthDuration or
+ * both xs:dayTimeDuration (F&O 3.1, 8.1); xs:duration has only
+ * equality */
+static int
+durationsOrdered(xp3TypeId left, xp3TypeId right) {
+    if (xp3TypeDerivesFrom(left, XP3_TYPE_YEAR_MONTH_DURATION) &&
+        xp3TypeDerivesFrom(right, XP3_TYPE_YEAR_MONTH_DURATION))
+        return(1);
+    return(xp3TypeDerivesFrom(left, XP3_TYPE_DAY_TIME_DURATION) &&
+           xp3TypeDerivesFrom(right, XP3_TYPE_DAY_TIME_DURATION));
+}
+
+/* Whether values of a primitive date or time type are ordered: the g*
+ * types have only equality (F&O 3.1, 9.1) */
+static int
+dateTimeOrdered(xp3TypeId primitive) {
+    return((primitive == XP3_TYPE_DATE_TIME) ||
+           (primitive == XP3_TYPE_DATE) || (primitive == XP3_TYPE_TIME));
+}
+
+/*
+ * Compare two values of one primitive date or time type by their
+ * starting instants in UTC (F&O 3.1, 9.4). The implicit timezone is
+ * asked for only if one of them has no timezone, so that values with
+ * timezones compare, and fold, without it.
+ */
+static xp3ErrCode
+compareDateTimes(const xp3Atomic *left, const xp3Atomic *right,
+                 xp3Clock *clock, int *cmp) {
+    int timezone = 0;
+    xp3Instant leftInstant;
+    xp3Instant rightInstant;
+
+    if (!left->u.dt.hasTimezone || !right->u.dt.hasTimezone) {
+        xp3ErrCode err = xp3ClockTimezone(clock, &timezone);
+
+        if (err != XP3_ERR_OK)
+            return(err);
+    }
+    leftInstant = xp3DateTimeInstant(left->type, &left->u.dt, timezone);
+    rightInstant = xp3DateTimeInstant(right->type, &right->u.dt, timezone);
+    *cmp = xp3InstantCompare(&leftInstant, &rightInstant);
+    return(XP3_ERR_OK);
+}
+
 /* The value comparison operator for a general comparison operator */
 static xp3AstOp
 valueOperator(xp3AstOp op) {
@@ -559,20 +628,28 @@ valueOperator(xp3AstOp op) {
  * them first where a general comparison needs another type. Strings
  * compare by code point, with each byte that isn't UTF-8 as U+FFFD.
  * Numbers are promoted to a common type, and NaN is unequal to
- * everything.
+ * everything. Durations of any type are equal if their months and
+ * seconds are, and only two xs:yearMonthDuration or two
+ * xs:dayTimeDuration values are ordered. Dates and times compare with
+ * values of the same primitive type, by their instants in UTC, and
+ * the g* types only for equality.
  *
  * @param op      the operator: eq, ne, lt, le, gt, ge, or =, != ...
  * @param left    the first value
  * @param right   the second value
  * @param level   the language level: ordering binary values is new in
  *                XPath 3.1
+ * @param clock   gives the implicit timezone, for dates and times
+ *                without one; NULL for none
  * @param result  set to 1 or 0
  * @returns XP3_ERR_OK, XP3_ERR_XPTY0004 if the values can't be
- *          compared with this operator, or XP3_ERR_NO_MEMORY
+ *          compared with this operator, XP3_ERR_NEEDS_CONTEXT if they
+ *          need the implicit timezone and the clock has none, or
+ *          XP3_ERR_NO_MEMORY
  */
 xp3ErrCode
 xp3CompareAtomics(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
-                  xp3LanguageLevel level, int *result) {
+                  xp3LanguageLevel level, xp3Clock *clock, int *result) {
     xp3CompareClass leftClass = compareClass(left->type);
     xp3CompareClass rightClass = compareClass(right->type);
     int ordering;
@@ -604,6 +681,23 @@ xp3CompareAtomics(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
                 return(XP3_ERR_XPTY0004);
             cmp = compareBytes(left, right);
             break;
+        case XP3_CMP_DURATION:
+            if (ordering && !durationsOrdered(left->type, right->type))
+                return(XP3_ERR_XPTY0004);
+            cmp = xp3DurationCompare(&left->u.dur, &right->u.dur);
+            break;
+        case XP3_CMP_DATE_TIME: {
+            xp3TypeId primitive = xp3TypePrimitive(left->type);
+
+            if (primitive != xp3TypePrimitive(right->type))
+                return(XP3_ERR_XPTY0004);
+            if (ordering && !dateTimeOrdered(primitive))
+                return(XP3_ERR_XPTY0004);
+            err = compareDateTimes(left, right, clock, &cmp);
+            if (err != XP3_ERR_OK)
+                return(err);
+            break;
+        }
         default:
             /* QNames are equal or not, without order */
             if (ordering)
@@ -1049,6 +1143,8 @@ castFromString(const xmlChar *str, xp3TypeId target, xp3Atomic **res) {
     xp3Decimal *dec;
     xp3ErrCode err;
     double value;
+    xp3DateTime dateTime;
+    xp3Duration duration;
 
     if ((target == XP3_TYPE_STRING) || (target == XP3_TYPE_UNTYPED_ATOMIC))
         text = xmlStrdup(str);
@@ -1102,9 +1198,18 @@ castFromString(const xmlChar *str, xp3TypeId target, xp3Atomic **res) {
             else
                 err = parseBase64(text, res);
             break;
+        case XP3_REP_DURATION:
+            err = xp3DurationParse(target, text, &duration);
+            if (err == XP3_ERR_OK)
+                err = newDuration(target, &duration, res);
+            break;
+        case XP3_REP_DATE_TIME:
+            err = xp3DateTimeParse(target, text, &dateTime);
+            if (err == XP3_ERR_OK)
+                err = newDateTime(target, &dateTime, res);
+            break;
         default:
-            /* QNames need the namespaces of the expression, and dates,
-             * times and durations come with Part 10 */
+            /* QNames need the namespaces of the expression */
             err = XP3_ERR_UNSUPPORTED;
             break;
     }
@@ -1202,8 +1307,10 @@ castToBinaryFloat(const xp3Atomic *value, xp3TypeId target,
  * @returns XP3_ERR_OK, XP3_ERR_FORG0001 for a value that doesn't fit
  *          the type, XP3_ERR_XPTY0004 for a cast the table forbids,
  *          XP3_ERR_FOCA0001, XP3_ERR_FOCA0002 or XP3_ERR_FOCA0003 for
- *          numbers that can't be converted, XP3_ERR_UNSUPPORTED for
- *          QNames from strings and the date and time types, or
+ *          numbers that can't be converted, XP3_ERR_FODT0001 for a
+ *          year beyond +-2,147,483,647, XP3_ERR_FODT0002 for a
+ *          duration whose months or seconds don't fit in 64 bits,
+ *          XP3_ERR_UNSUPPORTED for QNames from strings, or
  *          XP3_ERR_NO_MEMORY
  */
 xp3ErrCode
@@ -1212,6 +1319,8 @@ xp3CastAtomic(const xp3Atomic *value, xp3TypeId target, xp3Atomic **res) {
     xp3Representation rep = xp3TypeRepresentation(target);
     xmlChar *str;
     xp3ErrCode err;
+    xp3DateTime dateTime;
+    xp3Duration duration;
 
     *res = NULL;
     if (source == target) {
@@ -1223,9 +1332,7 @@ xp3CastAtomic(const xp3Atomic *value, xp3TypeId target, xp3Atomic **res) {
     if ((rep == XP3_REP_STRING) && (target != XP3_TYPE_ANY_URI)) {
         str = xp3AtomicToString(value);
         if (str == NULL)
-            return((xp3TypeRepresentation(source) == XP3_REP_DURATION) ||
-                   (xp3TypeRepresentation(source) == XP3_REP_DATE_TIME) ?
-                   XP3_ERR_UNSUPPORTED : XP3_ERR_NO_MEMORY);
+            return(XP3_ERR_NO_MEMORY);
         err = castFromString(str, target, res);
         xmlFree(str);
         return(err);
@@ -1262,9 +1369,21 @@ xp3CastAtomic(const xp3Atomic *value, xp3TypeId target, xp3Atomic **res) {
             *res = xp3AtomicNewBinary(target, value->u.bin.data,
                                       value->u.bin.len);
             return((*res != NULL) ? XP3_ERR_OK : XP3_ERR_NO_MEMORY);
+        case XP3_REP_DURATION:
+            if (xp3TypeRepresentation(source) != XP3_REP_DURATION)
+                return(XP3_ERR_XPTY0004);
+            xp3DurationConvert(&value->u.dur, target, &duration);
+            return(newDuration(target, &duration, res));
+        case XP3_REP_DATE_TIME:
+            if (xp3TypeRepresentation(source) != XP3_REP_DATE_TIME)
+                return(XP3_ERR_XPTY0004);
+            err = xp3DateTimeConvert(source, &value->u.dt, target,
+                                     &dateTime);
+            if (err != XP3_ERR_OK)
+                return(err);
+            return(newDateTime(target, &dateTime, res));
         default:
-            /* xs:anyURI and xs:QName only from strings or themselves,
-             * dates and durations not from these types */
+            /* xs:anyURI and xs:QName only from strings or themselves */
             return(XP3_ERR_XPTY0004);
     }
 }

@@ -184,6 +184,9 @@ xp3FuncStringFits(xp3FuncCall *call, size_t len);
 xp3LanguageLevel
 xp3FuncLevel(xp3FuncCall *call);
 
+xp3Clock *
+xp3FuncClock(xp3FuncCall *call);
+
 void
 xp3FuncBuilderInit(xp3FuncCall *call, xp3SeqBuilder *builder);
 

@@ -17,6 +17,23 @@ cc = meson.get_compiler('c')
 # Variable-length arrays are not allowed.
 add_project_arguments(cc.get_supported_arguments('-Werror=vla'), language: 'c')
 
+# The system clock and the local offset (xp3datetime.c), each from the
+# first of these that exists; Windows has its own. Without
+# localtime_r() and gmtime_r() the local offset is UTC, because
+# localtime() shares its result between threads.
+posix_time_prefix = '#define _POSIX_C_SOURCE 200809L\n#include <time.h>'
+if cc.has_function('clock_gettime', prefix: posix_time_prefix)
+    add_project_arguments('-DXP3_HAVE_CLOCK_GETTIME', language: 'c')
+endif
+if cc.has_function('gettimeofday',
+                   prefix: '#define _POSIX_C_SOURCE 200809L\n#include <sys/time.h>')
+    add_project_arguments('-DXP3_HAVE_GETTIMEOFDAY', language: 'c')
+endif
+if (cc.has_function('localtime_r', prefix: posix_time_prefix) and
+    cc.has_function('gmtime_r', prefix: posix_time_prefix))
+    add_project_arguments('-DXP3_HAVE_LOCALTIME_R', language: 'c')
+endif
+
 version = meson.project_version()
 version_parts = version.split('.')
 
@@ -30,6 +47,7 @@ xpath3_src = files(
     'xp3ast.c',
     'xp3chars.c',
     'xp3context.c',
+    'xp3datetime.c',
     'xp3decimal.c',
     'xp3double.c',
     'xp3error.c',

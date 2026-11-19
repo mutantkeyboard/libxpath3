@@ -179,8 +179,8 @@ spliceItems(xp3FuncCall *call, const xp3Value *value, uint64_t from,
     return(xp3FuncBuilderFinish(call, &builder));
 }
 
-/* Whether values of a type are durations, dates or times, which come
- * with Part 10 */
+/* Whether values of a type are durations, dates or times, which can't
+ * be added up yet */
 static int
 isTemporal(xp3TypeId type) {
     xp3Representation rep = xp3TypeRepresentation(type);
@@ -726,12 +726,12 @@ compareSteps(xp3FuncCall *call, const xp3Atomic *left,
                               xp3AtomicSize(right, SIZE_MAX)));
 }
 
-/* Record that comparing dates, times and durations is not implemented
- * yet. Returns -1. */
+/* Record that a comparison needs the implicit timezone, which only
+ * an evaluation has, not folding. Returns -1. */
 static int
-temporalUnsupported(xp3FuncCall *call) {
-    xp3FuncError(call, XP3_ERR_UNSUPPORTED, "comparing dates, times "
-                 "and durations is not implemented yet");
+needsTimezone(xp3FuncCall *call) {
+    xp3FuncError(call, XP3_ERR_NEEDS_CONTEXT, "comparing dates and "
+                 "times without a timezone needs the implicit timezone");
     return(-1);
 }
 
@@ -752,8 +752,6 @@ atomicsEqual(xp3FuncCall *call, const xp3Atomic *left,
     xp3ErrCode err;
     int equal;
 
-    if (isTemporal(left->type) || isTemporal(right->type))
-        return(temporalUnsupported(call));
     if (compareSteps(call, left, right) < 0)
         return(-1);
     if (isStringType(left->type) && isStringType(right->type))
@@ -762,11 +760,13 @@ atomicsEqual(xp3FuncCall *call, const xp3Atomic *left,
     if (nanEqual && isNaNValue(left) && isNaNValue(right))
         return(1);
     err = xp3CompareAtomics(XP3_OP_VAL_EQ, left, right, xp3FuncLevel(call),
-                            &equal);
+                            xp3FuncClock(call), &equal);
     if (err == XP3_ERR_OK)
         return(equal);
     if (err == XP3_ERR_XPTY0004)
         return(0);
+    if (err == XP3_ERR_NEEDS_CONTEXT)
+        return(needsTimezone(call));
     xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
     return(-1);
 }
@@ -787,7 +787,10 @@ callCollation(xp3FuncCall *call, xp3Value **args, int count, int arity,
  * Strings, binary values, QNames and booleans are keyed by a hash of
  * all that their equality looks at, strings folded as the collation
  * compares them, so distinct values share a key only when the hash
- * collides.
+ * collides. Dates and times are keyed by their primitive type and
+ * their instant in UTC, so a date never equals a dateTime, and
+ * durations of all three types by their months and seconds, so P1Y
+ * equals P12M and P0M equals PT0S.
  *
  * Numbers need more, because eq promotes them (xp3CompareAtomics()):
  * two decimals compare exactly, a decimal and a double as doubles, a
@@ -819,7 +822,9 @@ typedef enum {
     XP3_HASH_BASE64_BINARY,
     XP3_HASH_QNAME,
     XP3_HASH_DECIMAL,           /* a kept decimal, by its exact value */
-    XP3_HASH_DOUBLE             /* a double value, with marks */
+    XP3_HASH_DOUBLE,            /* a double value, with marks */
+    XP3_HASH_DURATION,
+    XP3_HASH_DATE_TIME          /* by primitive type and instant */
 } xp3HashClass;
 
 /* Marks of an XP3_HASH_DOUBLE entry: the kept numbers equal to it */
@@ -909,6 +914,46 @@ hashString(uint64_t hash, const xmlChar *str, xp3Collation collation) {
     return(hashBytes(hash, str, strlen((const char *) str), collation));
 }
 
+/* Hash a 64-bit number into a hash */
+static uint64_t
+hashNumber(uint64_t hash, uint64_t number) {
+    return(mix64(hash ^ mix64(number)));
+}
+
+/*
+ * The key of a date or time: its primitive type and its instant in
+ * UTC, with the implicit timezone for a value without one, as eq
+ * compares them. Returns 0, or -1 after recording an error.
+ */
+static int
+dateTimeKey(xp3FuncCall *call, uint64_t basis, const xp3Atomic *atomic,
+            uint64_t *key) {
+    int timezone = 0;
+    xp3Instant instant;
+
+    if (!atomic->u.dt.hasTimezone) {
+        xp3ErrCode err = xp3ClockTimezone(xp3FuncClock(call), &timezone);
+
+        if (err != XP3_ERR_OK)
+            return(needsTimezone(call));
+    }
+    instant = xp3DateTimeInstant(atomic->type, &atomic->u.dt, timezone);
+    *key = hashNumber(basis, (uint64_t) xp3TypePrimitive(atomic->type));
+    *key = hashNumber(*key, (uint64_t) instant.seconds);
+    *key = hashNumber(*key, (uint64_t) instant.nanoseconds);
+    return(0);
+}
+
+/* The key of a duration of any of the three types: its months and
+ * seconds */
+static uint64_t
+durationKey(uint64_t basis, const xp3Duration *duration) {
+    uint64_t key = hashNumber(basis, (uint64_t) duration->months);
+
+    key = hashNumber(key, (uint64_t) duration->seconds);
+    return(hashNumber(key, (uint64_t) duration->nanoseconds));
+}
+
 /*
  * The key of a value that isn't a number, consistent with
  * atomicsEqual() with NaN equal: equal values get the same key. Sets
@@ -922,8 +967,6 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
 
     *cls = XP3_HASH_NONE;
     *key = 0;
-    if (isTemporal(atomic->type))
-        return(temporalUnsupported(call));
     if (isStringType(atomic->type)) {
         const xmlChar *str = atomic->u.str;
         size_t len = strlen((const char *) str);
@@ -977,6 +1020,15 @@ hashKey(xp3FuncCall *call, const xp3HashTable *table, const xp3Atomic *atomic,
                              XP3_COLLATION_CODEPOINT);
             *key = hashString(*key, atomic->u.qname.local,
                               XP3_COLLATION_CODEPOINT);
+            break;
+        case XP3_REP_DURATION:
+            *cls = XP3_HASH_DURATION;
+            *key = durationKey(basis, &atomic->u.dur);
+            break;
+        case XP3_REP_DATE_TIME:
+            if (dateTimeKey(call, basis, atomic, key) < 0)
+                return(-1);
+            *cls = XP3_HASH_DATE_TIME;
             break;
         default:
             break;
@@ -1824,6 +1876,8 @@ aggregateError(xp3FuncCall *call, xp3ErrCode err, const char *name,
         xp3FuncError(call, err, "the result of %s is too large", name);
     else if (err == XP3_ERR_NO_MEMORY)
         xp3FuncError(call, err, NULL);
+    else if (err == XP3_ERR_NEEDS_CONTEXT)
+        needsTimezone(call);
     else if (left->type == right->type)
         xp3FuncError(call, XP3_ERR_FORG0006, "%s got values of type "
                      "xs:%s, which have no order", name,
@@ -2054,12 +2108,13 @@ hasStrings(const xp3Value *value) {
 /* Compare two values for fn:min and fn:max: strings and URIs under
  * the collation, all others as by the value comparison */
 static xp3ErrCode
-orderValues(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
-            xp3LanguageLevel level, xp3Collation collation, int *result) {
+orderValues(xp3FuncCall *call, xp3AstOp op, const xp3Atomic *left,
+            const xp3Atomic *right, xp3Collation collation, int *result) {
     int cmp;
 
     if (!isStringType(left->type) || !isStringType(right->type))
-        return(xp3CompareAtomics(op, left, right, level, result));
+        return(xp3CompareAtomics(op, left, right, xp3FuncLevel(call),
+                                 xp3FuncClock(call), result));
     cmp = xp3CollationCompare(collation, left->u.str, right->u.str);
     *result = (op == XP3_OP_VAL_LT) ? (cmp < 0) : (cmp > 0);
     return(XP3_ERR_OK);
@@ -2098,12 +2153,14 @@ classifyExtreme(xp3TypesSeen *seen, const xp3Atomic *atomic) {
  * xs:decimal, xs:float and xs:double, which promotes it to xs:float or
  * xs:double, or xs:string and xs:anyURI, which makes a URI an
  * xs:string; if there is NaN, the result is NaN. Strings compare under the
- * collation; if there are only URIs, the spec ignores it.
+ * collation; if there are only URIs, the spec ignores it. Dates, times,
+ * dateTimes and the two ordered durations compare with their own type
+ * only, and xs:duration and the g* types, which have no order, raise
+ * FORG0006 like other values without one.
  */
 static xp3Value *
 extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
              xp3Collation collation, const char *name) {
-    xp3LanguageLevel level = xp3FuncLevel(call);
     xp3Atomic *best = NULL;
     xp3Atomic *result;
     xp3TypesSeen seen;
@@ -2133,12 +2190,6 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
 
         if (atomic == NULL)
             goto error;
-        if (isTemporal(atomic->type)) {
-            xp3FuncError(call, XP3_ERR_UNSUPPORTED, "%s of dates, times "
-                         "and durations is not implemented yet", name);
-            xp3AtomicUnref(atomic);
-            goto error;
-        }
         classifyExtreme(&seen, atomic);
         /* The first value is compared with itself, so that a single
          * value without an order, such as a QName, is an error too */
@@ -2150,7 +2201,7 @@ extremeValue(xp3FuncCall *call, const xp3Value *value, xp3AstOp op,
             xp3AtomicUnref(atomic);
             goto error;
         }
-        err = orderValues(op, atomic, other, level, collation, &better);
+        err = orderValues(call, op, atomic, other, collation, &better);
         if (err != XP3_ERR_OK) {
             aggregateError(call, err, name, atomic, other);
             xp3AtomicUnref(atomic);

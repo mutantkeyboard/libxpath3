@@ -15,6 +15,7 @@
 #ifndef XP3_XPATH3_H
 #define XP3_XPATH3_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -232,6 +233,12 @@ typedef enum {
     XP3_FUNCTION_DETERMINISTIC = 1 << 0
 } xp3FunctionFlags;
 
+/**
+ * Passed to xp3SetImplicitTimezone() instead of an offset, to go back
+ * to the default implicit timezone.
+ */
+#define XP3_TIMEZONE_LOCAL INT_MIN
+
 /*
  * Version
  */
@@ -330,6 +337,12 @@ XP3PUBFUN int
 XP3PUBFUN int
 		    xp3SetDynamicContextUserData(xp3DynamicContext *ctx,
 						 void *userData);
+XP3PUBFUN int
+		    xp3SetCurrentDateTime	(xp3DynamicContext *ctx,
+						 const xmlChar *dateTime);
+XP3PUBFUN int
+		    xp3SetImplicitTimezone	(xp3DynamicContext *ctx,
+						 int minutes);
 
 /*
  * Evaluating
