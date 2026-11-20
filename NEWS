@@ -1,5 +1,49 @@
 NEWS file for libxpath3
 
+v0.3.0: Nov 20 2026
+
+### Regular expressions and Unicode
+
+libxpath3 0.3 adds the regular expression functions and the string
+functions that need Unicode tables.
+
+- `matches`, `replace` and `tokenize` with a pattern, with the flags
+  `s`, `m`, `i`, `x` and `q`, capture groups, back-references,
+  reluctant quantifiers and class subtraction. Invalid patterns,
+  flags and replacements raise FORX0001 to FORX0004.
+- The regex engine is libxpath3's own, because libxml2's `xmlRegexp`
+  only matches whole strings and has no capture groups. Patterns
+  without back-references run on a Pike VM in time linear in the
+  input, and patterns with them on a backtracking matcher. Both are
+  adapted from Russ Cox's re1. Character classes follow XSD 1.1, so
+  `[0-9-.]` is valid.
+- Compiled patterns are cached per evaluation. Compiling and matching
+  count against `xp3SetMaxSteps()`, and patterns that are too large
+  or too deeply nested raise a limit error.
+- `upper-case`, `lower-case` and `normalize-unicode` (NFC, NFD, NFKC
+  and NFKD), and `\p{..}` categories and blocks in patterns, use
+  tables generated from Unicode 18.0.0. They are committed, so
+  building needs no Python.
+
+The public API is unchanged.
+
+### Conformance
+
+Against the W3C QT3 test suite at commit 201a6e4, compiling passes all
+XPath 2.0 tests and all but one known failure at 3.0 and 3.1.
+Evaluating, XPath 3.1 has 12,651 tests passed, 59 failed and 9,321
+not judged yet. 56 of the failures need UCA collations with real
+tailorings.
+
+### Not yet supported
+
+- Date, time and duration values.
+- The QName functions, `resolve-uri`, `format-number`, `doc` and
+  `analyze-string`.
+- Maps, arrays, function items and the higher-order functions.
+
+The namespace axis is not supported by design (XPST0010).
+
 v0.2.0: Nov 11 2026
 
 ### Function library, core
