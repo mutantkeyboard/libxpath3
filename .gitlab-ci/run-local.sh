@@ -147,13 +147,16 @@ job_fuzz() {
     meson setup build --werror -Dfuzzer=true \
         -Db_sanitize=address,undefined -Db_lundef=false &&
     meson compile -C build &&
-    mkdir corpus corpus-eval && cp fuzz/seed/* corpus/ &&
-    cp fuzz/seed-eval/* corpus-eval/ &&
+    mkdir corpus corpus-eval corpus-regex && cp fuzz/seed/* corpus/ &&
+    cp fuzz/seed-eval/* corpus-eval/ && cp fuzz/seed-regex/* corpus-regex/ &&
     ./build/fuzz/xp3parse-fuzz -dict=fuzz/xp3.dict -max_len=10000 \
         -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 corpus &&
     ./build/fuzz/xp3eval-fuzz -dict=fuzz/xp3.dict -max_len=10000 \
         -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 \
-        corpus-eval
+        corpus-eval &&
+    ./build/fuzz/xp3regex-fuzz -dict=fuzz/regex.dict -max_len=10000 \
+        -max_total_time=${FUZZ_SECONDS:-120} -print_final_stats=1 \
+        corpus-regex
 }
 
 job_docs() {

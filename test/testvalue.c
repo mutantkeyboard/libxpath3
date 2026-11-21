@@ -26,15 +26,11 @@
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /*
@@ -504,7 +500,7 @@ expectXmlStr(xmlChar *actual, const char *expected, const char *what) {
 }
 
 static void
-testNumberStrings(const char *label) {
+checkNumberStrings(const char *label) {
     size_t i;
 
     for (i = 0; i < sizeof(doubleCases) / sizeof(doubleCases[0]); i++) {
@@ -530,13 +526,18 @@ testNumberStrings(const char *label) {
     check(parseDouble(xp3LongNumber) == 1, "parse a long number");
 }
 
+static void
+testNumberStrings(void) {
+    checkNumberStrings("");
+}
+
 /*
  * Whether parsing the long number allocates: expected under a
  * decimal-comma locale, where a failure must be reported, and never
  * under a locale with a decimal point.
  */
 static void
-testParseAllocation(int allocates) {
+checkParseAllocation(int allocates) {
     double value;
     float single;
 
@@ -558,6 +559,11 @@ testParseAllocation(int allocates) {
     xp3TestAllocRestore();
 }
 
+static void
+testParseAllocation(void) {
+    checkParseAllocation(0);
+}
+
 /* The same results under a locale with a decimal comma */
 static void
 testLocale(void) {
@@ -571,13 +577,12 @@ testLocale(void) {
     }
     if (i == sizeof(names) / sizeof(names[0]) ||
         strcmp(localeconv()->decimal_point, ",") != 0) {
-        printf("testvalue: locale test skipped: no locale with a decimal "
-               "comma\n");
+        xp3TestSkip("no locale with a decimal comma");
         setlocale(LC_NUMERIC, "C");
         return;
     }
-    testNumberStrings("decimal-comma locale: ");
-    testParseAllocation(1);
+    checkNumberStrings("decimal-comma locale: ");
+    checkParseAllocation(1);
     setlocale(LC_NUMERIC, "C");
 }
 
@@ -591,9 +596,8 @@ checkAtomicString(xp3Atomic *atomic, const char *expected,
     xmlChar *str = xp3AtomicToString(atomic);
 
     if ((str == NULL) || (strcmp((const char *) str, expected) != 0)) {
-        fprintf(stderr, "FAIL: %s: \"%s\", expected \"%s\"\n", what,
-                (str != NULL) ? (const char *) str : "NULL", expected);
-        failures++;
+        xp3TestFail("%s: \"%s\", expected \"%s\"", what,
+                    (str != NULL) ? (const char *) str : "NULL", expected);
     }
     xmlFree(str);
     xp3AtomicUnref(atomic);
@@ -715,8 +719,7 @@ testAllocationFailures(void) {
           strcmp(expected, "1 10 11 12") == 0, "reference values built");
 
     if (!xp3TestAllocInstall()) {
-        printf("testvalue: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -795,19 +798,17 @@ int
 main(void) {
     xmlInitParser();
 
-    testTypes();
-    testPublicTypes();
-    testAtomics();
-    testSequences();
-    testRanges();
-    testConstants();
-    testNumberStrings("");
-    testParseAllocation(0);
-    testLocale();
-    testAtomicStrings();
-    testAllocationFailures();
+    XP3_TEST_RUN(testTypes);
+    XP3_TEST_RUN(testPublicTypes);
+    XP3_TEST_RUN(testAtomics);
+    XP3_TEST_RUN(testSequences);
+    XP3_TEST_RUN(testRanges);
+    XP3_TEST_RUN(testConstants);
+    XP3_TEST_RUN(testNumberStrings);
+    XP3_TEST_RUN(testParseAllocation);
+    XP3_TEST_RUN(testLocale);
+    XP3_TEST_RUN(testAtomicStrings);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    if (failures == 0)
-        printf("testvalue: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

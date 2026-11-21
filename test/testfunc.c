@@ -20,15 +20,11 @@
 #include "private/xp3context.h"
 #include "private/xp3func.h"
 #include "private/xp3static.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 #define FN BAD_CAST XP3_NS_FN
@@ -365,7 +361,11 @@ testImplementations(void) {
         { "string-join", 1, 0 }, { "string-join", 2, 0 },
         { "substring", 2, 0 }, { "substring", 3, 0 },
         { "string-length", 1, 0 }, { "normalize-space", 1, 0 },
+        { "normalize-unicode", 1, 0 }, { "normalize-unicode", 2, 0 },
+        { "upper-case", 1, 0 }, { "lower-case", 1, 0 },
         { "translate", 3, 0 }, { "tokenize", 1, 0 },
+        { "matches", 2, 0 }, { "matches", 3, 0 }, { "replace", 3, 0 },
+        { "replace", 4, 0 }, { "tokenize", 2, 0 }, { "tokenize", 3, 0 },
         { "encode-for-uri", 1, 0 }, { "iri-to-uri", 1, 0 },
         { "escape-html-uri", 1, 0 },
         { "node-name", 1, 0 }, { "name", 1, 0 }, { "local-name", 1, 0 },
@@ -455,26 +455,24 @@ testImplementations(void) {
     check(count == sizeof(implemented) / sizeof(implemented[0]) +
                    sizeof(math) / sizeof(math[0]),
           "no other function implemented");
-    check(xp3FuncImplementation(lookup(FN, "upper-case", 1,
+    check(xp3FuncImplementation(lookup(FN, "QName", 2,
                                        XP3_XPATH_31)) == NULL,
-          "fn:upper-case is not implemented yet");
-    check(xp3FuncImplementation(lookup(FN, "tokenize", 2,
+          "fn:QName is not implemented yet");
+    check(xp3FuncImplementation(lookup(FN, "analyze-string", 2,
                                        XP3_XPATH_31)) == NULL,
-          "fn:tokenize#2 is not implemented yet");
+          "fn:analyze-string#2 is not implemented yet");
 }
 
 int
 main(void) {
     xmlInitParser();
 
-    testTable();
-    testLookup();
-    testFlags();
-    testNames();
-    testTypes();
-    testImplementations();
+    XP3_TEST_RUN(testTable);
+    XP3_TEST_RUN(testLookup);
+    XP3_TEST_RUN(testFlags);
+    XP3_TEST_RUN(testNames);
+    XP3_TEST_RUN(testTypes);
+    XP3_TEST_RUN(testImplementations);
 
-    if (failures == 0)
-        printf("testfunc: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

@@ -42,6 +42,7 @@ set(XP3_SOURCES
     xp3eval.c
     xp3fnnode.c
     xp3fnnumeric.c
+    xp3fnregex.c
     xp3fnseq.c
     xp3fnstring.c
     xp3func.c
@@ -49,8 +50,10 @@ set(XP3_SOURCES
     xp3nodes.c
     xp3ops.c
     xp3parser.c
+    xp3regex.c
     xp3static.c
     xp3types.c
+    xp3unicode.c
     xp3value.c
     xpath3.c
 )
@@ -86,22 +89,24 @@ set_target_properties(xpath3 PROPERTIES
 )
 
 if(BUILD_TESTING)
-    add_executable(testbasic test/testbasic.c)
+    add_executable(testbasic test/testbasic.c test/testtap.c)
     target_link_libraries(testbasic PRIVATE xpath3)
     add_test(NAME basic COMMAND testbasic)
 
     # Several threads evaluating one compiled expression, POSIX only
     find_package(Threads)
     if(CMAKE_USE_PTHREADS_INIT AND NOT WIN32)
-        add_executable(testthreads test/testthreads.c)
+        add_executable(testthreads test/testthreads.c test/testtap.c)
         target_link_libraries(testthreads PRIVATE xpath3 Threads::Threads)
         add_test(NAME threads COMMAND testthreads)
     endif()
 
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
-    foreach(name error context lexer ast parser decimal value func static nodes eval)
-        add_executable(test${name} test/test${name}.c test/testalloc.c ${XP3_SOURCES})
+    foreach(name error context lexer ast parser decimal value func static nodes eval
+            unicode regex)
+        add_executable(test${name} test/test${name}.c test/testalloc.c
+            test/testtap.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
         target_include_directories(test${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -136,6 +141,19 @@ if(BUILD_TESTING)
     target_link_libraries(xp3eval-replay PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
     file(GLOB XP3_FUZZ_EVAL_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed-eval/*)
     add_test(NAME fuzz-eval-replay COMMAND xp3eval-replay ${XP3_FUZZ_EVAL_SEED})
+
+    # The same for the regular expression fuzzer
+    add_executable(xp3regex-replay fuzz/xp3regex.c test/testalloc.c
+        ${XP3_SOURCES})
+    target_compile_definitions(xp3regex-replay PRIVATE XP3_STATIC
+        XP3_FUZZ_DRIVER)
+    target_include_directories(xp3regex-replay PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+    )
+    target_link_libraries(xp3regex-replay PRIVATE LibXml2::LibXml2 ${XP3_LIBM_LIBS})
+    file(GLOB XP3_FUZZ_REGEX_SEED ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seed-regex/*)
+    add_test(NAME fuzz-regex-replay COMMAND xp3regex-replay ${XP3_FUZZ_REGEX_SEED})
 
     # QT3 runner, and the QT3 tests if XP3_QT3_DIR points to a checkout
     add_executable(qt3run qt3/qt3run.c ${XP3_SOURCES})

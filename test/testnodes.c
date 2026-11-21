@@ -24,15 +24,11 @@
 #include "private/xp3nodes.h"
 #include "private/xp3value.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /*
@@ -81,6 +77,9 @@ typedef struct {
     xmlDocPtr wideDoc;          /* a second tree: one element with */
     xmlNodePtr wide;            /* XP3_WIDE_ATTRS attributes */
 } xp3TestTree;
+
+/* Built in main() and shared by the tests */
+static xp3TestTree sharedTree;
 
 #define XP3_WIDE_ATTRS 40
 
@@ -234,9 +233,8 @@ checkAxis(xp3Axis axis, xmlNodePtr context, const char *expected,
     const char *actual = axisString(axis, context);
 
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "FAIL: %s\n  expected: %s\n  actual:   %s\n",
-                what, expected, actual);
-        failures++;
+        xp3TestFail("%s\n  expected: %s\n  actual:   %s",
+                    what, expected, actual);
     }
 }
 
@@ -250,9 +248,8 @@ checkStringValue(xmlNodePtr node, const char *expected, const char *what) {
     if ((err != XP3_ERR_OK) || (value == NULL) ||
         (strcmp((const char *) value, expected) != 0) ||
         (length != strlen(expected))) {
-        fprintf(stderr, "FAIL: %s\n  expected: %s\n  actual:   %s\n",
-                what, expected, (value != NULL) ? (char *) value : "NULL");
-        failures++;
+        xp3TestFail("%s\n  expected: %s\n  actual:   %s",
+                    what, expected, (value != NULL) ? (char *) value : "NULL");
     }
     xmlFree(value);
 }
@@ -262,7 +259,9 @@ checkStringValue(xmlNodePtr node, const char *expected, const char *what) {
  */
 
 static void
-testKinds(const xp3TestTree *tree) {
+testKinds(void) {
+    const xp3TestTree *tree = &sharedTree;
+
     check(xp3NodeGetKind((xmlNodePtr) tree->doc) == XP3_NODE_DOCUMENT,
           "kind of a document");
     check(xp3NodeGetKind(tree->r) == XP3_NODE_ELEMENT, "kind of an element");
@@ -316,7 +315,8 @@ testKinds(const xp3TestTree *tree) {
  */
 
 static void
-testAxes(const xp3TestTree *tree) {
+testAxes(void) {
+    const xp3TestTree *tree = &sharedTree;
     xmlNodePtr doc = (xmlNodePtr) tree->doc;
 
     checkAxis(XP3_AXIS_CHILD, doc, "c:top e:r p:end", "child of document");
@@ -433,7 +433,9 @@ testParentless(void) {
  */
 
 static void
-testNames(const xp3TestTree *tree) {
+testNames(void) {
+    const xp3TestTree *tree = &sharedTree;
+
     check(xmlStrEqual(xp3NodeLocalName(tree->x), BAD_CAST "x"),
           "local name of an element");
     check(xp3NodeNamespaceUri(tree->x) == NULL,
@@ -470,7 +472,9 @@ checkTypedValue(xmlNodePtr node, xp3TypeId type, const char *expected,
 }
 
 static void
-testValues(const xp3TestTree *tree) {
+testValues(void) {
+    const xp3TestTree *tree = &sharedTree;
+
     checkStringValue((xmlNodePtr) tree->doc, "abcinnertail",
                      "string value of the document");
     checkStringValue(tree->r, "abcinnertail",
@@ -595,7 +599,8 @@ itemsString(const xp3Item *items, size_t count) {
 }
 
 static void
-testOrder(const xp3TestTree *tree) {
+testOrder(void) {
+    const xp3TestTree *tree = &sharedTree;
     xp3DocOrder *order = xp3DocOrderNew();
     xp3Item items[64];
     xp3Item reversed[64];
@@ -698,7 +703,8 @@ testOrder(const xp3TestTree *tree) {
 }
 
 static void
-testOrderAtomic(const xp3TestTree *tree) {
+testOrderAtomic(void) {
+    const xp3TestTree *tree = &sharedTree;
     xp3DocOrder *order = xp3DocOrderNew();
     xp3Atomic *atomic = xp3AtomicNewInteger(1);
     xp3Item items[2];
@@ -725,7 +731,8 @@ testOrderAtomic(const xp3TestTree *tree) {
 }
 
 static void
-testOrderTrees(const xp3TestTree *tree) {
+testOrderTrees(void) {
+    const xp3TestTree *tree = &sharedTree;
     xp3DocOrder *order = xp3DocOrderNew();
     xmlDocPtr other = NULL;
     xmlNodePtr otherRoot = parseRoot("<o><p/></o>", 0, &other);
@@ -1150,12 +1157,11 @@ checkRandomAxes(int tree) {
                     break;
                 if ((node == NULL) || (expected < 0) ||
                     (modelNodes[expected].node != node)) {
-                    fprintf(stderr, "FAIL: random tree %d, axis %d of node "
-                            "%d: item %d is node %d, expected %d\n", tree,
-                            (int) axis, context, position,
-                            (node != NULL) ? modelIndexOf(node) : -1,
-                            expected);
-                    failures++;
+                    xp3TestFail("random tree %d, axis %d of node "
+                                "%d: item %d is node %d, expected %d", tree,
+                                (int) axis, context, position,
+                                (node != NULL) ? modelIndexOf(node) : -1,
+                                expected);
                     break;
                 }
                 position++;
@@ -1174,11 +1180,10 @@ checkRandomValues(int tree) {
         if ((xp3NodeStringValue(modelNodes[index].node, &value, NULL) !=
              XP3_ERR_OK) ||
             (strcmp((const char *) value, modelNodes[index].text) != 0)) {
-            fprintf(stderr, "FAIL: random tree %d, string value of node "
-                    "%d: \"%s\", expected \"%s\"\n", tree, index,
-                    (value != NULL) ? (const char *) value : "NULL",
-                    modelNodes[index].text);
-            failures++;
+            xp3TestFail("random tree %d, string value of node "
+                        "%d: \"%s\", expected \"%s\"", tree, index,
+                        (value != NULL) ? (const char *) value : "NULL",
+                        modelNodes[index].text);
         }
         xmlFree(value);
     }
@@ -1232,9 +1237,8 @@ checkRandomOrder(int tree) {
             continue;
         if ((kept >= count) || (items[kept].u.node !=
                                 modelNodes[index].node)) {
-            fprintf(stderr, "FAIL: random tree %d, sorted item %d is not "
-                    "node %d\n", tree, (int) kept, index);
-            failures++;
+            xp3TestFail("random tree %d, sorted item %d is not "
+                        "node %d", tree, (int) kept, index);
             break;
         }
         kept++;
@@ -1251,9 +1255,8 @@ checkRandomOrder(int tree) {
              XP3_ERR_OK) ||
             ((first < second) != (result < 0)) ||
             ((first > second) != (result > 0))) {
-            fprintf(stderr, "FAIL: random tree %d, comparing nodes %d and "
-                    "%d gave %d\n", tree, first, second, result);
-            failures++;
+            xp3TestFail("random tree %d, comparing nodes %d and "
+                        "%d gave %d", tree, first, second, result);
         }
     }
     xp3DocOrderFree(order);
@@ -1263,7 +1266,8 @@ static void
 testRandomTrees(void) {
     int tree;
 
-    for (tree = 0; (tree < XP3_RANDOM_TREES) && (failures < 20); tree++) {
+    for (tree = 0; (tree < XP3_RANDOM_TREES) && (xp3TestFailures() < 20);
+         tree++) {
         xmlDocPtr doc;
         int root;
 
@@ -1344,7 +1348,8 @@ allocatingWork(const xp3TestTree *tree, char *out, size_t size) {
 }
 
 static void
-testAllocationFailures(const xp3TestTree *tree) {
+testAllocationFailures(void) {
+    const xp3TestTree *tree = &sharedTree;
     char actual[512];
     int i;
 
@@ -1352,8 +1357,7 @@ testAllocationFailures(const xp3TestTree *tree) {
           strcmp(actual, "sorted") == 0, "reference work done");
 
     if (!xp3TestAllocInstall()) {
-        printf("testnodes: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         return;
     }
@@ -1378,28 +1382,24 @@ testAllocationFailures(const xp3TestTree *tree) {
 
 int
 main(void) {
-    xp3TestTree tree;
-
     xmlInitParser();
-    buildTree(&tree);
+    buildTree(&sharedTree);
 
-    testKinds(&tree);
-    testAxes(&tree);
-    testParentless();
-    testNames(&tree);
-    testValues(&tree);
-    testParsed();
-    testOrder(&tree);
-    testOrderAtomic(&tree);
-    testOrderTrees(&tree);
-    testOrderChanged();
-    testOrderLarge();
-    testRandomTrees();
-    testAllocationFailures(&tree);
+    XP3_TEST_RUN(testKinds);
+    XP3_TEST_RUN(testAxes);
+    XP3_TEST_RUN(testParentless);
+    XP3_TEST_RUN(testNames);
+    XP3_TEST_RUN(testValues);
+    XP3_TEST_RUN(testParsed);
+    XP3_TEST_RUN(testOrder);
+    XP3_TEST_RUN(testOrderAtomic);
+    XP3_TEST_RUN(testOrderTrees);
+    XP3_TEST_RUN(testOrderChanged);
+    XP3_TEST_RUN(testOrderLarge);
+    XP3_TEST_RUN(testRandomTrees);
+    XP3_TEST_RUN(testAllocationFailures);
 
-    xmlFreeDoc(tree.wideDoc);
-    xmlFreeDoc(tree.doc);
-    if (failures == 0)
-        printf("testnodes: OK\n");
-    return(failures == 0 ? 0 : 1);
+    xmlFreeDoc(sharedTree.wideDoc);
+    xmlFreeDoc(sharedTree.doc);
+    return(xp3TestDone());
 }

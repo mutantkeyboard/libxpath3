@@ -1,0 +1,83 @@
+# Dictionary of regular expression tokens for the xp3regex fuzz target:
+# the syntax of XML Schema with the additions of F&O 3.1, 5.6.
+# The format is libFuzzer's: name="value".
+
+# Separators of flags, pattern and subject
+separator="\x00"
+
+# Flags
+flag_s="s"
+flag_m="m"
+flag_i="i"
+flag_x="x"
+flag_q="q"
+flags_all="smixq"
+
+# Groups and alternatives
+group_open="("
+group_close=")"
+group_noncapturing="(?:"
+alternative="|"
+
+# Quantifiers, greedy and reluctant
+quant_opt="?"
+quant_star="*"
+quant_plus="+"
+quant_exact="{2}"
+quant_min="{1,}"
+quant_range="{0,3}"
+quant_large="{1000}"
+reluctant_opt="??"
+reluctant_star="*?"
+reluctant_plus="+?"
+reluctant_range="{1,3}?"
+
+# Anchors and the wildcard
+anchor_start="^"
+anchor_end="$"
+wildcard="."
+
+# Character classes
+class_open="["
+class_close="]"
+class_negated="[^"
+class_range="a-z"
+class_subtract="-["
+class_example="[a-z-[aeiou]]"
+class_hyphen="[-a]"
+
+# Escapes
+esc_newline="\\n"
+esc_return="\\r"
+esc_tab="\\t"
+esc_dollar="\\$"
+esc_hyphen="\\-"
+esc_s="\\s"
+esc_S="\\S"
+esc_i="\\i"
+esc_I="\\I"
+esc_c="\\c"
+esc_C="\\C"
+esc_d="\\d"
+esc_D="\\D"
+esc_w="\\w"
+esc_W="\\W"
+backref_1="\\1"
+backref_10="\\10"
+
+# Categories and blocks
+cat_L="\\p{L}"
+cat_Lu="\\p{Lu}"
+cat_Nd="\\P{Nd}"
+cat_Cn="\\p{Cn}"
+cat_Cs="\\p{Cs}"
+block_basic="\\p{IsBasicLatin}"
+block_greek="\\p{IsGreekandCoptic}"
+block_latin1="\\P{IsLatin-1Supplement}"
+block_unknown="\\p{IsGreek}"
+
+# Characters with case variants and other encodings
+kelvin="\xE2\x84\xAA"
+sharp_s="\xC3\x9F"
+capital_sharp_s="\xE1\xBA\x9E"
+not_utf8="\xFF"
