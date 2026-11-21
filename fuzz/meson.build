@@ -62,9 +62,15 @@ fuzz_eval_seed = files(
     'seed-eval/level20',
     'seed-eval/paths',
     'seed-eval/pruning',
+    'seed-eval/regex',
+    'seed-eval/regex_backref',
+    'seed-eval/regex_errors',
+    'seed-eval/regex_flags',
+    'seed-eval/regex_inject',
     'seed-eval/siblings',
     'seed-eval/simple_map',
     'seed-eval/skipped_error',
+    'seed-eval/unicode',
 )
 
 fuzz_eval_replay = executable(
@@ -79,10 +85,56 @@ fuzz_eval_replay = executable(
 )
 test('fuzz-eval-replay', fuzz_eval_replay, args: fuzz_eval_seed)
 
+# The regular expression fuzzer compares the Pike VM with the
+# backtracking matcher
+fuzz_regex_seed = files(
+    'seed-regex/anchors',
+    'seed-regex/backrefs',
+    'seed-regex/backtrack',
+    'seed-regex/basic',
+    'seed-regex/classes',
+    'seed-regex/errors',
+    'seed-regex/extended',
+    'seed-regex/fold',
+    'seed-regex/inject',
+    'seed-regex/inject_backtrack',
+    'seed-regex/level20',
+    'seed-regex/lines',
+    'seed-regex/literal',
+    'seed-regex/nesting',
+    'seed-regex/pathological',
+    'seed-regex/quantifiers',
+    'seed-regex/size',
+    'seed-regex/utf8',
+)
+
+fuzz_regex_replay = executable(
+    'xp3regex',
+    'xp3regex.c',
+    '../test/testalloc.c',
+    xpath3_src,
+    xp3version_h,
+    include_directories: inc,
+    dependencies: [libxml2_dep, m_dep],
+    c_args: ['-DXP3_STATIC', '-DXP3_FUZZ_DRIVER'],
+)
+test('fuzz-regex-replay', fuzz_regex_replay, args: fuzz_regex_seed)
+
 if get_option('fuzzer')
     executable(
         'xp3eval-fuzz',
         'xp3eval.c',
+        '../test/testalloc.c',
+        xpath3_src,
+        xp3version_h,
+        include_directories: inc,
+        dependencies: [libxml2_dep, m_dep],
+        c_args: ['-DXP3_STATIC', '-fsanitize=fuzzer'],
+        link_args: ['-fsanitize=fuzzer'],
+    )
+    executable(
+        'xp3regex-fuzz',
+        'xp3regex.c',
         '../test/testalloc.c',
         xpath3_src,
         xp3version_h,

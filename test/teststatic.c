@@ -19,15 +19,11 @@
 #include "private/xp3func.h"
 #include "private/xp3static.h"
 #include "testalloc.h"
-
-static int failures = 0;
+#include "testtap.h"
 
 static void
 check(int cond, const char *what) {
-    if (!cond) {
-        fprintf(stderr, "FAIL: %s\n", what);
-        failures++;
-    }
+    xp3TestCheck(cond, what);
 }
 
 /* Namespace URIs, shortened in the expected trees below */
@@ -511,8 +507,7 @@ allocationFailures(int optimizing, const char *expr) {
     check(expected != NULL, "reference tree compiled");
 
     if (!xp3TestAllocInstall()) {
-        printf("teststatic: allocation-failure tests skipped: this "
-               "libxml2 ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xmlFree(expected);
         xp3FreeStaticContext(ctx);
@@ -624,9 +619,22 @@ static const struct {
     { "(1, 2, 3) => subsequence(2)", "(constant integer:2 integer:3)" },
     { "count($v)",
       "(call Q{http://www.w3.org/2005/xpath-functions}count (var v))" },
-    { "upper-case('a' || 'b')",
-      "(call Q{http://www.w3.org/2005/xpath-functions}upper-case "
-      "(constant string:ab))" },
+    { "QName('', 'a' || 'b')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}QName "
+      "(constant string:) (constant string:ab))" },
+    { "upper-case('a' || 'b'), normalize-unicode('A\xcc\x8a', 'nfd')",
+      "(constant string:AB string:A\xcc\x8a)" },
+    /* Regular expressions compile while folding; an invalid one is a
+     * dynamic error, so its call stays */
+    { "matches('abc', 'B', 'i'), replace('abc', '(b)', '[$1]'), "
+      "tokenize('a,b', ',')",
+      "(constant boolean:true string:a[b]c string:a string:b)" },
+    { "matches('a', '(')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}matches "
+      "(constant string:a) (constant string:())" },
+    { "tokenize('a', 'a*')",
+      "(call Q{http://www.w3.org/2005/xpath-functions}tokenize "
+      "(constant string:a) (constant string:a*))" },
     { "position()",
       "(call Q{http://www.w3.org/2005/xpath-functions}position)" },
     { "string()", "(call Q{http://www.w3.org/2005/xpath-functions}string)" },
@@ -822,11 +830,10 @@ testOptimize(void) {
 
         if ((tree == NULL) ||
             !xmlStrEqual(tree, BAD_CAST optimizeCases[i].tree)) {
-            fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
-                    optimizeCases[i].expr, optimizeCases[i].tree,
-                    (tree != NULL) ? (const char *) tree :
-                    (const char *) xp3ErrorCode(err));
-            failures++;
+            xp3TestFail("'%s': expected %s, got %s",
+                        optimizeCases[i].expr, optimizeCases[i].tree,
+                        (tree != NULL) ? (const char *) tree :
+                        (const char *) xp3ErrorCode(err));
         }
         xmlFree(tree);
         xp3ErrorFree(err);
@@ -843,11 +850,10 @@ testOptimize(void) {
 
         if ((tree == NULL) ||
             (xmlStrncmp(tree, BAD_CAST kept, (int) strlen(kept)) != 0)) {
-            fprintf(stderr, "FAIL: '%s' was rewritten: %s\n",
-                    positionalCases[i],
-                    (tree != NULL) ? (const char *) tree :
-                    (const char *) xp3ErrorCode(err));
-            failures++;
+            xp3TestFail("'%s' was rewritten: %s",
+                        positionalCases[i],
+                        (tree != NULL) ? (const char *) tree :
+                        (const char *) xp3ErrorCode(err));
         }
         xmlFree(tree);
         xp3ErrorFree(err);
@@ -1029,8 +1035,7 @@ testFoldStringSize(void) {
         goto done;
     }
     if (!xp3TestAllocInstall()) {
-        printf("teststatic: string fold size test skipped: this libxml2 "
-               "ignores xmlMemSetup()\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         goto done;
     }
@@ -1165,11 +1170,10 @@ testExtensionFunctions(void) {
 
         if ((tree == NULL) ||
             !xmlStrEqual(tree, BAD_CAST extensionCases[i].tree)) {
-            fprintf(stderr, "FAIL: '%s': expected %s, got %s\n",
-                    extensionCases[i].expr, extensionCases[i].tree,
-                    (tree != NULL) ? (const char *) tree :
-                    (const char *) xp3ErrorCode(err));
-            failures++;
+            xp3TestFail("'%s': expected %s, got %s",
+                        extensionCases[i].expr, extensionCases[i].tree,
+                        (tree != NULL) ? (const char *) tree :
+                        (const char *) xp3ErrorCode(err));
         }
         xmlFree(tree);
         xp3ErrorFree(err);
@@ -1233,7 +1237,7 @@ testExtensionAllocationFailures(void) {
         return;
     }
     if (!xp3TestAllocInstall()) {
-        printf("teststatic: extension allocation-failure tests skipped\n");
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
         xp3TestAllocRestore();
         xp3FreeStaticContext(ctx);
         return;
@@ -1271,21 +1275,19 @@ int
 main(void) {
     xmlInitParser();
 
-    testTrees();
-    testErrors();
-    testMessages();
-    testSlots();
-    testDeclaredVariables();
-    testApi();
-    testOptimize();
-    testFoldBudget();
-    testFoldSizes();
-    testFoldStringSize();
-    testAllocationFailures();
-    testExtensionFunctions();
-    testExtensionAllocationFailures();
+    XP3_TEST_RUN(testTrees);
+    XP3_TEST_RUN(testErrors);
+    XP3_TEST_RUN(testMessages);
+    XP3_TEST_RUN(testSlots);
+    XP3_TEST_RUN(testDeclaredVariables);
+    XP3_TEST_RUN(testApi);
+    XP3_TEST_RUN(testOptimize);
+    XP3_TEST_RUN(testFoldBudget);
+    XP3_TEST_RUN(testFoldSizes);
+    XP3_TEST_RUN(testFoldStringSize);
+    XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testExtensionFunctions);
+    XP3_TEST_RUN(testExtensionAllocationFailures);
 
-    if (failures == 0)
-        printf("teststatic: OK\n");
-    return(failures == 0 ? 0 : 1);
+    return(xp3TestDone());
 }

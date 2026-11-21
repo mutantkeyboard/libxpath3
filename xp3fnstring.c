@@ -31,6 +31,9 @@
  * strings, and checks a result against the byte limit of a fold before
  * building it (xp3FuncStringFits()).
  *
+ * Case mappings and normalization take their data from the Unicode
+ * tables of xp3unicode.c.
+ *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
  *
@@ -49,6 +52,7 @@
 #include "private/xp3decimal.h"
 #include "private/xp3func.h"
 #include "private/xp3types.h"
+#include "private/xp3unicode.h"
 #include "private/xp3value.h"
 
 /* Searches for strings up to this long keep their table on the stack */
@@ -75,32 +79,6 @@ argDouble(const xp3Value *value) {
     return(value->u.single.u.atomic->u.d);
 }
 
-/* Encode a code point, at most U+10FFFF, as UTF-8. Returns the number
- * of bytes. */
-static int
-encodeChar(int c, xmlChar *out) {
-    if (c < 0x80) {
-        out[0] = (xmlChar) c;
-        return(1);
-    }
-    if (c < 0x800) {
-        out[0] = (xmlChar) (0xC0 | (c >> 6));
-        out[1] = (xmlChar) (0x80 | (c & 0x3F));
-        return(2);
-    }
-    if (c < 0x10000) {
-        out[0] = (xmlChar) (0xE0 | (c >> 12));
-        out[1] = (xmlChar) (0x80 | ((c >> 6) & 0x3F));
-        out[2] = (xmlChar) (0x80 | (c & 0x3F));
-        return(3);
-    }
-    out[0] = (xmlChar) (0xF0 | (c >> 18));
-    out[1] = (xmlChar) (0x80 | ((c >> 12) & 0x3F));
-    out[2] = (xmlChar) (0x80 | ((c >> 6) & 0x3F));
-    out[3] = (xmlChar) (0x80 | (c & 0x3F));
-    return(4);
-}
-
 /* A new xs:string from bytes, as the result: checked against the byte
  * limit and counted as made */
 static xp3Value *
@@ -118,17 +96,14 @@ contextString(xp3FuncCall *call) {
     return(xp3FnString(call, NULL, 0));
 }
 
-/* A string being built, in one buffer that doubles as it grows */
-typedef struct {
-    xmlChar *data;
-    size_t len;
-    size_t cap;
-    size_t counted;             /* bytes counted as steps so far */
-    const char *name;           /* the function, for messages */
-} xp3StrBuf;
-
-static void
-bufInit(xp3StrBuf *buf, const char *name) {
+/**
+ * Start building a string (xp3StrBuf), as the result of a function.
+ *
+ * @param buf   the buffer
+ * @param name  the function, for messages, such as "fn:concat"
+ */
+void
+xp3StrBufInit(xp3StrBuf *buf, const char *name) {
     buf->data = NULL;
     buf->len = 0;
     buf->cap = 0;
@@ -136,12 +111,20 @@ bufInit(xp3StrBuf *buf, const char *name) {
     buf->name = name;
 }
 
-/* Append bytes, counted as made, stopping before the string passes
- * the byte limit or the steps run out. Returns 0, or -1 after
- * recording LIMIT or NO_MEMORY; the caller then frees buf->data. */
-static int
-bufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
-          size_t len) {
+/**
+ * Append bytes to a string being built, counted as made, stopping
+ * before the string passes the byte limit or the steps run out.
+ *
+ * @param call  the call
+ * @param buf   the buffer, from xp3StrBufInit()
+ * @param str   the bytes
+ * @param len   their number
+ * @returns 0, or -1 after recording LIMIT or NO_MEMORY; the caller then
+ *          frees buf->data
+ */
+int
+xp3StrBufAppend(xp3FuncCall *call, xp3StrBuf *buf, const xmlChar *str,
+                size_t len) {
     size_t total;
 
     if (len > XP3_STRING_MAX - buf->len) {
@@ -189,22 +172,28 @@ bufAppendAtomic(xp3FuncCall *call, xp3StrBuf *buf,
 
     /* Casting a string type to xs:string keeps its value */
     if (xp3TypeRepresentation(atomic->type) == XP3_REP_STRING)
-        return(bufAppend(call, buf, atomic->u.str,
-                         strlen((const char *) atomic->u.str)));
+        return(xp3StrBufAppend(call, buf, atomic->u.str,
+                               strlen((const char *) atomic->u.str)));
     str = xp3AtomicToString(atomic);
     if (str == NULL) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         return(-1);
     }
-    ret = bufAppend(call, buf, str, strlen((const char *) str));
+    ret = xp3StrBufAppend(call, buf, str, strlen((const char *) str));
     xmlFree(str);
     return(ret);
 }
 
-/* The string built, as the result; frees the buffer. bufAppend()
- * checked and counted it already. */
-static xp3Value *
-bufFinish(xp3FuncCall *call, xp3StrBuf *buf) {
+/**
+ * Make the string built the result, and free the buffer.
+ * xp3StrBufAppend() checked and counted it already.
+ *
+ * @param call  the call
+ * @param buf   the buffer, empty afterwards
+ * @returns an xs:string, or NULL after recording NO_MEMORY
+ */
+xp3Value *
+xp3StrBufFinish(xp3FuncCall *call, xp3StrBuf *buf) {
     xp3Value *result = xp3FuncAtomic(call, xp3AtomicNewString(
         XP3_TYPE_STRING, (buf->data != NULL) ? buf->data : BAD_CAST "",
         buf->len));
@@ -530,7 +519,7 @@ xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count) {
     (void) count;
     if (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)
         return(NULL);
-    bufInit(&buf, "fn:codepoints-to-string");
+    xp3StrBufInit(&buf, "fn:codepoints-to-string");
     xp3IterInit(&iter, args[0]);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
         xmlChar bytes[4];
@@ -552,15 +541,15 @@ xp3FnCodepointsToString(xp3FuncCall *call, xp3Value **args, int count) {
         }
         xp3ItemUnref(item);
         if ((!valid) ||
-            (bufAppend(call, &buf, bytes, (size_t) encodeChar((int) c,
-                                                              bytes)) < 0))
+            (xp3StrBufAppend(call, &buf, bytes,
+                             (size_t) xp3EncodeChar((int) c, bytes)) < 0))
             goto error;
     }
     if (found < 0) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -762,7 +751,7 @@ xp3FnConcat(xp3FuncCall *call, xp3Value **args, int count) {
     xp3StrBuf buf;
     int i;
 
-    bufInit(&buf, "fn:concat");
+    xp3StrBufInit(&buf, "fn:concat");
     for (i = 0; i < count; i++) {
         xp3Item item;
         int ret;
@@ -778,7 +767,7 @@ xp3FnConcat(xp3FuncCall *call, xp3Value **args, int count) {
         if (ret < 0)
             goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -809,13 +798,13 @@ xp3FnStringJoin(xp3FuncCall *call, xp3Value **args, int count) {
 
     if (xp3FuncSteps(call, xp3ValueCount(args[0])) < 0)
         return(NULL);
-    bufInit(&buf, "fn:string-join");
+    xp3StrBufInit(&buf, "fn:string-join");
     xp3IterInit(&iter, args[0]);
     while ((found = xp3IterNext(&iter, &item)) > 0) {
         int ret = 0;
 
         if (!first)
-            ret = bufAppend(call, &buf, separator, separatorLen);
+            ret = xp3StrBufAppend(call, &buf, separator, separatorLen);
         if (ret == 0)
             ret = bufAppendAtomic(call, &buf, item.u.atomic);
         xp3ItemUnref(item);
@@ -827,7 +816,7 @@ xp3FnStringJoin(xp3FuncCall *call, xp3Value **args, int count) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         goto error;
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 
 error:
     xmlFree(buf.data);
@@ -981,6 +970,224 @@ xp3FnNormalizeSpace(xp3FuncCall *call, xp3Value **args, int count) {
 }
 
 /*
+ * The normalization forms of fn:normalize-unicode, by the effective
+ * value of its argument (F&O 3.1, 5.4.6). FULLY-NORMALIZED is not
+ * supported, as the spec allows.
+ */
+static const struct {
+    const char *name;
+    xp3UnicodeForm form;
+} xp3NormalizationForms[] = {
+    { "NFC", XP3_UNICODE_NFC },
+    { "NFD", XP3_UNICODE_NFD },
+    { "NFKC", XP3_UNICODE_NFKC },
+    { "NFKD", XP3_UNICODE_NFKD }
+};
+
+/* Whether the full upper-case mapping of a string, len bytes, is the
+ * ASCII name */
+static int
+upperCaseIs(const xmlChar *str, size_t len, const char *name) {
+    size_t nameLen = strlen(name);
+    size_t matched = 0;
+    size_t pos = 0;
+
+    while (pos < len) {
+        int mapped[XP3_UNICODE_CASE_MAX];
+        int count = xp3UnicodeUpper(xp3NextChar(str, len, &pos), mapped);
+        int i;
+
+        for (i = 0; i < count; i++) {
+            if (matched == nameLen)
+                return(0);
+            if (mapped[i] != name[matched])
+                return(0);
+            matched++;
+        }
+    }
+    return(matched == nameLen);
+}
+
+/*
+ * The normalization form that the argument of fn:normalize-unicode
+ * names: its effective value is upper-case(normalize-space($arg)), so
+ * whitespace at either end doesn't count, and whitespace inside makes
+ * a name that no form has. Sets *form. Returns 1, 0 for the empty
+ * effective value, which asks for no normalization, or -1 after
+ * recording FOCH0003 or LIMIT.
+ */
+static int
+normalizationForm(xp3FuncCall *call, const xmlChar *arg,
+                  xp3UnicodeForm *form) {
+    const xmlChar *start = arg;
+    size_t len;
+    size_t i;
+
+    while (isSpace(*start))
+        start++;
+    len = strlen((const char *) start);
+    if (xp3FuncBytes(call, len) < 0)
+        return(-1);
+    while ((len > 0) && isSpace(start[len - 1]))
+        len--;
+    if (len == 0)
+        return(0);
+    for (i = 0; i < sizeof(xp3NormalizationForms) /
+                    sizeof(xp3NormalizationForms[0]); i++) {
+        if (upperCaseIs(start, len, xp3NormalizationForms[i].name)) {
+            *form = xp3NormalizationForms[i].form;
+            return(1);
+        }
+    }
+    xp3FuncError(call, XP3_ERR_FOCH0003, "the normalization form "
+                 "\"%.100s\" is not supported", (const char *) arg);
+    return(-1);
+}
+
+/* fn:normalize-unicode collects its result here, from
+ * xp3UnicodeNormalize() */
+typedef struct {
+    xp3FuncCall *call;
+    xp3StrBuf buf;
+} xp3NormalizedText;
+
+static int
+normalizedOutput(void *data, const xmlChar *bytes, size_t len) {
+    xp3NormalizedText *text = data;
+
+    return(xp3StrBufAppend(text->call, &text->buf, bytes, len));
+}
+
+/**
+ * fn:normalize-unicode#1 and #2 (F&O 3.1, 5.4.6): a string in Unicode
+ * normalization form NFC, NFD, NFKC or NFKD (UAX #15), as the second
+ * argument names it, after normalize-space() and upper-case(); NFC
+ * without it. The empty form returns the string as it is, and any
+ * other raises FOCH0003, also FULLY-NORMALIZED. The empty sequence
+ * gives the empty string, whatever the form. A byte that isn't UTF-8
+ * is U+FFFD, which normalization leaves alone, so it is copied as it
+ * is.
+ *
+ * @param call   the call
+ * @param args   the string (xs:string?) and the form (xs:string)
+ * @param count  1 or 2
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnNormalizeUnicode(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *str = xp3FuncString(args[0]);
+    size_t len = strlen((const char *) str);
+    xp3UnicodeForm form = XP3_UNICODE_NFC;
+    xp3NormalizedText text;
+    int normalize = 1;
+    int ret;
+
+    if (xp3ValueCount(args[0]) == 0)
+        return(newString(call, BAD_CAST "", 0));
+    if (count == 2) {
+        normalize = normalizationForm(call, xp3FuncString(args[1]), &form);
+        if (normalize < 0)
+            return(NULL);
+    }
+    if (xp3FuncBytes(call, len) < 0)
+        return(NULL);
+    if (!normalize)
+        return(newString(call, str, len));
+    text.call = call;
+    xp3StrBufInit(&text.buf, "fn:normalize-unicode");
+    ret = xp3UnicodeNormalize(str, len, form, normalizedOutput, &text);
+    if (ret == XP3_UNICODE_NO_MEMORY)
+        xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
+    if (ret < 0) {
+        xmlFree(text.buf.data);
+        return(NULL);
+    }
+    return(xp3StrBufFinish(call, &text.buf));
+}
+
+/*
+ * A string with each character replaced by its full upper-case or
+ * lower-case mapping, which may be longer, as U+00DF becomes "SS".
+ * Runs of characters that stay are copied at once. A byte that isn't
+ * UTF-8 is U+FFFD, which has no mapping, so it is copied as it is.
+ */
+static xp3Value *
+changeCase(xp3FuncCall *call, const xp3Value *arg, int upper,
+           const char *name) {
+    const xmlChar *str = xp3FuncString(arg);
+    size_t len = strlen((const char *) str);
+    size_t run = 0;
+    size_t pos = 0;
+    xp3StrBuf buf;
+
+    if (xp3FuncBytes(call, len) < 0)
+        return(NULL);
+    xp3StrBufInit(&buf, name);
+    while (pos < len) {
+        size_t start = pos;
+        int c = xp3NextChar(str, len, &pos);
+        int mapped[XP3_UNICODE_CASE_MAX];
+        xmlChar bytes[4 * XP3_UNICODE_CASE_MAX];
+        size_t used = 0;
+        int count;
+        int i;
+
+        if (upper)
+            count = xp3UnicodeUpper(c, mapped);
+        else
+            count = xp3UnicodeLower(c, mapped);
+        if ((count == 1) && (mapped[0] == c))
+            continue;
+        for (i = 0; i < count; i++)
+            used += (size_t) xp3EncodeChar(mapped[i], bytes + used);
+        if ((xp3StrBufAppend(call, &buf, str + run, start - run) < 0) ||
+            (xp3StrBufAppend(call, &buf, bytes, used) < 0)) {
+            xmlFree(buf.data);
+            return(NULL);
+        }
+        run = pos;
+    }
+    if (xp3StrBufAppend(call, &buf, str + run, len - run) < 0) {
+        xmlFree(buf.data);
+        return(NULL);
+    }
+    return(xp3StrBufFinish(call, &buf));
+}
+
+/**
+ * fn:upper-case#1 (F&O 3.1, 5.4.7): a string with each character
+ * replaced by its full upper-case mapping, without tailoring for
+ * languages, so U+00DF becomes "SS".
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnUpperCase(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(changeCase(call, args[0], 1, "fn:upper-case"));
+}
+
+/**
+ * fn:lower-case#1 (F&O 3.1, 5.4.8): a string with each character
+ * replaced by its full lower-case mapping, without tailoring for
+ * languages or context, so U+0130 becomes "i" and U+0307, and U+03A3
+ * becomes U+03C3 also at the end of a word.
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:string, or NULL on error
+ */
+xp3Value *
+xp3FnLowerCase(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) count;
+    return(changeCase(call, args[0], 0, "fn:lower-case"));
+}
+
+/*
  * A character of the map string of fn:translate, in 8 bytes, as the
  * map string may be long. Replacements are in the order of the map
  * string, and those past the end of the replacement string come after
@@ -1121,7 +1328,7 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     if (table == NULL)
         return(newString(call, str, len));
-    bufInit(&buf, "fn:translate");
+    xp3StrBufInit(&buf, "fn:translate");
     while (pos < len) {
         size_t start = pos;
         const xp3Translation *entry;
@@ -1129,13 +1336,13 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
 
         entry = findTranslation(table, entries, xp3NextChar(str, len, &pos));
         if (entry == NULL) {
-            ret = bufAppend(call, &buf, str + start, pos - start);
+            ret = xp3StrBufAppend(call, &buf, str + start, pos - start);
         } else if (entry->to != XP3_TRANSLATE_REMOVE) {
             size_t end = entry->to;
 
             xp3NextChar(trans, transLen, &end);
-            ret = bufAppend(call, &buf, trans + entry->to,
-                            end - entry->to);
+            ret = xp3StrBufAppend(call, &buf, trans + entry->to,
+                                  end - entry->to);
         }
         if (ret < 0) {
             xmlFree(buf.data);
@@ -1144,7 +1351,7 @@ xp3FnTranslate(xp3FuncCall *call, xp3Value **args, int count) {
         }
     }
     xmlFree(table);
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 }
 
 /*
@@ -1434,7 +1641,7 @@ escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
 
     if (xp3FuncBytes(call, len) < 0)
         return(NULL);
-    bufInit(&buf, name);
+    xp3StrBufInit(&buf, name);
     while (pos < len) {
         size_t start = pos;
         int c = xp3NextChar(str, len, &pos);
@@ -1445,24 +1652,25 @@ escapeUri(xp3FuncCall *call, const xp3Value *arg, xp3UriKeep keep,
 
         if ((c < 0x80) && uriKeeps(keep, c))
             continue;
-        count = encodeChar(c, bytes);
+        count = xp3EncodeChar(c, bytes);
         for (i = 0; i < count; i++) {
             escaped[3 * i] = '%';
             escaped[3 * i + 1] = (xmlChar) hex[bytes[i] >> 4];
             escaped[3 * i + 2] = (xmlChar) hex[bytes[i] & 0xF];
         }
-        if ((bufAppend(call, &buf, str + run, start - run) < 0) ||
-            (bufAppend(call, &buf, escaped, (size_t) (3 * count)) < 0)) {
+        if ((xp3StrBufAppend(call, &buf, str + run, start - run) < 0) ||
+            (xp3StrBufAppend(call, &buf, escaped,
+                             (size_t) (3 * count)) < 0)) {
             xmlFree(buf.data);
             return(NULL);
         }
         run = pos;
     }
-    if (bufAppend(call, &buf, str + run, len - run) < 0) {
+    if (xp3StrBufAppend(call, &buf, str + run, len - run) < 0) {
         xmlFree(buf.data);
         return(NULL);
     }
-    return(bufFinish(call, &buf));
+    return(xp3StrBufFinish(call, &buf));
 }
 
 /**

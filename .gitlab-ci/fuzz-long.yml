@@ -1,5 +1,5 @@
 # Long fuzzing runs: the child pipeline that the manual fuzz:long job in
-# .gitlab-ci.yml starts. Both fuzzers run at the same time, 50 minutes
+# .gitlab-ci.yml starts. The fuzzers run at the same time, 50 minutes
 # each, to stay within the 1-hour job timeout, with ASan, UBSan, leak
 # detection, allocation-failure injection and a 60-second limit per
 # input, as in .gitlab-ci/fuzz-long.sh. The job log shows the end of
@@ -29,7 +29,7 @@ variables:
     - mkdir corpus && cp $SEEDS/* corpus/
     - status=0
     - >
-      ./build/fuzz/$FUZZER -dict=fuzz/xp3.dict -max_len=10000 -timeout=60
+      ./build/fuzz/$FUZZER -dict=$DICT -max_len=10000 -timeout=60
       -max_total_time=$FUZZ_SECONDS -print_final_stats=1 corpus
       > fuzz.log 2>&1 || status=$?
     - tail -n 60 fuzz.log
@@ -50,9 +50,18 @@ fuzz:parse:
   variables:
     FUZZER: xp3parse-fuzz
     SEEDS: fuzz/seed
+    DICT: fuzz/xp3.dict
 
 fuzz:eval:
   extends: .fuzz-long
   variables:
     FUZZER: xp3eval-fuzz
     SEEDS: fuzz/seed-eval
+    DICT: fuzz/xp3.dict
+
+fuzz:regex:
+  extends: .fuzz-long
+  variables:
+    FUZZER: xp3regex-fuzz
+    SEEDS: fuzz/seed-regex
+    DICT: fuzz/regex.dict
