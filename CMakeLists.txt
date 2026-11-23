@@ -130,6 +130,17 @@ if(BUILD_TESTING)
         add_test(NAME threads COMMAND testthreads)
     endif()
 
+    # The deepest expressions that the default nesting limit accepts, in
+    # a thread with a small stack: Windows threads, or POSIX threads
+    # elsewhere; without them the test is skipped.
+    add_executable(teststack test/teststack.c test/testtap.c)
+    target_link_libraries(teststack PRIVATE xpath3)
+    if(CMAKE_USE_PTHREADS_INIT AND NOT WIN32)
+        target_compile_definitions(teststack PRIVATE XP3_HAVE_PTHREAD)
+        target_link_libraries(teststack PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME stack COMMAND teststack)
+
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval

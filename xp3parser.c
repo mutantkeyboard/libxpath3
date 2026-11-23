@@ -21,6 +21,7 @@
 #include <libxml/xmlstring.h>
 
 #include "private/xp3ast.h"
+#include "private/xp3compiler.h"
 #include "private/xp3context.h"
 #include "private/xp3error.h"
 #include "private/xp3lexer.h"
@@ -38,7 +39,7 @@
  * sign, a chained binary operator or arrow, or a nested item type. The
  * parser doesn't recurse for chains, but analysis, folding and
  * evaluation recurse once per level of the tree, which takes about a
- * fifth of the stack of an ExprSingle. With a cost of 1, 4990 signs
+ * sixth of the stack of an ExprSingle. With a cost of 1, 4990 signs
  * needed twice the stack of 499 parentheses.
  */
 #define XP3_PARSE_LEVEL_COST 3
@@ -195,7 +196,7 @@ parserError(xp3Parser *p, xp3ErrCode code, const xp3Token *tok,
 }
 
 /* Syntax error at the current token: "expected X, found Y". */
-static xp3AstNode *
+static XP3_NOINLINE xp3AstNode *
 parserExpected(xp3Parser *p, const char *what) {
     char found[48];
 
@@ -256,7 +257,7 @@ parserExpect(xp3Parser *p, xp3TokenKind kind, const char *what) {
 }
 
 /* Check that the current token is the keyword and move past it. */
-static int
+static XP3_NOINLINE int
 parserExpectKeyword(xp3Parser *p, const char *keyword) {
     char what[24];
 
@@ -268,7 +269,7 @@ parserExpectKeyword(xp3Parser *p, const char *keyword) {
 }
 
 /* Check that a construct is available at the language level. */
-static int
+static XP3_NOINLINE int
 parserRequire(xp3Parser *p, const xp3Token *tok, xp3LanguageLevel level,
               const char *what) {
     if (p->level >= level)
@@ -1000,7 +1001,7 @@ parseArgumentList(xp3Parser *p, xp3AstNode *node) {
 
 /* Unprefixed reserved names such as "if" or "item" are not function
  * names (A.3). */
-static int
+static XP3_NOINLINE int
 parserCheckFunctionName(xp3Parser *p) {
     char name[48];
 
@@ -1461,6 +1462,16 @@ parseNodeTest(xp3Parser *p) {
     return(parseNameTest(p));
 }
 
+/* Syntax error at the current token, a name that is no axis */
+static XP3_NOINLINE xp3AstNode *
+parserUnknownAxis(xp3Parser *p) {
+    char name[48];
+
+    parserQuote(p, &p->tok, name, sizeof(name));
+    return(parserError(p, XP3_ERR_XPST0003, &p->tok, "unknown axis %s",
+                       name));
+}
+
 /*
  * StepExpr ::= PostfixExpr | AxisStep
  * AxisStep ::= (ForwardAxis NodeTest | "@"? NodeTest
@@ -1501,13 +1512,8 @@ parseStep(xp3Parser *p) {
                 return(NULL);
             if (next == XP3_TOK_COLONCOLON) {
                 axis = lookupAxis(p, &p->tok);
-                if (axis < 0) {
-                    char name[48];
-
-                    parserQuote(p, &p->tok, name, sizeof(name));
-                    return(parserError(p, XP3_ERR_XPST0003, &p->tok,
-                                       "unknown axis %s", name));
-                }
+                if (axis < 0)
+                    return(parserUnknownAxis(p));
                 if ((parserAdvance(p) < 0) || (parserAdvance(p) < 0))
                     return(NULL);
             } else if (((next == XP3_TOK_LPAREN) &&

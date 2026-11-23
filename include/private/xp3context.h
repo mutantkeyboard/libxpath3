@@ -41,12 +41,15 @@
 #define XP3_DEFAULT_LANGUAGE_LEVEL XP3_XPATH_31
 
 
-/* Default limit on parser nesting, the same values as libxml2's
- * XPATH_MAX_RECURSION_DEPTH */
+/* Default limit on parser nesting. The deepest expressions it accepts
+ * must parse, compile and evaluate in 1 MB of stack with a margin,
+ * with every compiler (doc/DESIGN.md 7.3, test/teststack.c). Fuzzing
+ * uses libxml2's fuzzing value of XPATH_MAX_RECURSION_DEPTH, well
+ * below, as sanitizers make the frames about three times larger. */
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   #define XP3_DEFAULT_MAX_PARSE_DEPTH 500
 #else
-  #define XP3_DEFAULT_MAX_PARSE_DEPTH 5000
+  #define XP3_DEFAULT_MAX_PARSE_DEPTH 2000
 #endif
 
 struct _xp3StaticContext {
