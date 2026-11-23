@@ -4025,11 +4025,23 @@ static const xp3EvalCase xp3DateTimeCases[] = {
     { "min(xs:duration('P1D'))", "error:FORG0006" },
     { "max((xs:gYear('2026'), xs:gYear('2027')))", "error:FORG0006" },
     { "sum((xs:dayTimeDuration('P1D'), xs:dayTimeDuration('P1D')))",
-      "error:UNSUPPORTED" },
+      "dayTimeDuration:P2D" },
+    { "avg((xs:yearMonthDuration('P1M'), xs:yearMonthDuration('P2M')))",
+      "yearMonthDuration:P2M" },
+    { "sum((xs:yearMonthDuration('P1M'), xs:dayTimeDuration('P1D')))",
+      "error:FORG0006" },
+    { "sum((xs:dayTimeDuration('P1D'), 1))", "error:FORG0006" },
+    { "avg(xs:duration('P1D'))", "error:FORG0006" },
+    /* Arithmetic */
     { "xs:date('2026-01-01') + xs:dayTimeDuration('P1D')",
-      "error:UNSUPPORTED" },
-    { "xs:yearMonthDuration('P1M') * 2", "error:UNSUPPORTED" },
-    { "xs:time('12:00:00') - xs:time('11:00:00')", "error:UNSUPPORTED" },
+      "date:2026-01-02" },
+    { "xs:yearMonthDuration('P1M') * 2", "yearMonthDuration:P2M" },
+    { "xs:time('12:00:00') - xs:time('11:00:00')", "dayTimeDuration:PT1H" },
+    { "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+      "dayTimeDuration:P1DT5H" },
+    { "xs:dayTimeDuration('P1D') div xs:dayTimeDuration('PT7S')",
+      "decimal:12342.85714285714285714286" },
+    { "'P1D' + xs:dayTimeDuration('P1D')", "error:XPTY0004" },
     { "xs:date('2026-01-01') + xs:date('2026-01-01')", "error:XPTY0004" },
     { "xs:date('2026-01-01') - xs:dateTime('2026-01-01T00:00:00')",
       "error:XPTY0004" },
@@ -4162,8 +4174,9 @@ testDateTimeContext(void) {
 }
 
 /*
- * Folding has no implicit timezone: a comparison that needs one stays
- * for the evaluation, while values with timezones and casts fold
+ * Folding has no implicit timezone: a comparison or a subtraction that
+ * needs one stays for the evaluation, while values with timezones,
+ * casts and adding a duration to a date fold
  */
 static void
 testDateTimeFolding(void) {
@@ -4174,11 +4187,20 @@ testDateTimeFolding(void) {
                                  "xs:date('2026-01-01Z')", NULL);
     xp3Expr *cast = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01')",
                                NULL);
+    xp3Expr *openDifference = xp3Compile(NULL, BAD_CAST
+                                         "xs:date('2026-01-02') - "
+                                         "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *closedDifference = xp3Compile(NULL, BAD_CAST
+                                           "xs:date('2026-01-02Z') - "
+                                           "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *moved = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-31') + "
+                                "xs:yearMonthDuration('P1M')", NULL);
     int utc;
     int ahead;
 
     if ((ctx == NULL) || (open == NULL) || (closed == NULL) ||
-        (cast == NULL)) {
+        (cast == NULL) || (openDifference == NULL) ||
+        (closedDifference == NULL) || (moved == NULL)) {
         check(0, "expressions compiled");
         goto done;
     }
@@ -4190,20 +4212,37 @@ testDateTimeFolding(void) {
     check(closed->ast->root->kind == XP3_AST_CONSTANT,
           "a comparison of values with timezones is folded");
     check(cast->ast->root->kind == XP3_AST_CONSTANT, "a cast is folded");
+    check(openDifference->ast->root->kind != XP3_AST_CONSTANT,
+          "a subtraction that needs the implicit timezone is not folded");
+    check(closedDifference->ast->root->kind == XP3_AST_CONSTANT,
+          "a subtraction of values with timezones is folded");
+    check(moved->ast->root->kind == XP3_AST_CONSTANT,
+          "adding a duration to a date without a timezone is folded");
 
     xp3SetImplicitTimezone(ctx, 0);
     utc = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
     xp3SetImplicitTimezone(ctx, 60);
     ahead = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:PT23H");
     check((utc == 1) && (ahead == 0),
           "the result depends on the implicit timezone of the evaluation");
     check(xp3EvaluateBoolean(closed, ctx, NULL) == 1,
           "the folded comparison");
+    checkEval(NULL, ctx, "xs:date('2026-01-02Z') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
+    checkEval(NULL, ctx, "xs:date('2026-01-31') + "
+              "xs:yearMonthDuration('P1M')", "date:2026-02-28");
 
 done:
     xp3FreeExpr(open);
     xp3FreeExpr(closed);
     xp3FreeExpr(cast);
+    xp3FreeExpr(openDifference);
+    xp3FreeExpr(closedDifference);
+    xp3FreeExpr(moved);
     xp3FreeDynamicContext(ctx);
 }
 

@@ -102,6 +102,10 @@ xp3DecimalDivTyped(const xp3Decimal *a, int aIsInteger, const xp3Decimal *b,
                    int bIsInteger, xp3Decimal **res);
 
 xp3ErrCode
+xp3DecimalDivRound(const xp3Decimal *a, const xp3Decimal *b, int precision,
+                   xp3RoundingMode mode, xp3Decimal **res);
+
+xp3ErrCode
 xp3DecimalIdiv(const xp3Decimal *a, const xp3Decimal *b,
                xp3Decimal **res);
 

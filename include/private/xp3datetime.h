@@ -148,6 +148,24 @@ int
 xp3DurationCompare(const xp3Duration *left, const xp3Duration *right);
 
 /*
+ * Arithmetic
+ */
+void
+xp3DurationNegate(const xp3Duration *value, xp3Duration *result);
+
+xp3ErrCode
+xp3DurationAdd(const xp3Duration *left, const xp3Duration *right,
+               xp3Duration *result);
+
+xp3ErrCode
+xp3DateTimeAddDuration(xp3TypeId type, const xp3DateTime *value,
+                       const xp3Duration *duration, xp3DateTime *result);
+
+xp3ErrCode
+xp3InstantDifference(const xp3Instant *left, const xp3Instant *right,
+                     xp3Duration *result);
+
+/*
  * The clock
  */
 void

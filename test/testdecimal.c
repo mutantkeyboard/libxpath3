@@ -582,6 +582,72 @@ testRound(void) {
     xp3DecimalFree(five);
 }
 
+static const struct {
+    const char *a;
+    const char *b;
+    int precision;
+    xp3RoundingMode mode;
+    const char *expected;
+} divRoundCases[] = {
+    /* 20 digits, half to even, as for a duration divided by another */
+    { "10", "3", 20, XP3_ROUND_HALF_EVEN, "3.33333333333333333333" },
+    { "1", "2097152", 20, XP3_ROUND_HALF_EVEN, "0.00000047683715820312" },
+    { "3", "2097152", 20, XP3_ROUND_HALF_EVEN, "0.00000143051147460938" },
+    { "-1", "2097152", 20, XP3_ROUND_HALF_EVEN, "-0.00000047683715820312" },
+    { "1", "2097152", 20, XP3_ROUND_HALF_UP, "0.00000047683715820313" },
+    /* Exact quotients keep no trailing zeros */
+    { "1.5", "3", 20, XP3_ROUND_HALF_EVEN, "0.5" },
+    { "40", "1", 20, XP3_ROUND_HALF_EVEN, "40" },
+    { "0", "7", 20, XP3_ROUND_HALF_EVEN, "0" },
+    /* A dividend with more digits after the point than the precision */
+    { "0.123456", "1", 2, XP3_ROUND_HALF_EVEN, "0.12" },
+    { "0.125", "1", 2, XP3_ROUND_HALF_EVEN, "0.12" },
+    { "0.135", "1", 2, XP3_ROUND_HALF_EVEN, "0.14" },
+    { "2.5", "1", 0, XP3_ROUND_DOWN, "2" },
+    { "-7", "2", 0, XP3_ROUND_DOWN, "-3" }
+};
+
+/* Division rounded to a fixed number of digits */
+static void
+testDivRound(void) {
+    xp3Decimal *one = dec("1");
+    xp3Decimal *zero = dec("0");
+    xp3Decimal *res = NULL;
+    size_t i;
+
+    for (i = 0; i < sizeof(divRoundCases) / sizeof(divRoundCases[0]); i++) {
+        xp3Decimal *a = dec(divRoundCases[i].a);
+        xp3Decimal *b = dec(divRoundCases[i].b);
+        char what[128];
+
+        if ((a == NULL) || (b == NULL)) {
+            xp3DecimalFree(a);
+            xp3DecimalFree(b);
+            continue;
+        }
+        snprintf(what, sizeof(what), "%s div %s at %d digits in mode %d",
+                 divRoundCases[i].a, divRoundCases[i].b,
+                 divRoundCases[i].precision, (int) divRoundCases[i].mode);
+        res = NULL;
+        check(xp3DecimalDivRound(a, b, divRoundCases[i].precision,
+                                 divRoundCases[i].mode, &res) == XP3_ERR_OK,
+              what);
+        expectStr(res, divRoundCases[i].expected, what);
+        xp3DecimalFree(a);
+        xp3DecimalFree(b);
+    }
+    res = NULL;
+    check((xp3DecimalDivRound(one, zero, 20, XP3_ROUND_HALF_EVEN, &res) ==
+           XP3_ERR_FOAR0001) && (res == NULL), "division by zero");
+    check((xp3DecimalDivRound(one, one, -1, XP3_ROUND_HALF_EVEN, &res) ==
+           XP3_ERR_LIMIT) && (res == NULL), "a negative precision");
+    check((xp3DecimalDivRound(one, one, XP3_DECIMAL_MAX_DIGITS + 1,
+                              XP3_ROUND_HALF_EVEN, &res) == XP3_ERR_LIMIT) &&
+          (res == NULL), "a precision beyond the digit limit");
+    xp3DecimalFree(one);
+    xp3DecimalFree(zero);
+}
+
 static void
 testCompare(void) {
     static const struct {
@@ -796,6 +862,7 @@ main(void) {
     XP3_TEST_RUN(testAddBack);
     XP3_TEST_RUN(testDivisionProperties);
     XP3_TEST_RUN(testRound);
+    XP3_TEST_RUN(testDivRound);
     XP3_TEST_RUN(testCompare);
     XP3_TEST_RUN(testConversions);
     XP3_TEST_RUN(testLimits);

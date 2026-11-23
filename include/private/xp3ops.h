@@ -27,7 +27,7 @@ xp3TypeIsInteger(xp3TypeId type);
 
 xp3ErrCode
 xp3Arithmetic(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
-              xp3Atomic **res);
+              xp3Clock *clock, xp3Atomic **res);
 
 xp3ErrCode
 xp3NegateNumber(const xp3Atomic *value, xp3Atomic **res);

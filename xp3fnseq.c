@@ -179,15 +179,6 @@ spliceItems(xp3FuncCall *call, const xp3Value *value, uint64_t from,
     return(xp3FuncBuilderFinish(call, &builder));
 }
 
-/* Whether values of a type are durations, dates or times, which can't
- * be added up yet */
-static int
-isTemporal(xp3TypeId type) {
-    xp3Representation rep = xp3TypeRepresentation(type);
-
-    return((rep == XP3_REP_DURATION) || (rep == XP3_REP_DATE_TIME));
-}
-
 /* The context item as a sequence, for the functions whose argument
  * defaults to it */
 static xp3Value *
@@ -1874,6 +1865,9 @@ aggregateError(xp3FuncCall *call, xp3ErrCode err, const char *name,
                const xp3Atomic *left, const xp3Atomic *right) {
     if (err == XP3_ERR_FOAR0002)
         xp3FuncError(call, err, "the result of %s is too large", name);
+    else if (err == XP3_ERR_FODT0002)
+        xp3FuncError(call, err, "the result of %s is too large for a "
+                     "duration", name);
     else if (err == XP3_ERR_NO_MEMORY)
         xp3FuncError(call, err, NULL);
     else if (err == XP3_ERR_NEEDS_CONTEXT)
@@ -1895,7 +1889,8 @@ static xp3Atomic *
 aggregateArithmetic(xp3FuncCall *call, xp3AstOp op, const xp3Atomic *left,
                     const xp3Atomic *right, const char *name) {
     xp3Atomic *result = NULL;
-    xp3ErrCode err = xp3Arithmetic(op, left, right, &result);
+    xp3ErrCode err = xp3Arithmetic(op, left, right, xp3FuncClock(call),
+                                   &result);
 
     if (err != XP3_ERR_OK)
         aggregateError(call, err, name, left, right);
@@ -1953,11 +1948,23 @@ done:
     return(result);
 }
 
+/* Whether fn:sum and fn:avg add up values of a type: numbers, and the
+ * two ordered duration types (F&O 3.1, 14.4.2 and 14.4.5) */
+static int
+isSummable(xp3TypeId type) {
+    return(xp3TypeIsNumeric(type) ||
+           xp3TypeDerivesFrom(type, XP3_TYPE_YEAR_MONTH_DURATION) ||
+           xp3TypeDerivesFrom(type, XP3_TYPE_DAY_TIME_DURATION));
+}
+
 /*
  * Add up the values of a sequence with +, so that numbers are promoted
- * and overflow as for the operator. Only numbers can be added before
- * Part 10 brings durations. Sets *sum to NULL for the empty sequence.
- * Returns 0, or -1 after recording an error.
+ * and overflow as for the operator, and durations as for the operator
+ * too. The values are all numbers, all xs:yearMonthDuration or all
+ * xs:dayTimeDuration; anything else, plain xs:duration included, is
+ * FORG0006, and so is a mixture, which + refuses and aggregateError()
+ * reports. Sets *sum to NULL for the empty sequence. Returns 0, or -1
+ * after recording an error.
  */
 static int
 sumValues(xp3FuncCall *call, const xp3Value *value, const char *name,
@@ -1976,14 +1983,11 @@ sumValues(xp3FuncCall *call, const xp3Value *value, const char *name,
 
         if (atomic == NULL)
             goto error;
-        if (!xp3TypeIsNumeric(atomic->type)) {
-            if (isTemporal(atomic->type))
-                xp3FuncError(call, XP3_ERR_UNSUPPORTED, "%s of durations "
-                             "is not implemented yet", name);
-            else
-                xp3FuncError(call, XP3_ERR_FORG0006, "%s got a value of "
-                             "type xs:%s, which is not a number", name,
-                             (const char *) xp3TypeLocalName(atomic->type));
+        if (!isSummable(atomic->type)) {
+            xp3FuncError(call, XP3_ERR_FORG0006, "%s got a value of type "
+                         "xs:%s, which is neither a number nor an "
+                         "xs:yearMonthDuration or xs:dayTimeDuration",
+                         name, (const char *) xp3TypeLocalName(atomic->type));
             xp3AtomicUnref(atomic);
             goto error;
         }
@@ -2012,9 +2016,10 @@ error:
 
 /**
  * fn:sum#1 and #2 (F&O 3.1, 14.4.5): the values added with +, after
- * casting xs:untypedAtomic to xs:double. A single value is returned
- * as it is. The sum of the empty sequence is $zero, or the
- * xs:integer 0 for fn:sum#1. A range is summed from its bounds.
+ * casting xs:untypedAtomic to xs:double: numbers, or durations of one
+ * ordered type. A single value is returned as it is. The sum of the
+ * empty sequence is $zero, or the xs:integer 0 for fn:sum#1. A range
+ * is summed from its bounds.
  *
  * @param call   the call
  * @param args   $arg (xs:anyAtomicType*) and $zero
@@ -2043,7 +2048,9 @@ xp3FnSum(xp3FuncCall *call, xp3Value **args, int count) {
 /**
  * fn:avg#1 (F&O 3.1, 14.4.2): the sum of the values div their count,
  * so the average of integers is an xs:decimal, divided as by the div
- * operator (doc/DESIGN.md, D3). A range is averaged from its bounds.
+ * operator (doc/DESIGN.md, D3), and that of durations a duration
+ * divided by a number (doc/DESIGN.md 4.2). A range is averaged from
+ * its bounds.
  *
  * @param call   the call
  * @param args   the argument, xs:anyAtomicType*

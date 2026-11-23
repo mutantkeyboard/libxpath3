@@ -1658,90 +1658,6 @@ castUntyped(xp3Eval *ev, xp3Atomic *value, xp3TypeId type,
  * Arithmetic
  */
 
-/* What an operand of date and duration arithmetic is */
-typedef enum {
-    XP3_ARITH_OTHER = 0,
-    XP3_ARITH_NUMBER,
-    XP3_ARITH_YEAR_MONTH,       /* xs:yearMonthDuration */
-    XP3_ARITH_DAY_TIME,         /* xs:dayTimeDuration */
-    XP3_ARITH_DATE,
-    XP3_ARITH_DATE_TIME,        /* also xs:dateTimeStamp */
-    XP3_ARITH_TIME
-} xp3ArithKind;
-
-static xp3ArithKind
-arithKind(xp3TypeId type) {
-    if (xp3TypeIsNumeric(type))
-        return(XP3_ARITH_NUMBER);
-    if (xp3TypeDerivesFrom(type, XP3_TYPE_YEAR_MONTH_DURATION))
-        return(XP3_ARITH_YEAR_MONTH);
-    if (xp3TypeDerivesFrom(type, XP3_TYPE_DAY_TIME_DURATION))
-        return(XP3_ARITH_DAY_TIME);
-    if (type == XP3_TYPE_DATE)
-        return(XP3_ARITH_DATE);
-    if (xp3TypeDerivesFrom(type, XP3_TYPE_DATE_TIME))
-        return(XP3_ARITH_DATE_TIME);
-    if (type == XP3_TYPE_TIME)
-        return(XP3_ARITH_TIME);
-    return(XP3_ARITH_OTHER);
-}
-
-static int
-isDuration(xp3ArithKind kind) {
-    return((kind == XP3_ARITH_YEAR_MONTH) || (kind == XP3_ARITH_DAY_TIME));
-}
-
-/*
- * Whether F&O 3.1 defines an operator on dates, times or durations
- * of these kinds (8.4, 9.7, and the table of B.2): durations of one
- * kind added, subtracted and divided, durations multiplied and divided
- * by numbers, durations added to and subtracted from dates and times,
- * and dates and times subtracted from their own kind. That arithmetic
- * is not implemented yet; on other kinds, an operator is a type error.
- */
-static int
-temporalArithmetic(xp3AstOp op, xp3ArithKind left, xp3ArithKind right) {
-    int sameDuration = isDuration(left) && (left == right);
-    int pointInTime = (left == XP3_ARITH_DATE) ||
-                      (left == XP3_ARITH_DATE_TIME);
-
-    switch (op) {
-        case XP3_OP_ADD:
-            if (sameDuration)
-                return(1);
-            if (pointInTime && isDuration(right))
-                return(1);
-            if (isDuration(left) && ((right == XP3_ARITH_DATE) ||
-                                     (right == XP3_ARITH_DATE_TIME)))
-                return(1);
-            if ((left == XP3_ARITH_TIME) && (right == XP3_ARITH_DAY_TIME))
-                return(1);
-            return((left == XP3_ARITH_DAY_TIME) &&
-                   (right == XP3_ARITH_TIME));
-        case XP3_OP_SUB:
-            if (sameDuration)
-                return(1);
-            if (pointInTime && isDuration(right))
-                return(1);
-            if ((left == XP3_ARITH_TIME) && (right == XP3_ARITH_DAY_TIME))
-                return(1);
-            /* A date, dateTime or time minus one of its own kind */
-            if (left != right)
-                return(0);
-            return(pointInTime || (left == XP3_ARITH_TIME));
-        case XP3_OP_MUL:
-            if (isDuration(left) && (right == XP3_ARITH_NUMBER))
-                return(1);
-            return((left == XP3_ARITH_NUMBER) && isDuration(right));
-        case XP3_OP_DIV:
-            if (isDuration(left) && (right == XP3_ARITH_NUMBER))
-                return(1);
-            return(sameDuration);
-        default:
-            return(0);
-    }
-}
-
 /* +, -, *, div, idiv, mod (XPath 3.1, 3.5) */
 static xp3Value *
 evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
@@ -1771,16 +1687,8 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(right);
         return(NULL);
     }
-    if (temporalArithmetic((xp3AstOp) node->op, arithKind(left->type),
-                           arithKind(right->type))) {
-        evalError(ev, XP3_ERR_UNSUPPORTED, node, "%s on dates, times and "
-                  "durations is not implemented yet", name);
-        xp3AtomicUnref(left);
-        xp3AtomicUnref(right);
-        return(NULL);
-    }
-
-    err = xp3Arithmetic((xp3AstOp) node->op, left, right, &result);
+    err = xp3Arithmetic((xp3AstOp) node->op, left, right, &ev->clock,
+                        &result);
     switch (err) {
         case XP3_ERR_OK:
             break;
@@ -1798,6 +1706,22 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
         case XP3_ERR_FOCA0002:
             evalError(ev, err, node, "the quotient of idiv is too large "
                       "for xs:integer");
+            break;
+        case XP3_ERR_FOCA0005:
+            evalError(ev, err, node, "%s of a duration by NaN", name);
+            break;
+        case XP3_ERR_FODT0001:
+            evalError(ev, err, node, "the result of %s is beyond the "
+                      "years -2147483647 to 2147483647", name);
+            break;
+        case XP3_ERR_FODT0002:
+            evalError(ev, err, node, "the result of %s is too large for "
+                      "a duration", name);
+            break;
+        case XP3_ERR_NEEDS_CONTEXT:
+            evalError(ev, err, node, "subtracting xs:%s values without a "
+                      "timezone needs the implicit timezone",
+                      typeName(left->type));
             break;
         default:
             evalNoMemory(ev);

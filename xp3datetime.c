@@ -1148,6 +1148,280 @@ xp3DurationCompare(const xp3Duration *left, const xp3Duration *right) {
 }
 
 /*
+ * Arithmetic (F&O 3.1, 8.4 and 9.7). Nothing wraps around: a year
+ * beyond XP3_YEAR_MAX is FODT0001, and months or seconds of a duration
+ * beyond 64 bits are FODT0002 (doc/DESIGN.md 4.2).
+ */
+
+/* a + b in *sum. Returns 0, or -1 if the sum doesn't fit in int64_t. */
+static int
+checkedAdd(int64_t a, int64_t b, int64_t *sum) {
+    if ((b > 0) && (a > INT64_MAX - b))
+        return(-1);
+    if ((b < 0) && (a < INT64_MIN - b))
+        return(-1);
+    *sum = a + b;
+    return(0);
+}
+
+/*
+ * Add seconds and nanoseconds of either sign to an amount of time
+ * kept as an xp3Instant: whole seconds rounded down and nanoseconds
+ * from 0 to 999,999,999. Returns 0, or -1 if the seconds don't fit in
+ * int64_t.
+ */
+static int
+instantAdd(const xp3Instant *instant, int64_t seconds, int32_t nanos,
+           xp3Instant *result) {
+    int64_t totalNanos = (int64_t) instant->nanoseconds + nanos;
+    int64_t carry = floorDiv(totalNanos, XP3_NANOS_PER_SECOND);
+    int64_t sum;
+
+    if (checkedAdd(instant->seconds, seconds, &sum) < 0)
+        return(-1);
+    if (checkedAdd(sum, carry, &sum) < 0)
+        return(-1);
+    result->seconds = sum;
+    result->nanoseconds = (int32_t) (totalNanos -
+                                     carry * XP3_NANOS_PER_SECOND);
+    return(0);
+}
+
+/*
+ * An amount of time kept as an xp3Instant as the seconds of a
+ * duration, whose seconds and nanoseconds have the same sign. Returns
+ * 0, or -1 if the seconds are INT64_MIN, which no duration has.
+ */
+static int
+instantToSeconds(const xp3Instant *amount, xp3Duration *result) {
+    int64_t seconds = amount->seconds;
+    int32_t nanos = amount->nanoseconds;
+
+    if ((seconds < 0) && (nanos > 0)) {
+        seconds++;
+        nanos -= XP3_NANOS_PER_SECOND;
+    }
+    if (seconds == INT64_MIN)
+        return(-1);
+    result->seconds = seconds;
+    result->nanoseconds = nanos;
+    return(0);
+}
+
+/* The seconds of a duration as an amount of time kept as an
+ * xp3Instant. The seconds are never INT64_MIN, so one less fits. */
+static xp3Instant
+secondsToInstant(const xp3Duration *duration) {
+    xp3Instant amount;
+
+    amount.seconds = duration->seconds;
+    amount.nanoseconds = duration->nanoseconds;
+    if (amount.nanoseconds < 0) {
+        amount.seconds--;
+        amount.nanoseconds += XP3_NANOS_PER_SECOND;
+    }
+    return(amount);
+}
+
+/**
+ * Negate a duration. No field is INT64_MIN, so each can be negated.
+ *
+ * @param value   the duration
+ * @param result  set to the negated duration
+ */
+void
+xp3DurationNegate(const xp3Duration *value, xp3Duration *result) {
+    result->months = -value->months;
+    result->seconds = -value->seconds;
+    result->nanoseconds = -value->nanoseconds;
+}
+
+/**
+ * Add two durations, months to months and seconds to seconds, as for
+ * two xs:yearMonthDuration or two xs:dayTimeDuration values (F&O 3.1,
+ * 8.4.1 and 8.4.6). Subtracting adds the negated duration.
+ *
+ * @param left    the first duration
+ * @param right   the second duration
+ * @param result  set to the sum
+ * @returns XP3_ERR_OK, or XP3_ERR_FODT0002 if the months or the seconds
+ *          of the sum don't fit in 64 bits
+ */
+xp3ErrCode
+xp3DurationAdd(const xp3Duration *left, const xp3Duration *right,
+               xp3Duration *result) {
+    xp3Instant leftAmount = secondsToInstant(left);
+    xp3Instant sum;
+    int64_t months;
+
+    memset(result, 0, sizeof(*result));
+    if (checkedAdd(left->months, right->months, &months) < 0)
+        return(XP3_ERR_FODT0002);
+    if (months == INT64_MIN)
+        return(XP3_ERR_FODT0002);
+    if (instantAdd(&leftAmount, right->seconds, right->nanoseconds,
+                   &sum) < 0)
+        return(XP3_ERR_FODT0002);
+    if (instantToSeconds(&sum, result) < 0)
+        return(XP3_ERR_FODT0002);
+    result->months = months;
+    return(XP3_ERR_OK);
+}
+
+/*
+ * Add months to a date: the year and month move, and a day beyond the
+ * end of the new month becomes its last day, so 2001-01-31 plus one
+ * month is 2001-02-28 (XML Schema 1.1 Part 2, E.3.3). Returns 0, or
+ * -1 for a year beyond XP3_YEAR_MAX either way.
+ */
+static int
+addMonths(xp3DateTime *value, int64_t months) {
+    int64_t monthNumber = (int64_t) value->year * 12 + value->month - 1;
+    int64_t year;
+    int month;
+    int lastDay;
+
+    if (checkedAdd(monthNumber, months, &monthNumber) < 0)
+        return(-1);
+    year = floorDiv(monthNumber, 12);
+    if ((year > XP3_YEAR_MAX) || (year < -XP3_YEAR_MAX))
+        return(-1);
+    month = (int) (monthNumber - year * 12) + 1;
+    lastDay = xp3DaysInMonth(year, month);
+    value->year = (int32_t) year;
+    value->month = (unsigned char) month;
+    if (value->day > lastDay)
+        value->day = (unsigned char) lastDay;
+    return(0);
+}
+
+/*
+ * Add seconds to a date with a time of day, in its own local time.
+ * Returns 0, or -1 for a year beyond XP3_YEAR_MAX either way.
+ */
+static int
+addSeconds(xp3DateTime *value, int64_t seconds, int32_t nanos) {
+    int64_t firstDay = xp3DayNumber(-XP3_YEAR_MAX, 1, 1);
+    int64_t lastDay = xp3DayNumber(XP3_YEAR_MAX, 12, 31);
+    int64_t days = xp3DayNumber(value->year, value->month, value->day);
+    int64_t secondOfDay;
+    xp3Instant local;
+    int64_t year;
+    int month;
+    int day;
+
+    /* Days within the year limits times 86,400 stay below 2^57 */
+    local.seconds = days * XP3_SECONDS_PER_DAY + value->hour * 3600 +
+                    value->minute * 60 + value->second;
+    local.nanoseconds = value->nanosecond;
+    if (instantAdd(&local, seconds, nanos, &local) < 0)
+        return(-1);
+    days = floorDiv(local.seconds, XP3_SECONDS_PER_DAY);
+    if ((days < firstDay) || (days > lastDay))
+        return(-1);
+    secondOfDay = local.seconds - days * XP3_SECONDS_PER_DAY;
+    xp3DayToDate(days, &year, &month, &day);
+    value->year = (int32_t) year;
+    value->month = (unsigned char) month;
+    value->day = (unsigned char) day;
+    value->hour = (unsigned char) (secondOfDay / 3600);
+    value->minute = (unsigned char) (secondOfDay % 3600 / 60);
+    value->second = (unsigned char) (secondOfDay % 60);
+    value->nanosecond = local.nanoseconds;
+    return(0);
+}
+
+/*
+ * Add seconds to a time of day, which wraps around midnight: only the
+ * seconds beyond whole days count (F&O 3.1, 9.7.13).
+ */
+static void
+addTimeOfDay(xp3DateTime *value, int64_t seconds, int32_t nanos) {
+    xp3Instant local;
+    int64_t secondOfDay;
+
+    local.seconds = value->hour * 3600 + value->minute * 60 + value->second;
+    local.nanoseconds = value->nanosecond;
+    /* Less than a day either way, so nothing can overflow */
+    instantAdd(&local, seconds % XP3_SECONDS_PER_DAY, nanos, &local);
+    secondOfDay = local.seconds - floorDiv(local.seconds,
+                                           XP3_SECONDS_PER_DAY) *
+                                  XP3_SECONDS_PER_DAY;
+    value->hour = (unsigned char) (secondOfDay / 3600);
+    value->minute = (unsigned char) (secondOfDay % 3600 / 60);
+    value->second = (unsigned char) (secondOfDay % 60);
+    value->nanosecond = local.nanoseconds;
+}
+
+/**
+ * Add a duration to an xs:dateTime, xs:date or xs:time (F&O 3.1, 9.7.5,
+ * 9.7.6, 9.7.9, 9.7.10 and 9.7.13), as XML Schema 1.1 Part 2, E.3.3
+ * describes: first the months, with the day pinned to the end of a
+ * shorter month, then the seconds, in the value's own local time. The
+ * result keeps the timezone, or the lack of one. An xs:date is
+ * moved from its start, 00:00:00, and keeps only its date, so a part
+ * of a day counts only if it crosses midnight. An xs:time wraps around
+ * midnight and takes no months. Subtracting adds the negated duration.
+ *
+ * @param type      the type of the value
+ * @param value     the value
+ * @param duration  the duration, of months only or of seconds only
+ * @param result    set to the result, of the type of the value
+ * @returns XP3_ERR_OK, or XP3_ERR_FODT0001 for a year beyond
+ *          XP3_YEAR_MAX either way
+ */
+xp3ErrCode
+xp3DateTimeAddDuration(xp3TypeId type, const xp3DateTime *value,
+                       const xp3Duration *duration, xp3DateTime *result) {
+    int parts = typeParts(type);
+
+    *result = *value;
+    if (!(parts & XP3_PART_DAY)) {
+        addTimeOfDay(result, duration->seconds, duration->nanoseconds);
+        return(XP3_ERR_OK);
+    }
+    if (addMonths(result, duration->months) < 0)
+        return(XP3_ERR_FODT0001);
+    if (addSeconds(result, duration->seconds, duration->nanoseconds) < 0)
+        return(XP3_ERR_FODT0001);
+    if (!(parts & XP3_PART_TIME)) {
+        result->hour = 0;
+        result->minute = 0;
+        result->second = 0;
+        result->nanosecond = 0;
+    }
+    return(XP3_ERR_OK);
+}
+
+/**
+ * Subtract one instant from another, as xs:dateTime, xs:date and
+ * xs:time values are subtracted once normalized to UTC (F&O 3.1, 9.7.2
+ * to 9.7.4).
+ *
+ * @param left    the instant subtracted from
+ * @param right   the instant subtracted
+ * @param result  set to the difference, as the seconds of a duration
+ * @returns XP3_ERR_OK, or XP3_ERR_FODT0002 if the difference doesn't
+ *          fit in 64 bits, which instants within the year limits never
+ *          reach
+ */
+xp3ErrCode
+xp3InstantDifference(const xp3Instant *left, const xp3Instant *right,
+                     xp3Duration *result) {
+    xp3Instant difference;
+
+    memset(result, 0, sizeof(*result));
+    if (right->seconds == INT64_MIN)
+        return(XP3_ERR_FODT0002);
+    if (instantAdd(left, -right->seconds, -right->nanoseconds,
+                   &difference) < 0)
+        return(XP3_ERR_FODT0002);
+    if (instantToSeconds(&difference, result) < 0)
+        return(XP3_ERR_FODT0002);
+    return(XP3_ERR_OK);
+}
+
+/*
  * The clock
  */
 

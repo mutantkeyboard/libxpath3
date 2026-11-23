@@ -71,6 +71,7 @@ typedef enum
     XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
     XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */
+    XP3_ERR_FOCA0005,  /* NaN as a factor or divisor of a duration */
     XP3_ERR_FOCH0001,  /* code point not allowed in XML */
     XP3_ERR_FOCH0002,  /* unsupported collation */
     XP3_ERR_FOCH0003,  /* unsupported normalization form */

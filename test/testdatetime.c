@@ -2,11 +2,13 @@
  * testdatetime.c: tests for dates, times and durations
  *
  * Lexical forms and canonical forms of the 13 types, the calendar,
- * casts between the types, comparisons with and without timezones, the
- * clock, and a random property test: every value reads back from its
- * canonical form, comparisons agree with instants computed here by a
- * separate, slower calendar, and fn:distinct-values agrees with eq.
- * Expected comparisons are the examples of F&O 3.1, 8.2 and 9.4.
+ * casts between the types, comparisons with and without timezones,
+ * arithmetic, the clock, and random property tests: every value reads
+ * back from its canonical form, comparisons and arithmetic agree with
+ * instants computed here by a separate, slower calendar,
+ * fn:distinct-values agrees with eq, and fn:sum and fn:avg with + and
+ * div. Expected comparisons and results are the examples of F&O 3.1,
+ * 8.2, 8.4, 9.4 and 9.7.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -14,6 +16,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -623,6 +626,381 @@ testComparisons(void) {
 }
 
 /*
+ * Arithmetic
+ */
+
+/* A result as "type:canonical form", or "error:CODE" */
+static void
+describeResult(xp3ErrCode code, const xp3Atomic *result, char *out,
+               size_t size) {
+    xmlChar *str;
+
+    if (code != XP3_ERR_OK) {
+        snprintf(out, size, "error:%s", codeName(code));
+        return;
+    }
+    str = xp3AtomicToString(result);
+    if (str == NULL) {
+        snprintf(out, size, "error:NO_MEMORY");
+        return;
+    }
+    snprintf(out, size, "%s:%s",
+             (const char *) xp3TypeLocalName(result->type),
+             (const char *) str);
+    xmlFree(str);
+}
+
+/* Apply an operator to two values given by their lexical forms, and
+ * describe the result */
+static void
+arithmetic(xp3TypeId leftType, const char *left, xp3AstOp op,
+           xp3TypeId rightType, const char *right, xp3Clock *clock,
+           char *out, size_t size) {
+    xp3Atomic *leftValue = value(leftType, left);
+    xp3Atomic *rightValue = value(rightType, right);
+    xp3Atomic *result = NULL;
+    xp3ErrCode code;
+
+    snprintf(out, size, "no operands");
+    if ((leftValue != NULL) && (rightValue != NULL)) {
+        code = xp3Arithmetic(op, leftValue, rightValue, clock, &result);
+        describeResult(code, result, out, size);
+    }
+    xp3AtomicUnref(leftValue);
+    xp3AtomicUnref(rightValue);
+    xp3AtomicUnref(result);
+}
+
+typedef struct {
+    xp3TypeId leftType;
+    const char *left;
+    xp3AstOp op;
+    xp3TypeId rightType;
+    const char *right;
+    const char *expected;
+} xp3ArithCase;
+
+#define ADD XP3_OP_ADD
+#define SUB XP3_OP_SUB
+#define MUL XP3_OP_MUL
+#define DIV XP3_OP_DIV
+#define T_DT XP3_TYPE_DATE_TIME
+#define T_DTS XP3_TYPE_DATE_TIME_STAMP
+#define T_D XP3_TYPE_DATE
+#define T_T XP3_TYPE_TIME
+#define T_GY XP3_TYPE_G_YEAR
+#define T_DUR XP3_TYPE_DURATION
+#define T_YM XP3_TYPE_YEAR_MONTH_DURATION
+#define T_DTD XP3_TYPE_DAY_TIME_DURATION
+#define T_INT XP3_TYPE_INTEGER
+#define T_DEC XP3_TYPE_DECIMAL
+#define T_DBL XP3_TYPE_DOUBLE
+
+/* The largest months and seconds of a duration */
+#define MAX_MONTHS "P768614336404564650Y7M"
+#define MAX_SECONDS "PT9223372036854775807S"
+
+/*
+ * With an implicit timezone of -05:00. Most examples are those of F&O
+ * 3.1, 8.4 and 9.7, and those of the Saxon measurements in
+ * doc/DESIGN.md 4.2.
+ */
+static const xp3ArithCase arithCases[] = {
+    /* The day is pinned to the end of a shorter month */
+    { T_D, "2001-01-31", ADD, T_YM, "P1M", "date:2001-02-28" },
+    { T_D, "2004-01-31", ADD, T_YM, "P1M", "date:2004-02-29" },
+    { T_D, "2000-02-29", ADD, T_YM, "P1Y", "date:2001-02-28" },
+    { T_D, "2000-02-29", ADD, T_YM, "P4Y", "date:2004-02-29" },
+    { T_D, "1900-01-29", ADD, T_YM, "P1M", "date:1900-02-28" },
+    { T_D, "2001-03-31", SUB, T_YM, "P1M", "date:2001-02-28" },
+    { T_YM, "P1M", ADD, T_D, "2001-01-31", "date:2001-02-28" },
+    { T_D, "2000-02-29Z", SUB, T_YM, "P1Y", "date:1999-02-28Z" },
+    { T_D, "2000-10-31-05:00", SUB, T_YM, "P1Y1M",
+      "date:1999-09-30-05:00" },
+    { T_D, "2000-10-30", ADD, T_YM, "P1Y2M", "date:2001-12-30" },
+    { T_DT, "2001-03-31T10:00:00Z", SUB, T_YM, "P1M",
+      "dateTime:2001-02-28T10:00:00Z" },
+    { T_DT, "2000-10-30T11:12:00", ADD, T_YM, "P1Y2M",
+      "dateTime:2001-12-30T11:12:00" },
+    { T_DT, "2000-10-30T11:12:00", SUB, T_YM, "P1Y2M",
+      "dateTime:1999-08-30T11:12:00" },
+    { T_D, "2026-05-31", ADD, T_YM, "-P3M", "date:2026-02-28" },
+    /* Crossing year 0 both ways, and negative years */
+    { T_D, "0000-02-29", SUB, T_YM, "P1Y", "date:-0001-02-28" },
+    { T_D, "-0001-12-31", ADD, T_DTD, "P1D", "date:0000-01-01" },
+    { T_D, "0000-01-01", SUB, T_DTD, "P1D", "date:-0001-12-31" },
+    { T_D, "-0001-03-31", SUB, T_YM, "P1M", "date:-0001-02-28" },
+    { T_D, "-0001-11-30", ADD, T_YM, "P2M", "date:0000-01-30" },
+    { T_D, "-0004-02-29", ADD, T_YM, "P1Y", "date:-0003-02-28" },
+    { T_D, "-0004-02-29", ADD, T_YM, "P4Y", "date:0000-02-29" },
+    { T_DT, "-0001-12-31T23:00:00", ADD, T_DTD, "PT1H",
+      "dateTime:0000-01-01T00:00:00" },
+    { T_DT, "0000-01-01T00:00:00Z", SUB, T_DTD, "PT0.5S",
+      "dateTime:-0001-12-31T23:59:59.5Z" },
+    { T_D, "0001-01-01Z", SUB, T_D, "-0001-01-01Z", "dayTimeDuration:P731D" },
+    { T_D, "-2026-06-15", SUB, T_D, "-2027-06-15", "dayTimeDuration:P365D" },
+    { T_D, "-0001-01-01Z", SUB, T_D, "0001-01-01Z",
+      "dayTimeDuration:-P731D" },
+    /* Subtracting dates, times and dateTimes */
+    { T_D, "2000-10-30", SUB, T_D, "1999-11-28", "dayTimeDuration:P337D" },
+    { T_D, "2000-10-30", SUB, T_D, "1999-11-28Z",
+      "dayTimeDuration:P337DT5H" },
+    { T_D, "2000-10-15-05:00", SUB, T_D, "2000-10-10+02:00",
+      "dayTimeDuration:P5DT7H" },
+    { T_D, "2026-01-01Z", SUB, T_D, "2026-01-01+14:00",
+      "dayTimeDuration:PT14H" },
+    { T_D, "2026-01-01-14:00", SUB, T_D, "2026-01-01+14:00",
+      "dayTimeDuration:P1DT4H" },
+    { T_DT, "2000-10-30T06:12:00", SUB, T_DT, "1999-11-28T09:00:00Z",
+      "dayTimeDuration:P337DT2H12M" },
+    { T_DT, "2026-01-01T00:00:00.25Z", SUB, T_DT, "2026-01-01T00:00:01Z",
+      "dayTimeDuration:-PT0.75S" },
+    { T_DTS, "2026-01-01T00:00:00Z", SUB, T_DT, "2025-12-31T19:00:00",
+      "dayTimeDuration:PT0S" },
+    { T_T, "11:12:00Z", SUB, T_T, "04:00:00", "dayTimeDuration:PT2H12M" },
+    { T_T, "11:00:00-05:00", SUB, T_T, "21:30:00+05:30",
+      "dayTimeDuration:PT0S" },
+    { T_T, "17:00:00-06:00", SUB, T_T, "08:00:00+09:00",
+      "dayTimeDuration:P1D" },
+    { T_T, "24:00:00", SUB, T_T, "23:59:59",
+      "dayTimeDuration:-PT23H59M59S" },
+    /* A time wraps around midnight */
+    { T_T, "11:12:00", ADD, T_DTD, "P3DT1H15M", "time:12:27:00" },
+    { T_T, "23:12:00+03:00", ADD, T_DTD, "P1DT3H15M",
+      "time:02:27:00+03:00" },
+    { T_T, "11:12:00", SUB, T_DTD, "P3DT1H15M", "time:09:57:00" },
+    { T_T, "08:20:00-05:00", SUB, T_DTD, "P23DT10H10M",
+      "time:22:10:00-05:00" },
+    { T_T, "00:30:00", ADD, T_DTD, "-P1DT1H", "time:23:30:00" },
+    { T_DTD, "PT1H", ADD, T_T, "23:30:00.5", "time:00:30:00.5" },
+    { T_T, "23:59:59.999999999", ADD, T_DTD, "PT0.000000001S",
+      "time:00:00:00" },
+    { T_T, "00:00:00", SUB, T_DTD, "PT0.000000001S",
+      "time:23:59:59.999999999" },
+    { T_T, "12:00:00", ADD, T_DTD, MAX_SECONDS, "time:03:30:07" },
+    /* A date moves by whole days and keeps only its date */
+    { T_D, "2004-10-30Z", ADD, T_DTD, "P2DT2H30M0S", "date:2004-11-01Z" },
+    { T_D, "2000-10-30", SUB, T_DTD, "P3DT1H15M", "date:2000-10-26" },
+    { T_D, "2026-01-01", SUB, T_DTD, "PT1H", "date:2025-12-31" },
+    { T_D, "2026-01-01", ADD, T_DTD, "PT23H59M59.999999999S",
+      "date:2026-01-01" },
+    { T_D, "2026-01-01", ADD, T_DTD, "-PT0.000000001S", "date:2025-12-31" },
+    { T_DTD, "P1D", ADD, T_D, "2026-02-28+14:00", "date:2026-03-01+14:00" },
+    { T_DT, "2000-10-30T11:12:00", ADD, T_DTD, "P3DT1H15M",
+      "dateTime:2000-11-02T12:27:00" },
+    { T_DT, "2000-10-30T11:12:00", SUB, T_DTD, "P3DT1H15M",
+      "dateTime:2000-10-27T09:57:00" },
+    { T_DTS, "2026-01-01T00:00:00Z", ADD, T_DTD, "PT1H",
+      "dateTime:2026-01-01T01:00:00Z" },
+    /* Durations added and subtracted */
+    { T_YM, "P2Y11M", ADD, T_YM, "P3Y3M", "yearMonthDuration:P6Y2M" },
+    { T_YM, "P2Y11M", SUB, T_YM, "P3Y3M", "yearMonthDuration:-P4M" },
+    { T_DTD, "P2DT12H5M", ADD, T_DTD, "P5DT12H",
+      "dayTimeDuration:P8DT5M" },
+    { T_DTD, "P2DT12H", SUB, T_DTD, "P1DT10H30M",
+      "dayTimeDuration:P1DT1H30M" },
+    { T_DTD, "PT0.5S", SUB, T_DTD, "PT1S", "dayTimeDuration:-PT0.5S" },
+    { T_DTD, "-PT0.5S", ADD, T_DTD, "PT1.25S", "dayTimeDuration:PT0.75S" },
+    { T_DTD, "-PT0.5S", ADD, T_DTD, "PT0.5S", "dayTimeDuration:PT0S" },
+    /* Durations multiplied and divided by numbers */
+    { T_YM, "P2Y11M", MUL, T_DEC, "2.3", "yearMonthDuration:P6Y9M" },
+    { T_YM, "P2Y11M", DIV, T_DEC, "1.5", "yearMonthDuration:P1Y11M" },
+    { T_YM, "P1M", MUL, T_DEC, "1.5", "yearMonthDuration:P2M" },
+    { T_YM, "P1M", MUL, T_DEC, "2.5", "yearMonthDuration:P3M" },
+    { T_YM, "P1M", MUL, T_DEC, "-0.5", "yearMonthDuration:P0M" },
+    { T_YM, "P1M", MUL, T_DEC, "-1.5", "yearMonthDuration:-P1M" },
+    { T_YM, "P1M", DIV, T_DEC, "2.5", "yearMonthDuration:P0M" },
+    { T_YM, "P5M", DIV, T_INT, "2", "yearMonthDuration:P3M" },
+    { T_INT, "3", MUL, T_YM, "P1Y", "yearMonthDuration:P3Y" },
+    { T_DTD, "PT2H10M", MUL, T_DEC, "2.1", "dayTimeDuration:PT4H33M" },
+    { T_DTD, "P1DT2H30M10.5S", DIV, T_DEC, "1.5",
+      "dayTimeDuration:PT17H40M7S" },
+    { T_DTD, "PT1S", MUL, T_DBL, "2.6e-9", "dayTimeDuration:PT0.000000002S" },
+    /* The shortest decimal of the double, not its exact value */
+    { T_DTD, "PT1S", MUL, T_DEC, "0.7", "dayTimeDuration:PT0.7S" },
+    { T_DTD, "PT1S", MUL, T_DBL, "0.3", "dayTimeDuration:PT0.3S" },
+    { T_DTD, "PT1H", MUL, T_DEC, "2.3", "dayTimeDuration:PT2H18M" },
+    { T_DTD, "P1D", MUL, T_DEC, "0.1", "dayTimeDuration:PT2H24M" },
+    { T_DTD, "PT1S", DIV, T_DEC, "0.7", "dayTimeDuration:PT1.428571428S" },
+    { T_DTD, "PT1S", MUL, T_DEC, "0.9999999999",
+      "dayTimeDuration:PT0.999999999S" },
+    { T_DTD, "PT2S", DIV, T_INT, "3", "dayTimeDuration:PT0.666666666S" },
+    { T_DTD, "-PT2S", DIV, T_INT, "3", "dayTimeDuration:-PT0.666666666S" },
+    { T_DTD, "PT1S", DIV, T_DBL, "-3", "dayTimeDuration:-PT0.333333333S" },
+    { T_INT, "3", MUL, T_DTD, "PT1S", "dayTimeDuration:PT3S" },
+    { T_DTD, "PT0.001S", MUL, T_INT, "60000", "dayTimeDuration:PT1M" },
+    { T_DTD, "PT1S", MUL, T_DBL, "1e-300", "dayTimeDuration:PT0S" },
+    { T_DTD, "-PT1S", MUL, T_DBL, "1e-300", "dayTimeDuration:PT0S" },
+    { T_DTD, "PT1S", MUL, T_INT, "0", "dayTimeDuration:PT0S" },
+    { T_DTD, "PT1S", MUL, T_DBL, "-0", "dayTimeDuration:PT0S" },
+    { T_DTD, "PT0S", DIV, T_DBL, "1e-300", "dayTimeDuration:PT0S" },
+    /* Factors of 2^52 and more, whose doubles are whole numbers */
+    { T_DTD, "PT0.000000003S", MUL, T_DBL, "1152921504606846976",
+      "dayTimeDuration:P40031DT23H55M13.820541S" },
+    { T_DTD, MAX_SECONDS, DIV, T_DBL, "4503599627370496",
+      "dayTimeDuration:PT34M7.999999999S" },
+    { T_DTD, "PT3S", DIV, T_DBL, "4503599627370496", "dayTimeDuration:PT0S" },
+    /* Durations divided by durations */
+    { T_YM, "P10M", DIV, T_YM, "P3M", "decimal:3.33333333333333333333" },
+    { T_DTD, "P1D", DIV, T_DTD, "PT7S",
+      "decimal:12342.85714285714285714286" },
+    { T_DTD, "PT1S", DIV, T_DTD, "PT2097152S",
+      "decimal:0.00000047683715820312" },
+    { T_DTD, "PT3S", DIV, T_DTD, "PT2097152S",
+      "decimal:0.00000143051147460938" },
+    { T_DTD, "PT1.5S", DIV, T_DTD, "PT3S", "decimal:0.5" },
+    { T_YM, "P3Y4M", DIV, T_YM, "-P1Y4M", "decimal:-2.5" },
+    { T_YM, "P3Y4M", DIV, T_YM, "P1M", "decimal:40" },
+    { T_DTD, "P2DT53M11S", DIV, T_DTD, "P1DT10H",
+      "decimal:1.43783496732026143791" },
+    { T_DTD, "P2DT53M11S", DIV, T_DTD, "PT1S", "decimal:175991" },
+    { T_DTD, "-PT1S", DIV, T_DTD, "PT3S", "decimal:-0.33333333333333333333" },
+    { T_DTD, "PT0.000000001S", DIV, T_DTD, MAX_SECONDS, "decimal:0" },
+    /* NaN, infinity and zero */
+    { T_DTD, "PT1S", MUL, T_DBL, "NaN", "error:FOCA0005" },
+    { T_YM, "P1M", DIV, T_DBL, "NaN", "error:FOCA0005" },
+    { T_DTD, "PT1S", MUL, T_DBL, "INF", "error:FODT0002" },
+    { T_DTD, "PT0S", MUL, T_DBL, "-INF", "error:FODT0002" },
+    { T_YM, "P1M", MUL, T_DBL, "-INF", "error:FODT0002" },
+    { T_YM, "P0M", MUL, T_DBL, "INF", "error:FODT0002" },
+    { T_DTD, "PT1S", DIV, T_INT, "0", "error:FODT0002" },
+    { T_DTD, "PT0S", DIV, T_DBL, "-0", "error:FODT0002" },
+    { T_YM, "P1M", DIV, T_DEC, "0.0", "error:FODT0002" },
+    { T_DTD, "PT1S", DIV, T_DBL, "INF", "dayTimeDuration:PT0S" },
+    { T_DTD, "-PT1S", DIV, T_DBL, "-INF", "dayTimeDuration:PT0S" },
+    { T_YM, "P1M", DIV, T_DBL, "INF", "yearMonthDuration:P0M" },
+    { T_DTD, "PT1S", DIV, T_DBL, "1e-300", "error:FODT0002" },
+    { T_DTD, "PT1S", DIV, T_DTD, "PT0S", "error:FOAR0001" },
+    { T_YM, "P1M", DIV, T_YM, "P0M", "error:FOAR0001" },
+    /* Overflow at the year limits */
+    { T_D, "2147483647-12-31", ADD, T_YM, "P1M", "error:FODT0001" },
+    { T_D, "2147483647-12-31", SUB, T_YM, "-P1M", "error:FODT0001" },
+    { T_D, "2147483647-12-31", ADD, T_DTD, "P1D", "error:FODT0001" },
+    { T_D, "2147483647-12-30", ADD, T_DTD, "P1D", "date:2147483647-12-31" },
+    { T_DT, "2147483647-12-31T23:59:59.999999999", ADD, T_DTD,
+      "PT0.000000001S", "error:FODT0001" },
+    { T_D, "-2147483647-01-01", SUB, T_YM, "P1M", "error:FODT0001" },
+    { T_D, "-2147483647-01-01", SUB, T_DTD, "PT1S", "error:FODT0001" },
+    { T_D, "-2147483647-01-02", SUB, T_DTD, "P1D",
+      "date:-2147483647-01-01" },
+    { T_DT, "-2147483647-01-01T00:00:00", SUB, T_DTD, "PT0.000000001S",
+      "error:FODT0001" },
+    { T_D, "2026-01-01", ADD, T_YM, MAX_MONTHS, "error:FODT0001" },
+    { T_D, "2026-01-01", SUB, T_YM, MAX_MONTHS, "error:FODT0001" },
+    { T_D, "2026-01-01", ADD, T_DTD, MAX_SECONDS, "error:FODT0001" },
+    { T_D, "2026-01-01", SUB, T_DTD, MAX_SECONDS, "error:FODT0001" },
+    { T_D, "2147483647-12-31Z", SUB, T_D, "-2147483647-01-01Z",
+      "dayTimeDuration:P1568704592243D" },
+    { T_D, "-2147483647-01-01Z", SUB, T_D, "2147483647-12-31Z",
+      "dayTimeDuration:-P1568704592243D" },
+    /* Overflow at the duration limits */
+    { T_YM, MAX_MONTHS, ADD, T_YM, "P1M", "error:FODT0002" },
+    { T_YM, "-" MAX_MONTHS, SUB, T_YM, "P1M", "error:FODT0002" },
+    { T_YM, MAX_MONTHS, SUB, T_YM, "-P1M", "error:FODT0002" },
+    { T_DTD, MAX_SECONDS, ADD, T_DTD, "PT1S", "error:FODT0002" },
+    { T_DTD, MAX_SECONDS, ADD, T_DTD, "PT0.999999999S",
+      "dayTimeDuration:P106751991167300DT15H30M7.999999999S" },
+    { T_DTD, "-" MAX_SECONDS, SUB, T_DTD, "PT1S", "error:FODT0002" },
+    { T_DTD, "-PT9223372036854775807.5S", ADD, T_DTD, "PT0.6S",
+      "dayTimeDuration:-P106751991167300DT15H30M6.9S" },
+    { T_YM, MAX_MONTHS, MUL, T_INT, "2", "error:FODT0002" },
+    { T_YM, "P1M", MUL, T_DBL, "1e300", "error:FODT0002" },
+    { T_YM, "P1M", DIV, T_DBL, "1e-300", "error:FODT0002" },
+    { T_DTD, "PT4611686018427387903.5S", MUL, T_INT, "2",
+      "dayTimeDuration:P106751991167300DT15H30M7S" },
+    { T_DTD, "PT4611686018427387904S", MUL, T_INT, "2", "error:FODT0002" },
+    { T_DTD, "-PT4611686018427387904S", MUL, T_INT, "2", "error:FODT0002" },
+    { T_DTD, "PT9223372036854775807.999999999S", MUL, T_INT, "1",
+      "dayTimeDuration:P106751991167300DT15H30M7.999999999S" },
+    { T_DTD, "PT9223372036854775807.999999999S", DIV, T_DEC, "0.5",
+      "error:FODT0002" },
+    { T_DTD, "PT0.000000001S", MUL, T_DBL, "1e300", "error:FODT0002" },
+    /* Pairs the operator mapping doesn't have */
+    { T_DTD, "P1D", XP3_OP_IDIV, T_DTD, "PT1H", "error:XPTY0004" },
+    { T_YM, "P1Y", XP3_OP_MOD, T_YM, "P1M", "error:XPTY0004" },
+    { T_DTD, "P1D", XP3_OP_MOD, T_INT, "2", "error:XPTY0004" },
+    { T_DUR, "P1D", ADD, T_DUR, "P1D", "error:XPTY0004" },
+    { T_DUR, "P1Y", MUL, T_INT, "2", "error:XPTY0004" },
+    { T_D, "2026-01-01", ADD, T_DUR, "P1D", "error:XPTY0004" },
+    { T_YM, "P1M", ADD, T_DTD, "P1D", "error:XPTY0004" },
+    { T_YM, "P1M", DIV, T_DTD, "P1D", "error:XPTY0004" },
+    { T_DTD, "P1D", MUL, T_DTD, "P1D", "error:XPTY0004" },
+    { T_INT, "2", DIV, T_DTD, "P1D", "error:XPTY0004" },
+    { T_INT, "2", ADD, T_DTD, "P1D", "error:XPTY0004" },
+    { T_D, "2026-01-01", ADD, T_D, "2026-01-01", "error:XPTY0004" },
+    { T_D, "2026-01-01", SUB, T_DT, "2026-01-01T00:00:00", "error:XPTY0004" },
+    { T_T, "12:00:00", ADD, T_YM, "P1M", "error:XPTY0004" },
+    { T_T, "12:00:00", ADD, T_T, "12:00:00", "error:XPTY0004" },
+    { T_YM, "P1M", SUB, T_D, "2026-01-01", "error:XPTY0004" },
+    { T_GY, "2026", ADD, T_YM, "P1Y", "error:XPTY0004" },
+    { T_GY, "2026", SUB, T_GY, "2025", "error:XPTY0004" }
+};
+
+#undef ADD
+#undef SUB
+#undef MUL
+#undef DIV
+#undef T_DT
+#undef T_DTS
+#undef T_D
+#undef T_T
+#undef T_GY
+#undef T_DUR
+#undef T_YM
+#undef T_DTD
+#undef T_INT
+#undef T_DEC
+#undef T_DBL
+
+static void
+testArithmetic(void) {
+    xp3Clock clock;
+    char actual[256];
+    size_t i;
+
+    fixedClock(&clock, -300);
+    for (i = 0; i < sizeof(arithCases) / sizeof(arithCases[0]); i++) {
+        const xp3ArithCase *test = &arithCases[i];
+
+        arithmetic(test->leftType, test->left, test->op, test->rightType,
+                   test->right, &clock, actual, sizeof(actual));
+        if (strcmp(actual, test->expected) != 0)
+            xp3TestFail("'%s' and '%s' (case %u) gave %s, expected %s",
+                        test->left, test->right, (unsigned) i, actual,
+                        test->expected);
+    }
+
+    /* Only a subtraction that needs the implicit timezone asks for it */
+    arithmetic(XP3_TYPE_DATE, "2026-01-02", XP3_OP_SUB, XP3_TYPE_DATE,
+               "2026-01-01Z", NULL, actual, sizeof(actual));
+    check(strcmp(actual, "error:NEEDS_CONTEXT") == 0,
+          "no clock, no subtraction of a date without a timezone");
+    arithmetic(XP3_TYPE_TIME, "10:00:00", XP3_OP_SUB, XP3_TYPE_TIME,
+               "09:00:00", NULL, actual, sizeof(actual));
+    check(strcmp(actual, "error:NEEDS_CONTEXT") == 0,
+          "nor of two times without one");
+    arithmetic(XP3_TYPE_DATE, "2026-01-02Z", XP3_OP_SUB, XP3_TYPE_DATE,
+               "2026-01-01+01:00", NULL, actual, sizeof(actual));
+    check(strcmp(actual, "dayTimeDuration:P1DT1H") == 0,
+          "values with timezones subtract without a clock");
+    arithmetic(XP3_TYPE_DATE, "2026-01-31", XP3_OP_ADD,
+               XP3_TYPE_YEAR_MONTH_DURATION, "P1M", NULL, actual,
+               sizeof(actual));
+    check(strcmp(actual, "date:2026-02-28") == 0,
+          "adding a duration needs no clock");
+    fixedClock(&clock, 840);
+    arithmetic(XP3_TYPE_DATE, "2026-01-02", XP3_OP_SUB, XP3_TYPE_DATE,
+               "2026-01-01Z", &clock, actual, sizeof(actual));
+    check(strcmp(actual, "dayTimeDuration:PT10H") == 0,
+          "the implicit timezone +14:00");
+    fixedClock(&clock, -840);
+    arithmetic(XP3_TYPE_DATE, "2026-01-02", XP3_OP_SUB, XP3_TYPE_DATE,
+               "2026-01-01Z", &clock, actual, sizeof(actual));
+    check(strcmp(actual, "dayTimeDuration:P1DT14H") == 0,
+          "the implicit timezone -14:00");
+}
+
+/*
  * The clock
  */
 
@@ -1189,6 +1567,546 @@ done:
     return(bad);
 }
 
+/* Apply an operator to two values made here. Sets *code. */
+static xp3Atomic *
+operate(xp3AstOp op, xp3Atomic *left, xp3Atomic *right, xp3Clock *clock,
+        xp3ErrCode *code) {
+    xp3Atomic *result = NULL;
+
+    *code = XP3_ERR_NO_MEMORY;
+    if ((left != NULL) && (right != NULL))
+        *code = xp3Arithmetic(op, left, right, clock, &result);
+    xp3AtomicUnref(left);
+    xp3AtomicUnref(right);
+    return(result);
+}
+
+/* A random xs:dayTimeDuration below about 2^60 seconds, so that the
+ * oracle's sums fit in 64 bits; often a few days or less */
+static void
+randomSeconds(xp3Duration *dur) {
+    memset(dur, 0, sizeof(*dur));
+    switch (randomBelow(4)) {
+        case 0:
+            dur->seconds = (int64_t) (rng() >> 4);
+            break;
+        case 1:
+            dur->seconds = randomBelow(UINT64_C(100000000000000));
+            break;
+        default:
+            dur->seconds = randomBelow(400000);
+            break;
+    }
+    dur->nanoseconds = (int32_t) randomBelow(XP3_NANOS_PER_SECOND);
+    if (randomBelow(2) == 0) {
+        dur->seconds = -dur->seconds;
+        dur->nanoseconds = -dur->nanoseconds;
+    }
+}
+
+/* The local time of a date or dateTime in nanoseconds, as seconds and
+ * nanoseconds from 0 to 999,999,999, by the oracle */
+static void
+oracleLocal(xp3TypeId type, const xp3DateTime *dt, int64_t *seconds,
+            int64_t *nanos) {
+    xp3DateTime local = *dt;
+
+    local.hasTimezone = 0;
+    *seconds = oracleSeconds(type, &local, 0);
+    *nanos = local.nanosecond;
+}
+
+/* Whether a local time in seconds is within the year limits */
+static int
+oracleInRange(int64_t seconds) {
+    int64_t first = oracleDays(-XP3_YEAR_MAX, 1, 1) * 86400;
+    int64_t last = (oracleDays(XP3_YEAR_MAX, 12, 31) + 1) * 86400;
+
+    return((seconds >= first) && (seconds < last));
+}
+
+/*
+ * A date or dateTime plus a dayTimeDuration agrees with the oracle's
+ * local time plus the seconds, keeps its timezone, and raises FODT0001
+ * exactly when the oracle leaves the year limits; for a dateTime,
+ * (d + x) - x is d again
+ */
+static int
+movingAgrees(void) {
+    int bad = 0;
+    int i;
+
+    for (i = 0; i < 20000; i++) {
+        xp3TypeId type = XP3_TYPE_DATE_TIME;
+        xp3DateTime dt;
+        xp3Duration dur;
+        xp3Atomic *moved;
+        xp3Atomic *back = NULL;
+        xp3ErrCode code;
+        int64_t seconds;
+        int64_t nanos;
+        int64_t movedSeconds;
+        int64_t movedNanos;
+        int ok;
+
+        if (randomBelow(3) == 0)
+            type = XP3_TYPE_DATE;
+        randomDateTime(type, (int) randomBelow(2), &dt);
+        randomSeconds(&dur);
+        oracleLocal(type, &dt, &seconds, &nanos);
+        seconds += dur.seconds;
+        nanos += dur.nanoseconds;
+        if (nanos < 0) {
+            seconds--;
+            nanos += XP3_NANOS_PER_SECOND;
+        } else if (nanos >= XP3_NANOS_PER_SECOND) {
+            seconds++;
+            nanos -= XP3_NANOS_PER_SECOND;
+        }
+        if (type == XP3_TYPE_DATE) {
+            /* Back to the start of the day */
+            seconds -= ((seconds % 86400) + 86400) % 86400;
+            nanos = 0;
+        }
+
+        moved = operate(XP3_OP_ADD, xp3AtomicNewDateTime(type, &dt),
+                        xp3AtomicNewDuration(XP3_TYPE_DAY_TIME_DURATION,
+                                             &dur), NULL, &code);
+        if (!oracleInRange(seconds)) {
+            ok = (code == XP3_ERR_FODT0001);
+        } else if (code != XP3_ERR_OK) {
+            ok = 0;
+        } else {
+            oracleLocal(type, &moved->u.dt, &movedSeconds, &movedNanos);
+            ok = (movedSeconds == seconds) && (movedNanos == nanos) &&
+                 (moved->u.dt.hasTimezone == dt.hasTimezone) &&
+                 (moved->u.dt.timezone == dt.timezone);
+            if (ok && (type == XP3_TYPE_DATE_TIME)) {
+                back = operate(XP3_OP_SUB, xp3AtomicRef(moved),
+                               xp3AtomicNewDuration(
+                                   XP3_TYPE_DAY_TIME_DURATION, &dur),
+                               NULL, &code);
+                ok = (code == XP3_ERR_OK) && sameDateTime(&back->u.dt, &dt);
+            }
+        }
+        if (!ok) {
+            if (bad == 0) {
+                xmlChar *strA = xp3DateTimeToString(type, &dt);
+                xmlChar *strB = xp3DurationToString(
+                    XP3_TYPE_DAY_TIME_DURATION, &dur);
+
+                xp3TestFail("xs:%s %s plus %s gave %s",
+                            (const char *) xp3TypeLocalName(type),
+                            (const char *) strA, (const char *) strB,
+                            codeName(code));
+                xmlFree(strA);
+                xmlFree(strB);
+            }
+            bad++;
+        }
+        xp3AtomicUnref(moved);
+        xp3AtomicUnref(back);
+    }
+    return(bad);
+}
+
+/*
+ * A date or dateTime plus months agrees with the oracle: the month
+ * moves, the day is pinned to the last day of a shorter month, and
+ * FODT0001 comes exactly beyond the year limits
+ */
+static int
+monthsAgree(void) {
+    int bad = 0;
+    int i;
+
+    for (i = 0; i < 20000; i++) {
+        xp3TypeId type = XP3_TYPE_DATE;
+        xp3DateTime dt;
+        xp3DateTime expected;
+        xp3Duration dur;
+        xp3Atomic *moved;
+        xp3ErrCode code;
+        int64_t monthNumber;
+        int64_t year;
+        int month;
+        int lastDay;
+        int ok;
+
+        if (randomBelow(2) == 0)
+            type = XP3_TYPE_DATE_TIME;
+        randomDateTime(type, (int) randomBelow(2), &dt);
+        /* The last days of months are the interesting ones */
+        if (randomBelow(2) == 0)
+            dt.day = (unsigned char) oracleMonthDays(dt.year, dt.month);
+        memset(&dur, 0, sizeof(dur));
+        if (randomBelow(8) == 0)
+            dur.months = (int64_t) (rng() >> 4);
+        else
+            dur.months = randomBelow(5000);
+        if (randomBelow(2) == 0)
+            dur.months = -dur.months;
+
+        monthNumber = (int64_t) dt.year * 12 + (dt.month - 1) + dur.months;
+        year = monthNumber / 12;
+        if (monthNumber % 12 < 0)
+            year--;
+        month = (int) (monthNumber - year * 12) + 1;
+        moved = operate(XP3_OP_ADD, xp3AtomicNewDateTime(type, &dt),
+                        xp3AtomicNewDuration(XP3_TYPE_YEAR_MONTH_DURATION,
+                                             &dur), NULL, &code);
+        if ((year > XP3_YEAR_MAX) || (year < -XP3_YEAR_MAX)) {
+            ok = (code == XP3_ERR_FODT0001);
+        } else {
+            expected = dt;
+            expected.year = (int32_t) year;
+            expected.month = (unsigned char) month;
+            lastDay = oracleMonthDays(year, month);
+            if (expected.day > lastDay)
+                expected.day = (unsigned char) lastDay;
+            ok = (code == XP3_ERR_OK) &&
+                 sameDateTime(&moved->u.dt, &expected);
+        }
+        if (!ok) {
+            if (bad == 0) {
+                xmlChar *str = xp3DateTimeToString(type, &dt);
+
+                xp3TestFail("xs:%s %s plus %lld months gave %s",
+                            (const char *) xp3TypeLocalName(type),
+                            (const char *) str, (long long) dur.months,
+                            codeName(code));
+                xmlFree(str);
+            }
+            bad++;
+        }
+        xp3AtomicUnref(moved);
+    }
+    return(bad);
+}
+
+/*
+ * dateTime - dateTime is the difference of the oracle's instants, and
+ * (d1 - d2) + d2 is the instant of d1 again, in the timezone of d2
+ */
+static int
+differencesAgree(void) {
+    xp3Clock clock;
+    int bad = 0;
+    int i;
+
+    for (i = 0; i < 20000; i++) {
+        int timezone = (int) randomBetween(-XP3_TIMEZONE_MAX,
+                                           XP3_TIMEZONE_MAX);
+        int dense = (randomBelow(2) == 0);
+        xp3DateTime a;
+        xp3DateTime b;
+        xp3Atomic *difference;
+        xp3Atomic *back = NULL;
+        xp3ErrCode code;
+        int64_t seconds;
+        int64_t nanos;
+        int ok;
+
+        fixedClock(&clock, timezone);
+        randomDateTime(XP3_TYPE_DATE_TIME, dense, &a);
+        randomDateTime(XP3_TYPE_DATE_TIME, dense, &b);
+        seconds = oracleSeconds(XP3_TYPE_DATE_TIME, &a, timezone) -
+                  oracleSeconds(XP3_TYPE_DATE_TIME, &b, timezone);
+        nanos = (int64_t) a.nanosecond - b.nanosecond;
+        if ((seconds > 0) && (nanos < 0)) {
+            seconds--;
+            nanos += XP3_NANOS_PER_SECOND;
+        } else if ((seconds < 0) && (nanos > 0)) {
+            seconds++;
+            nanos -= XP3_NANOS_PER_SECOND;
+        }
+        difference = operate(XP3_OP_SUB,
+                             xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME, &a),
+                             xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME, &b),
+                             &clock, &code);
+        ok = (code == XP3_ERR_OK) && (difference->u.dur.months == 0) &&
+             (difference->u.dur.seconds == seconds) &&
+             (difference->u.dur.nanoseconds == nanos);
+        if (ok && b.hasTimezone) {
+            int64_t local = oracleSeconds(XP3_TYPE_DATE_TIME, &a, timezone) +
+                            (int64_t) b.timezone * 60;
+
+            back = operate(XP3_OP_ADD, xp3AtomicRef(difference),
+                           xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME, &b),
+                           &clock, &code);
+            if (!oracleInRange(local))
+                ok = (code == XP3_ERR_FODT0001);
+            else
+                ok = (code == XP3_ERR_OK) &&
+                     (oracleSeconds(XP3_TYPE_DATE_TIME, &back->u.dt,
+                                    timezone) ==
+                      oracleSeconds(XP3_TYPE_DATE_TIME, &a, timezone)) &&
+                     (back->u.dt.nanosecond == a.nanosecond) &&
+                     (back->u.dt.timezone == b.timezone);
+        }
+        if (!ok) {
+            if (bad == 0) {
+                xmlChar *strA = xp3DateTimeToString(XP3_TYPE_DATE_TIME, &a);
+                xmlChar *strB = xp3DateTimeToString(XP3_TYPE_DATE_TIME, &b);
+
+                xp3TestFail("%s - %s at %d gave %s", (const char *) strA,
+                            (const char *) strB, timezone, codeName(code));
+                xmlFree(strA);
+                xmlFree(strB);
+            }
+            bad++;
+        }
+        xp3AtomicUnref(difference);
+        xp3AtomicUnref(back);
+    }
+    return(bad);
+}
+
+/* a / b rounded down, for the oracle */
+static int64_t
+oracleFloorDiv(int64_t a, int64_t b) {
+    int64_t quotient = a / b;
+
+    if ((a % b != 0) && ((a < 0) != (b < 0)))
+        quotient--;
+    return(quotient);
+}
+
+/*
+ * Durations times and by numbers: a dayTimeDuration is truncated
+ * toward zero to nanoseconds and a yearMonthDuration rounded with
+ * fn:round, as the oracle computes them in whole numbers for factors
+ * k / 2^j. With |k| below 1000 and j at most 10, k * 5^j has at most
+ * 10 digits, so the double holds the factor exactly and its shortest
+ * decimal is that exact value. And x * n div n is x for a whole number
+ * n, where nothing is truncated.
+ */
+static int
+scalingAgrees(void) {
+    int bad = 0;
+    int i;
+
+    for (i = 0; i < 20000; i++) {
+        int64_t k = randomBetween(-999, 999);
+        int j = (int) randomBelow(11);
+        int64_t n = randomBetween(1, 100000);
+        int64_t nanosTotal = randomBetween(-INT64_C(1099511627775),
+                                           INT64_C(1099511627775));
+        int64_t months = randomBetween(-1000000, 1000000);
+        int64_t expectedNanos;
+        int64_t expectedMonths;
+        xp3Duration dur;
+        xp3Duration ym;
+        xp3Atomic *product;
+        xp3Atomic *quotient;
+        xp3Atomic *scaledMonths;
+        xp3Atomic *roundTrip = NULL;
+        xp3ErrCode code;
+        xp3ErrCode codeMonths;
+        xp3ErrCode codeQuotient;
+        xp3ErrCode codeRoundTrip = XP3_ERR_OK;
+        int ok;
+
+        if (k == 0)
+            k = 1;
+        memset(&dur, 0, sizeof(dur));
+        dur.seconds = nanosTotal / XP3_NANOS_PER_SECOND;
+        dur.nanoseconds = (int32_t) (nanosTotal % XP3_NANOS_PER_SECOND);
+        memset(&ym, 0, sizeof(ym));
+        ym.months = months;
+
+        /* Truncated toward zero, as C division is */
+        expectedNanos = nanosTotal * k / ((int64_t) 1 << j);
+        product = operate(XP3_OP_MUL,
+                          xp3AtomicNewDuration(XP3_TYPE_DAY_TIME_DURATION,
+                                               &dur),
+                          xp3AtomicNewDouble(ldexp((double) k, -j)), NULL,
+                          &code);
+        ok = (code == XP3_ERR_OK) &&
+             (product->u.dur.seconds * XP3_NANOS_PER_SECOND +
+              product->u.dur.nanoseconds == expectedNanos);
+
+        quotient = operate(XP3_OP_DIV,
+                           xp3AtomicNewDuration(XP3_TYPE_DAY_TIME_DURATION,
+                                                &dur),
+                           xp3AtomicNewInteger(n), NULL, &codeQuotient);
+        ok = ok && (codeQuotient == XP3_ERR_OK) &&
+             (quotient->u.dur.seconds * XP3_NANOS_PER_SECOND +
+              quotient->u.dur.nanoseconds == nanosTotal / n);
+
+        /* fn:round: halves up, so floor((2 m k + 2^j) / 2^(j + 1)) */
+        expectedMonths = oracleFloorDiv(2 * months * k + ((int64_t) 1 << j),
+                                        (int64_t) 1 << (j + 1));
+        scaledMonths = operate(XP3_OP_MUL,
+                               xp3AtomicNewDuration(
+                                   XP3_TYPE_YEAR_MONTH_DURATION, &ym),
+                               xp3AtomicNewDouble(ldexp((double) k, -j)),
+                               NULL, &codeMonths);
+        ok = ok && (codeMonths == XP3_ERR_OK) &&
+             (scaledMonths->u.dur.months == expectedMonths);
+
+        if (ok) {
+            xp3Atomic *times = operate(XP3_OP_MUL,
+                                       xp3AtomicNewDuration(
+                                           XP3_TYPE_DAY_TIME_DURATION,
+                                           &dur),
+                                       xp3AtomicNewInteger(n), NULL,
+                                       &codeRoundTrip);
+
+            if (codeRoundTrip == XP3_ERR_OK)
+                roundTrip = operate(XP3_OP_DIV, times,
+                                    xp3AtomicNewInteger(n), NULL,
+                                    &codeRoundTrip);
+            ok = (codeRoundTrip == XP3_ERR_OK) &&
+                 (roundTrip->u.dur.seconds == dur.seconds) &&
+                 (roundTrip->u.dur.nanoseconds == dur.nanoseconds);
+        }
+        if (!ok) {
+            if (bad == 0)
+                xp3TestFail("%lld nanoseconds or %lld months times "
+                            "%lld / 2^%d, or by %lld: %s, %s, %s, %s",
+                            (long long) nanosTotal, (long long) months,
+                            (long long) k, j, (long long) n,
+                            codeName(code), codeName(codeQuotient),
+                            codeName(codeMonths), codeName(codeRoundTrip));
+            bad++;
+        }
+        xp3AtomicUnref(product);
+        xp3AtomicUnref(quotient);
+        xp3AtomicUnref(scaledMonths);
+        xp3AtomicUnref(roundTrip);
+    }
+    return(bad);
+}
+
+/* The canonical form of the result of an expression with one item,
+ * or the error code */
+static void
+evaluationString(const xp3Expr *expr, xp3DynamicContext *ctx, char *out,
+                 size_t size) {
+    xp3Error *err = NULL;
+    xp3Sequence *result = xp3Evaluate(expr, ctx, &err);
+    xmlChar *str = NULL;
+
+    if (result == NULL) {
+        snprintf(out, size, "error:%s", (const char *) xp3ErrorCode(err));
+        xp3ErrorFree(err);
+        return;
+    }
+    snprintf(out, size, "not one item");
+    if (xp3SequenceLength(result) == 1) {
+        xp3AtomicType type =
+            (xp3AtomicType) xp3SequenceAtomicType(result, 0);
+
+        str = xp3SequenceStringValue(result, 0);
+        if (str == NULL)
+            snprintf(out, size, "error:NO_MEMORY");
+        else
+            snprintf(out, size, "%s:%s",
+                     (const char *) xp3AtomicTypeName(type),
+                     (const char *) str);
+    }
+    xmlFree(str);
+    xp3FreeSequence(result);
+}
+
+/*
+ * fn:sum agrees with adding the values one by one with +, overflow
+ * included, and fn:avg with dividing that sum by the count
+ */
+static int
+sumsAgree(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *sum = NULL;
+    xp3Expr *avg = NULL;
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "s") < 0)) {
+        bad++;
+        goto done;
+    }
+    sum = xp3Compile(sctx, BAD_CAST "sum($s)", NULL);
+    avg = xp3Compile(sctx, BAD_CAST "avg($s)", NULL);
+    if ((sum == NULL) || (avg == NULL)) {
+        bad++;
+        goto done;
+    }
+    for (i = 0; i < 2000; i++) {
+        xp3TypeId type = XP3_TYPE_DAY_TIME_DURATION;
+        const xmlChar *lexicals[8];
+        xmlChar *strings[8];
+        int count = (int) randomBetween(1, 8);
+        xp3Atomic *total = NULL;
+        xp3Atomic *average = NULL;
+        xp3ErrCode code = XP3_ERR_OK;
+        xp3Sequence *seq;
+        char expectedSum[256];
+        char expectedAvg[256];
+        char actualSum[256];
+        char actualAvg[256];
+        int k;
+
+        if (randomBelow(2) == 0)
+            type = XP3_TYPE_YEAR_MONTH_DURATION;
+        for (k = 0; k < count; k++) {
+            xp3Duration dur;
+            xp3Atomic *atomic;
+
+            randomDuration(type, 0, &dur);
+            strings[k] = xp3DurationToString(type, &dur);
+            lexicals[k] = strings[k];
+            atomic = xp3AtomicNewDuration(type, &dur);
+            if (total == NULL) {
+                total = atomic;
+            } else if (code == XP3_ERR_OK) {
+                total = operate(XP3_OP_ADD, total, atomic, NULL, &code);
+            } else {
+                xp3AtomicUnref(atomic);
+            }
+        }
+        describeResult(code, total, expectedSum, sizeof(expectedSum));
+        if (code == XP3_ERR_OK)
+            average = operate(XP3_OP_DIV, xp3AtomicRef(total),
+                              xp3AtomicNewInteger(count), NULL, &code);
+        describeResult(code, average, expectedAvg, sizeof(expectedAvg));
+
+        seq = xp3NewAtomicSequence((xp3AtomicType) type, lexicals,
+                                   (size_t) count, NULL);
+        snprintf(actualSum, sizeof(actualSum), "no sequence");
+        snprintf(actualAvg, sizeof(actualAvg), "no sequence");
+        if ((seq != NULL) &&
+            (xp3BindVariable(ctx, NULL, BAD_CAST "s", seq) == 0)) {
+            evaluationString(sum, ctx, actualSum, sizeof(actualSum));
+            evaluationString(avg, ctx, actualAvg, sizeof(actualAvg));
+        }
+        xp3FreeSequence(seq);
+        if ((strcmp(actualSum, expectedSum) != 0) ||
+            (strcmp(actualAvg, expectedAvg) != 0)) {
+            if (bad == 0)
+                xp3TestFail("sum and avg of %d xs:%s gave %s and %s, "
+                            "expected %s and %s", count,
+                            (const char *) xp3TypeLocalName(type),
+                            actualSum, actualAvg, expectedSum,
+                            expectedAvg);
+            bad++;
+        }
+        for (k = 0; k < count; k++)
+            xmlFree(strings[k]);
+        xp3AtomicUnref(total);
+        xp3AtomicUnref(average);
+    }
+
+done:
+    xp3FreeExpr(sum);
+    xp3FreeExpr(avg);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+    return(bad);
+}
+
 static void
 testProperties(void) {
     check(roundTrips() == 0,
@@ -1197,6 +2115,21 @@ testProperties(void) {
           "20000 random comparisons agree with the instants");
     check(hashingAgrees() == 0,
           "fn:distinct-values agrees with eq on 3000 random pairs");
+    check(movingAgrees() == 0,
+          "20000 random dates and dateTimes plus dayTimeDurations agree "
+          "with the oracle, and (d + x) - x is d");
+    check(monthsAgree() == 0,
+          "20000 random dates and dateTimes plus months agree with the "
+          "oracle");
+    check(differencesAgree() == 0,
+          "20000 random dateTime differences agree with the instants, "
+          "and (d1 - d2) + d2 is d1");
+    check(scalingAgrees() == 0,
+          "20000 random durations times and by numbers agree with the "
+          "oracle, and x * n div n is x");
+    check(sumsAgree() == 0,
+          "fn:sum and fn:avg agree with + and div on 2000 random "
+          "sequences");
 }
 
 /*
@@ -1331,6 +2264,82 @@ testAllocationFailures(void) {
     xp3FreeDynamicContext(ctx);
 }
 
+/*
+ * Arithmetic that allocates: the decimals of a duration divided by a
+ * duration, a dayTimeDuration scaled exactly through decimals, and
+ * fn:sum and fn:avg of durations
+ */
+static void
+testArithmeticAllocationFailures(void) {
+    static const char expected[] =
+        "string:12342.85714285714285714286 PT0.666666666S PT2H24M "
+        "PT1S P2M -PT1H 3.33333333333333333333 PT0.333333333S";
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3Expr *expr = NULL;
+    char actual[256];
+    int i;
+
+    if ((ctx == NULL) || (plain == NULL) ||
+        (xp3SetImplicitTimezone(ctx, 60) < 0)) {
+        check(0, "contexts created");
+        goto done;
+    }
+    /* Not folded, so that the evaluation does the work */
+    plain->noOptimize = 1;
+    expr = xp3Compile(plain, BAD_CAST
+                      "string-join(("
+                      "xs:dayTimeDuration('P1D') div "
+                      "xs:dayTimeDuration('PT7S'), "
+                      "xs:dayTimeDuration('PT2S') div 3, "
+                      "xs:dayTimeDuration('P1D') * 0.1, "
+                      "sum((xs:dayTimeDuration('PT0.5S'), "
+                      "xs:dayTimeDuration('PT0.5S'))), "
+                      "avg((xs:yearMonthDuration('P1M'), "
+                      "xs:yearMonthDuration('P2M'))), "
+                      "xs:date('2026-01-01') - xs:date('2026-01-01Z'), "
+                      "xs:yearMonthDuration('P10M') div "
+                      "xs:yearMonthDuration('P3M'), "
+                      "avg((xs:dayTimeDuration('PT1S'), "
+                      "xs:dayTimeDuration('PT0S'), "
+                      "xs:dayTimeDuration('PT0S')))"
+                      ") ! string(.), ' ')", NULL);
+    if (expr == NULL) {
+        check(0, "the expression compiles");
+        goto done;
+    }
+    evaluationString(expr, ctx, actual, sizeof(actual));
+    check(strcmp(actual, expected) == 0, "the arithmetic computed");
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    for (i = 0; i < 5000; i++) {
+        xp3TestAllocFailAt(i);
+        evaluationString(expr, ctx, actual, sizeof(actual));
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            check(strcmp(actual, expected) == 0,
+                  "the arithmetic completes after allocation failures");
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        if (strcmp(actual, "error:NO_MEMORY") != 0) {
+            xp3TestFail("allocation failure %d gave %s", i, actual);
+            break;
+        }
+    }
+    check((i > 0) && (i < 5000), "allocation failure points exercised");
+    xp3TestAllocRestore();
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -1340,9 +2349,11 @@ main(void) {
     XP3_TEST_RUN(testCalendar);
     XP3_TEST_RUN(testCasts);
     XP3_TEST_RUN(testComparisons);
+    XP3_TEST_RUN(testArithmetic);
     XP3_TEST_RUN(testClock);
     XP3_TEST_RUN(testProperties);
     XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testArithmeticAllocationFailures);
 
     return(xp3TestDone());
 }

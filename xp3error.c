@@ -72,6 +72,7 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_FOCA0001]  = "FOCA0001",
     [XP3_ERR_FOCA0002]  = "FOCA0002",
     [XP3_ERR_FOCA0003]  = "FOCA0003",
+    [XP3_ERR_FOCA0005]  = "FOCA0005",
     [XP3_ERR_FOCH0001]  = "FOCH0001",
     [XP3_ERR_FOCH0002]  = "FOCH0002",
     [XP3_ERR_FOCH0003]  = "FOCH0003",

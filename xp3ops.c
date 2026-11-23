@@ -1,10 +1,11 @@
 /*
  * xp3ops.c: operations on atomic values
  *
- * Arithmetic on numbers with type promotion (F&O 3.1, 4.2), value
- * comparison (XPath 3.1, 3.7.1, and the comparison operators of F&O
- * 3.1, also those of dates, times and durations in 8.2 and 9.4), and
- * casting between the atomic types (F&O 3.1, 19). The evaluator
+ * Arithmetic on numbers with type promotion (F&O 3.1, 4.2) and on
+ * dates, times and durations (8.4 and 9.7), value comparison (XPath
+ * 3.1, 3.7.1, and the comparison operators of F&O 3.1, also those of
+ * dates, times and durations in 8.2 and 9.4), and casting between the
+ * atomic types (F&O 3.1, 19). The evaluator
  * atomizes the operands and handles the empty sequence; the functions
  * here take single atomic values.
  *
@@ -308,6 +309,460 @@ integerFromBinary(double value, xp3Decimal **res) {
 }
 
 /*
+ * Arithmetic on dates, times and durations (F&O 3.1, 8.4 and 9.7)
+ */
+
+/* What an operand of arithmetic is, as the operator mapping of XPath
+ * 3.1, B.2 tells operands apart */
+typedef enum {
+    XP3_ARITH_OTHER = 0,
+    XP3_ARITH_NUMBER,
+    XP3_ARITH_YEAR_MONTH,       /* xs:yearMonthDuration */
+    XP3_ARITH_DAY_TIME,         /* xs:dayTimeDuration */
+    XP3_ARITH_DATE,
+    XP3_ARITH_DATE_TIME,        /* also xs:dateTimeStamp */
+    XP3_ARITH_TIME
+} xp3ArithKind;
+
+static xp3ArithKind
+arithKind(xp3TypeId type) {
+    if (xp3TypeIsNumeric(type))
+        return(XP3_ARITH_NUMBER);
+    if (xp3TypeDerivesFrom(type, XP3_TYPE_YEAR_MONTH_DURATION))
+        return(XP3_ARITH_YEAR_MONTH);
+    if (xp3TypeDerivesFrom(type, XP3_TYPE_DAY_TIME_DURATION))
+        return(XP3_ARITH_DAY_TIME);
+    if (type == XP3_TYPE_DATE)
+        return(XP3_ARITH_DATE);
+    if (xp3TypeDerivesFrom(type, XP3_TYPE_DATE_TIME))
+        return(XP3_ARITH_DATE_TIME);
+    if (type == XP3_TYPE_TIME)
+        return(XP3_ARITH_TIME);
+    return(XP3_ARITH_OTHER);
+}
+
+static int
+isDuration(xp3ArithKind kind) {
+    return((kind == XP3_ARITH_YEAR_MONTH) || (kind == XP3_ARITH_DAY_TIME));
+}
+
+static int
+isPointInTime(xp3ArithKind kind) {
+    return((kind == XP3_ARITH_DATE) || (kind == XP3_ARITH_DATE_TIME) ||
+           (kind == XP3_ARITH_TIME));
+}
+
+/* Whether a kind takes part in the arithmetic of this section */
+static int
+isTemporal(xp3ArithKind kind) {
+    return(isDuration(kind) || isPointInTime(kind));
+}
+
+/* Whether a duration of one kind moves a value of another: either
+ * duration a date or a dateTime, and a dayTimeDuration a time */
+static int
+movesBy(xp3ArithKind value, xp3ArithKind duration) {
+    if ((value == XP3_ARITH_DATE) || (value == XP3_ARITH_DATE_TIME))
+        return(isDuration(duration));
+    return((value == XP3_ARITH_TIME) && (duration == XP3_ARITH_DAY_TIME));
+}
+
+/* The type of a result of the kind of an operand */
+static xp3TypeId
+kindType(xp3ArithKind kind) {
+    switch (kind) {
+        case XP3_ARITH_YEAR_MONTH:
+            return(XP3_TYPE_YEAR_MONTH_DURATION);
+        case XP3_ARITH_DAY_TIME:
+            return(XP3_TYPE_DAY_TIME_DURATION);
+        case XP3_ARITH_DATE:
+            return(XP3_TYPE_DATE);
+        case XP3_ARITH_DATE_TIME:
+            return(XP3_TYPE_DATE_TIME);
+        default:
+            return(XP3_TYPE_TIME);
+    }
+}
+
+/*
+ * The implicit timezone for two dates or times, asked for only if one
+ * of them has no timezone, so that values with timezones compare,
+ * subtract and fold without it (doc/DESIGN.md 6.2). Sets *timezone to
+ * 0 if it isn't needed.
+ */
+static xp3ErrCode
+pairTimezone(const xp3Atomic *left, const xp3Atomic *right, xp3Clock *clock,
+             int *timezone) {
+    *timezone = 0;
+    if (left->u.dt.hasTimezone && right->u.dt.hasTimezone)
+        return(XP3_ERR_OK);
+    return(xp3ClockTimezone(clock, timezone));
+}
+
+/* Two durations of one ordered type added or subtracted (F&O 3.1,
+ * 8.4.1, 8.4.2, 8.4.6 and 8.4.7) */
+static xp3ErrCode
+addDurations(const xp3Atomic *left, const xp3Atomic *right, int subtract,
+             xp3Atomic **res) {
+    xp3Duration amount = right->u.dur;
+    xp3Duration sum;
+    xp3ErrCode err;
+
+    if (subtract)
+        xp3DurationNegate(&right->u.dur, &amount);
+    err = xp3DurationAdd(&left->u.dur, &amount, &sum);
+    if (err != XP3_ERR_OK)
+        return(err);
+    return(newDuration(kindType(arithKind(left->type)), &sum, res));
+}
+
+/* A date, dateTime or time plus or minus a duration (F&O 3.1, 9.7.5
+ * to 9.7.14), of xs:date, xs:dateTime or xs:time */
+static xp3ErrCode
+moveDateTime(const xp3Atomic *value, const xp3Atomic *duration,
+             int subtract, xp3Atomic **res) {
+    xp3TypeId type = kindType(arithKind(value->type));
+    xp3Duration amount = duration->u.dur;
+    xp3DateTime moved;
+    xp3ErrCode err;
+
+    if (subtract)
+        xp3DurationNegate(&duration->u.dur, &amount);
+    err = xp3DateTimeAddDuration(type, &value->u.dt, &amount, &moved);
+    if (err != XP3_ERR_OK)
+        return(err);
+    return(newDateTime(type, &moved, res));
+}
+
+/* A date, dateTime or time minus another of its kind (F&O 3.1, 9.7.2
+ * to 9.7.4): the elapsed time between their instants in UTC */
+static xp3ErrCode
+subtractDateTimes(const xp3Atomic *left, const xp3Atomic *right,
+                  xp3Clock *clock, xp3Atomic **res) {
+    int timezone;
+    xp3Instant leftInstant;
+    xp3Instant rightInstant;
+    xp3Duration difference;
+    xp3ErrCode err;
+
+    err = pairTimezone(left, right, clock, &timezone);
+    if (err != XP3_ERR_OK)
+        return(err);
+    leftInstant = xp3DateTimeInstant(left->type, &left->u.dt, timezone);
+    rightInstant = xp3DateTimeInstant(right->type, &right->u.dt, timezone);
+    err = xp3InstantDifference(&leftInstant, &rightInstant, &difference);
+    if (err != XP3_ERR_OK)
+        return(err);
+    return(newDuration(XP3_TYPE_DAY_TIME_DURATION, &difference, res));
+}
+
+/* 2^63 as a double: the first whole number beyond int64_t */
+#define XP3_TWO_TO_63 9223372036854775808.0
+
+/*
+ * fn:round of a finite double: to the nearest whole number, halves
+ * up. value - floor(value) is exact unless -1 < value < 0, where a
+ * fraction that only rounds to 0.5 goes up to 0, as it should.
+ */
+static double
+roundHalfUp(double value) {
+    double result = floor(value);
+
+    if (value - result >= 0.5)
+        result += 1;
+    return(result);
+}
+
+/*
+ * An xs:yearMonthDuration multiplied or divided by a number (F&O 3.1,
+ * 8.4.3 and 8.4.4): the months times or by the number as an xs:double,
+ * rounded with fn:round, so P1M * 1.5 is P2M and P1M * -0.5 is P0M.
+ */
+static xp3ErrCode
+scaleMonths(const xp3Duration *duration, double factor, int divide,
+            xp3Duration *result) {
+    double months = (double) duration->months;
+    double scaled;
+    double rounded;
+
+    memset(result, 0, sizeof(*result));
+    if (isnan(factor))
+        return(XP3_ERR_FOCA0005);
+    if (divide) {
+        if (factor == 0)
+            return(XP3_ERR_FODT0002);
+        scaled = months / factor;
+    } else {
+        if (isinf(factor))
+            return(XP3_ERR_FODT0002);
+        scaled = months * factor;
+    }
+    if (isinf(scaled))
+        return(XP3_ERR_FODT0002);
+    rounded = roundHalfUp(scaled);
+    /* INT64_MIN is no duration either */
+    if ((rounded >= XP3_TWO_TO_63) || (rounded <= -XP3_TWO_TO_63))
+        return(XP3_ERR_FODT0002);
+    result->months = (int64_t) rounded;
+    return(XP3_ERR_OK);
+}
+
+/* The seconds of a duration as a whole number of nanoseconds */
+static xp3ErrCode
+durationNanos(const xp3Duration *duration, xp3Decimal **res) {
+    xp3Decimal *seconds = xp3DecimalFromInt64(duration->seconds);
+    xp3Decimal *perSecond = xp3DecimalFromInt64(XP3_NANOS_PER_SECOND);
+    xp3Decimal *nanos = xp3DecimalFromInt64(duration->nanoseconds);
+    xp3Decimal *whole = NULL;
+    xp3ErrCode err = XP3_ERR_NO_MEMORY;
+
+    *res = NULL;
+    if ((seconds == NULL) || (perSecond == NULL) || (nanos == NULL))
+        goto done;
+    err = xp3DecimalMul(seconds, perSecond, &whole);
+    if (err == XP3_ERR_OK)
+        err = xp3DecimalAdd(whole, nanos, res);
+
+done:
+    xp3DecimalFree(seconds);
+    xp3DecimalFree(perSecond);
+    xp3DecimalFree(nanos);
+    xp3DecimalFree(whole);
+    return(err);
+}
+
+/* A whole number of nanoseconds as the seconds of a duration, or
+ * FODT0002 if the seconds don't fit in 64 bits */
+static xp3ErrCode
+nanosToDuration(const xp3Decimal *nanos, xp3Duration *result) {
+    xp3Decimal *perSecond = xp3DecimalFromInt64(XP3_NANOS_PER_SECOND);
+    xp3Decimal *seconds = NULL;
+    xp3Decimal *rest = NULL;
+    int64_t wholeSeconds;
+    int64_t fraction;
+    xp3ErrCode err = XP3_ERR_NO_MEMORY;
+
+    memset(result, 0, sizeof(*result));
+    if (perSecond == NULL)
+        goto done;
+    /* Both truncate toward zero, so the parts have the same sign */
+    err = xp3DecimalIdiv(nanos, perSecond, &seconds);
+    if (err == XP3_ERR_OK)
+        err = xp3DecimalMod(nanos, perSecond, &rest);
+    if (err != XP3_ERR_OK)
+        goto done;
+    if ((xp3DecimalToInt64(seconds, &wholeSeconds) < 0) ||
+        (wholeSeconds == INT64_MIN) ||
+        (xp3DecimalToInt64(rest, &fraction) < 0)) {
+        err = XP3_ERR_FODT0002;
+        goto done;
+    }
+    result->seconds = wholeSeconds;
+    result->nanoseconds = (int32_t) fraction;
+
+done:
+    xp3DecimalFree(perSecond);
+    xp3DecimalFree(seconds);
+    xp3DecimalFree(rest);
+    return(err);
+}
+
+/*
+ * Bits of the largest nanoseconds of a duration: (2^63 - 1) * 10^9 +
+ * 999,999,999 is below 2^93, while every duration but zero has at
+ * least one nanosecond.
+ */
+#define XP3_NANOS_BITS 93
+
+/*
+ * An xs:dayTimeDuration multiplied or divided by a number (F&O 3.1,
+ * 8.4.8 and 8.4.9), as Saxon does it (doc/DESIGN.md 4.2, D44): the
+ * number becomes the shortest decimal that reads back as the double,
+ * as when it is cast to xs:decimal, so 0.7 is 0.7 and not the double's
+ * exact value just below it. The nanoseconds of the duration are then
+ * multiplied or divided by that decimal exactly, and the result is
+ * truncated toward zero: PT1S * 0.7 is PT0.7S, PT2S div 3 is
+ * PT0.666666666S.
+ *
+ * Factors below 2^-93, and from 2^93 up, are settled without decimal
+ * arithmetic. A duration that isn't zero has at least one nanosecond
+ * and at most about 9.22 * 10^27, below 2^93, which is about
+ * 9.90 * 10^27. The shortest decimal of a factor below 2^-93 is below
+ * 2^-93 too, and that of a factor of 2^93 or more is about 9.90 * 10^27
+ * or more, so such a product is below one nanosecond or beyond the
+ * largest duration, and a quotient the other way around.
+ */
+static xp3ErrCode
+scaleSeconds(const xp3Duration *duration, double factor, int divide,
+             xp3Duration *result) {
+    double magnitude = fabs(factor);
+    int tiny = (magnitude < ldexp(1.0, -XP3_NANOS_BITS));
+    int huge = (magnitude >= ldexp(1.0, XP3_NANOS_BITS));
+    xp3Decimal *nanos = NULL;
+    xp3Decimal *number = NULL;
+    xp3Decimal *product = NULL;
+    xp3Decimal *scaled = NULL;
+    xp3ErrCode err;
+
+    memset(result, 0, sizeof(*result));
+    if (isnan(factor))
+        return(XP3_ERR_FOCA0005);
+    if (divide && (factor == 0))
+        return(XP3_ERR_FODT0002);
+    if (!divide && isinf(factor))
+        return(XP3_ERR_FODT0002);
+    if ((duration->seconds == 0) && (duration->nanoseconds == 0))
+        return(XP3_ERR_OK);
+    if (divide) {
+        if (huge)
+            return(XP3_ERR_OK);
+        if (tiny)
+            return(XP3_ERR_FODT0002);
+    } else {
+        if (tiny)
+            return(XP3_ERR_OK);
+        if (huge)
+            return(XP3_ERR_FODT0002);
+    }
+
+    err = durationNanos(duration, &nanos);
+    if (err == XP3_ERR_OK)
+        err = decimalFromBinary(factor, 0, &number);
+    if (err != XP3_ERR_OK)
+        goto done;
+    if (divide) {
+        err = xp3DecimalIdiv(nanos, number, &scaled);
+    } else {
+        err = xp3DecimalMul(nanos, number, &product);
+        if (err == XP3_ERR_OK)
+            err = xp3DecimalRound(product, 0, XP3_ROUND_DOWN, &scaled);
+    }
+    if (err == XP3_ERR_OK)
+        err = nanosToDuration(scaled, result);
+
+done:
+    xp3DecimalFree(nanos);
+    xp3DecimalFree(number);
+    xp3DecimalFree(product);
+    xp3DecimalFree(scaled);
+    return(err);
+}
+
+/* A duration multiplied or divided by a number, of the duration's
+ * type */
+static xp3ErrCode
+scaleDuration(const xp3Atomic *duration, const xp3Atomic *number,
+              int divide, xp3Atomic **res) {
+    xp3ArithKind kind = arithKind(duration->type);
+    xp3Duration scaled;
+    double factor;
+    xp3ErrCode err;
+
+    /* The number is an xs:double in the signatures of F&O 3.1, 8.4 */
+    err = numberToBinary(number, 0, &factor);
+    if (err != XP3_ERR_OK)
+        return(err);
+    if (kind == XP3_ARITH_YEAR_MONTH)
+        err = scaleMonths(&duration->u.dur, factor, divide, &scaled);
+    else
+        err = scaleSeconds(&duration->u.dur, factor, divide, &scaled);
+    if (err != XP3_ERR_OK)
+        return(err);
+    return(newDuration(kindType(kind), &scaled, res));
+}
+
+/* Digits after the point of a duration divided by a duration */
+#define XP3_DURATION_RATIO_DIGITS 20
+
+/*
+ * Two durations of one ordered type divided (F&O 3.1, 8.4.5 and
+ * 8.4.10): the ratio of their months or of their seconds, as an
+ * xs:decimal with 20 digits after the point, rounded half to even, and
+ * shorter only when exact, as Saxon gives it (doc/DESIGN.md 4.2, not
+ * the D3 rule of the div operator on numbers).
+ */
+static xp3ErrCode
+divideDurations(const xp3Atomic *left, const xp3Atomic *right,
+                xp3Atomic **res) {
+    xp3Decimal *dividend = NULL;
+    xp3Decimal *divisor = NULL;
+    xp3Decimal *ratio = NULL;
+    xp3ErrCode err = XP3_ERR_NO_MEMORY;
+
+    if (arithKind(left->type) == XP3_ARITH_YEAR_MONTH) {
+        dividend = xp3DecimalFromInt64(left->u.dur.months);
+        divisor = xp3DecimalFromInt64(right->u.dur.months);
+        if ((dividend == NULL) || (divisor == NULL))
+            goto done;
+    } else {
+        err = durationNanos(&left->u.dur, &dividend);
+        if (err == XP3_ERR_OK)
+            err = durationNanos(&right->u.dur, &divisor);
+        if (err != XP3_ERR_OK)
+            goto done;
+    }
+    err = xp3DecimalDivRound(dividend, divisor, XP3_DURATION_RATIO_DIGITS,
+                             XP3_ROUND_HALF_EVEN, &ratio);
+    if (err == XP3_ERR_OK)
+        err = newDecimal(XP3_TYPE_DECIMAL, ratio, res);
+
+done:
+    xp3DecimalFree(dividend);
+    xp3DecimalFree(divisor);
+    return(err);
+}
+
+/*
+ * The operators of XPath 3.1, B.2 on dates, times and durations: two
+ * durations of one ordered type added, subtracted and divided, a
+ * duration multiplied and divided by a number, a date, dateTime or
+ * time moved by a duration, and two of one kind subtracted. idiv and
+ * mod, plain xs:duration and every other pair are type errors.
+ */
+static xp3ErrCode
+temporalArithmetic(xp3AstOp op, const xp3Atomic *left,
+                   const xp3Atomic *right, xp3Clock *clock,
+                   xp3Atomic **res) {
+    xp3ArithKind leftKind = arithKind(left->type);
+    xp3ArithKind rightKind = arithKind(right->type);
+    int sameDuration = isDuration(leftKind) && (leftKind == rightKind);
+
+    switch (op) {
+        case XP3_OP_ADD:
+            if (sameDuration)
+                return(addDurations(left, right, 0, res));
+            if (movesBy(leftKind, rightKind))
+                return(moveDateTime(left, right, 0, res));
+            if (movesBy(rightKind, leftKind))
+                return(moveDateTime(right, left, 0, res));
+            break;
+        case XP3_OP_SUB:
+            if (sameDuration)
+                return(addDurations(left, right, 1, res));
+            if (movesBy(leftKind, rightKind))
+                return(moveDateTime(left, right, 1, res));
+            if ((leftKind == rightKind) && isPointInTime(leftKind))
+                return(subtractDateTimes(left, right, clock, res));
+            break;
+        case XP3_OP_MUL:
+            if (isDuration(leftKind) && (rightKind == XP3_ARITH_NUMBER))
+                return(scaleDuration(left, right, 0, res));
+            if ((leftKind == XP3_ARITH_NUMBER) && isDuration(rightKind))
+                return(scaleDuration(right, left, 0, res));
+            break;
+        case XP3_OP_DIV:
+            if (isDuration(leftKind) && (rightKind == XP3_ARITH_NUMBER))
+                return(scaleDuration(left, right, 1, res));
+            if (sameDuration)
+                return(divideDurations(left, right, res));
+            break;
+        default:
+            break;
+    }
+    return(XP3_ERR_XPTY0004);
+}
+
+/*
  * Arithmetic
  */
 
@@ -363,23 +818,38 @@ binaryArithmetic(xp3AstOp op, double left, double right, int isFloat,
 }
 
 /**
- * Apply an arithmetic operator to two numbers (F&O 3.1, 4.2): +, -,
- * *, div, idiv or mod. The operands are promoted to a common type:
- * xs:integer, xs:decimal, xs:float or xs:double. Integers give
- * integers, except that div gives a decimal.
+ * Apply an arithmetic operator to two values (XPath 3.1, B.2): +, -,
+ * *, div, idiv or mod.
+ *
+ * Numbers (F&O 3.1, 4.2) are promoted to a common type: xs:integer,
+ * xs:decimal, xs:float or xs:double. Integers give integers, except
+ * that div gives a decimal.
+ *
+ * Dates, times and durations (F&O 3.1, 8.4 and 9.7): durations of one
+ * ordered type are added, subtracted and divided, a duration is
+ * multiplied or divided by a number, a date, dateTime or time is moved
+ * by a duration, and two of one kind are subtracted, using the
+ * implicit timezone for one without a timezone (doc/DESIGN.md 4.2).
  *
  * @param op     the operator
  * @param left   the first operand
  * @param right  the second operand
+ * @param clock  gives the implicit timezone, for subtracting dates and
+ *               times without one; NULL for none
  * @param res    where to store the result
- * @returns XP3_ERR_OK, XP3_ERR_XPTY0004 if an operand is not numeric,
- *          XP3_ERR_FOAR0001 for a division by zero, XP3_ERR_FOAR0002
- *          for an overflow or an invalid idiv, XP3_ERR_FOCA0002 for an
- *          idiv whose quotient is infinite, or XP3_ERR_NO_MEMORY
+ * @returns XP3_ERR_OK, XP3_ERR_XPTY0004 if the operator isn't defined
+ *          on the operands, XP3_ERR_FOAR0001 for a division by zero or
+ *          by a zero duration, XP3_ERR_FOAR0002 for an overflow or an
+ *          invalid idiv, XP3_ERR_FOCA0002 for an idiv whose quotient is
+ *          infinite, XP3_ERR_FODT0001 for a date beyond the year
+ *          limits, XP3_ERR_FODT0002 for a duration beyond its limits,
+ *          XP3_ERR_FOCA0005 for a duration multiplied or divided by
+ *          NaN, XP3_ERR_NEEDS_CONTEXT if the implicit timezone is
+ *          needed and the clock has none, or XP3_ERR_NO_MEMORY
  */
 xp3ErrCode
 xp3Arithmetic(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
-              xp3Atomic **res) {
+              xp3Clock *clock, xp3Atomic **res) {
     xp3NumKind leftKind = numKind(left->type);
     xp3NumKind rightKind = numKind(right->type);
     xp3NumKind kind = (leftKind > rightKind) ? leftKind : rightKind;
@@ -388,6 +858,9 @@ xp3Arithmetic(xp3AstOp op, const xp3Atomic *left, const xp3Atomic *right,
     xp3ErrCode err;
 
     *res = NULL;
+    if (isTemporal(arithKind(left->type)) ||
+        isTemporal(arithKind(right->type)))
+        return(temporalArithmetic(op, left, right, clock, res));
     if ((leftKind == XP3_NUM_NONE) || (rightKind == XP3_NUM_NONE))
         return(XP3_ERR_XPTY0004);
 
@@ -577,23 +1050,19 @@ dateTimeOrdered(xp3TypeId primitive) {
 
 /*
  * Compare two values of one primitive date or time type by their
- * starting instants in UTC (F&O 3.1, 9.4). The implicit timezone is
- * asked for only if one of them has no timezone, so that values with
- * timezones compare, and fold, without it.
+ * starting instants in UTC (F&O 3.1, 9.4), with the implicit timezone
+ * only if one of them has no timezone (pairTimezone()).
  */
 static xp3ErrCode
 compareDateTimes(const xp3Atomic *left, const xp3Atomic *right,
                  xp3Clock *clock, int *cmp) {
-    int timezone = 0;
+    int timezone;
     xp3Instant leftInstant;
     xp3Instant rightInstant;
+    xp3ErrCode err = pairTimezone(left, right, clock, &timezone);
 
-    if (!left->u.dt.hasTimezone || !right->u.dt.hasTimezone) {
-        xp3ErrCode err = xp3ClockTimezone(clock, &timezone);
-
-        if (err != XP3_ERR_OK)
-            return(err);
-    }
+    if (err != XP3_ERR_OK)
+        return(err);
     leftInstant = xp3DateTimeInstant(left->type, &left->u.dt, timezone);
     rightInstant = xp3DateTimeInstant(right->type, &right->u.dt, timezone);
     *cmp = xp3InstantCompare(&leftInstant, &rightInstant);
