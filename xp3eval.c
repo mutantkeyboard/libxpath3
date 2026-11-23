@@ -35,6 +35,7 @@
 #include <libxml/xmlstring.h>
 
 #include "private/xp3ast.h"
+#include "private/xp3compiler.h"
 #include "private/xp3context.h"
 #include "private/xp3decimal.h"
 #include "private/xp3double.h"
@@ -576,7 +577,7 @@ evalCondition(xp3Eval *ev, const xp3AstNode *node) {
  * Primary expressions
  */
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalLiteral(xp3Eval *ev, const xp3AstNode *node) {
     size_t len = strlen((const char *) node->text);
     xp3Atomic *atomic = NULL;
@@ -623,7 +624,7 @@ evalLiteral(xp3Eval *ev, const xp3AstNode *node) {
     return(evalSingle(ev, xp3ItemFromAtomic(atomic)));
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalVarRef(xp3Eval *ev, const xp3AstNode *node) {
     char name[XP3_NAME_BUF];
 
@@ -636,7 +637,7 @@ evalVarRef(xp3Eval *ev, const xp3AstNode *node) {
     return(xp3ValueRef(ev->slots[node->op]));
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalContextItem(xp3Eval *ev, const xp3AstNode *node) {
     if (!ev->focus.present) {
         evalError(ev, XP3_ERR_XPDY0002, node, "the context item is absent");
@@ -646,7 +647,7 @@ evalContextItem(xp3Eval *ev, const xp3AstNode *node) {
 }
 
 /* a, b, c: the items of each in turn */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalSequence(xp3Eval *ev, const xp3AstNode *node) {
     const xp3AstNode *child;
     xp3SeqBuilder builder;
@@ -902,7 +903,7 @@ isReverseAxis(xp3Axis axis) {
  * the axis that match the node test, filtered by the predicates with
  * positions in axis order, and returned in document order.
  */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalStep(xp3Eval *ev, const xp3AstNode *step) {
     const xp3AstNode *test = step->first;
     const xp3AstNode *pred;
@@ -1104,7 +1105,7 @@ error:
     return(NULL);
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalPath(xp3Eval *ev, const xp3AstNode *path) {
     const xp3AstNode *child = path->first;
     xp3Value *current;
@@ -1126,7 +1127,7 @@ evalPath(xp3Eval *ev, const xp3AstNode *path) {
 
 /* A primary expression with predicates (XPath 3.1, 3.2.1), positions
  * counted in sequence order */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalFilter(xp3Eval *ev, const xp3AstNode *node) {
     const xp3AstNode *child = node->first;
     xp3SeqBuilder builder;
@@ -1300,7 +1301,7 @@ visitFor(xp3Eval *ev, const xp3AstNode *last, void *data) {
     return(0);
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalFor(xp3Eval *ev, const xp3AstNode *node) {
     xp3SeqBuilder builder;
 
@@ -1331,7 +1332,7 @@ visitQuantified(xp3Eval *ev, const xp3AstNode *last, void *data) {
     return(1);
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalQuantified(xp3Eval *ev, const xp3AstNode *node) {
     xp3Quantifier quantifier;
 
@@ -1344,7 +1345,7 @@ evalQuantified(xp3Eval *ev, const xp3AstNode *node) {
 
 /* let $x := E, ...: bind each value in turn, then the return
  * expression */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalLet(xp3Eval *ev, const xp3AstNode *node) {
     const xp3AstNode *clause;
     struct {
@@ -1395,7 +1396,7 @@ evalLet(xp3Eval *ev, const xp3AstNode *node) {
  * Conditionals and logic
  */
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalIf(xp3Eval *ev, const xp3AstNode *node) {
     int condition = evalCondition(ev, node->first);
 
@@ -1405,7 +1406,7 @@ evalIf(xp3Eval *ev, const xp3AstNode *node) {
 }
 
 /* and, or: the left side first, the right side only if needed */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalLogical(xp3Eval *ev, const xp3AstNode *node) {
     int isOr = (node->op == XP3_OP_OR);
     int result = evalCondition(ev, node->first);
@@ -1439,7 +1440,7 @@ operatorName(int op) {
     return(xp3OperatorNames[op]);
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalUnsupported(xp3Eval *ev, const xp3AstNode *node) {
     char name[XP3_NAME_BUF];
 
@@ -1659,7 +1660,7 @@ castUntyped(xp3Eval *ev, xp3Atomic *value, xp3TypeId type,
  */
 
 /* +, -, *, div, idiv, mod (XPath 3.1, 3.5) */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
     const char *name = operatorName(node->op);
     xp3Atomic *left;
@@ -1735,7 +1736,7 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
 }
 
 /* Unary + and - (XPath 3.1, 3.5) */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalUnary(xp3Eval *ev, const xp3AstNode *node) {
     const char *name = (node->op == XP3_OP_SUB) ? "unary -" : "unary +";
     xp3Atomic *value;
@@ -1809,7 +1810,7 @@ compareSteps(xp3Eval *ev, const xp3AstNode *node, const xp3Atomic *left,
 
 /* eq, ne, lt, le, gt, ge (XPath 3.1, 3.7.1): untyped values compare as
  * strings */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
     const char *name = operatorName(node->op);
     xp3Atomic *left;
@@ -1898,7 +1899,7 @@ comparePair(xp3Eval *ev, const xp3AstNode *node, xp3Atomic *left,
 
 /* =, !=, <, <=, >, >= (XPath 3.1, 3.7.2): true if any pair of atomized
  * values compares true */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalGeneralComparison(xp3Eval *ev, const xp3AstNode *node) {
     xp3Value *left = evalExpr(ev, node->first);
     xp3Value *right = NULL;
@@ -2015,7 +2016,7 @@ evalOrder(xp3Eval *ev) {
 }
 
 /* is, <<, >> */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalNodeComparison(xp3Eval *ev, const xp3AstNode *node) {
     const char *name = operatorName(node->op);
     xmlNodePtr left;
@@ -2136,7 +2137,7 @@ done:
     return(builderFinish(ev, &builder));
 }
 
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalRange(xp3Eval *ev, const xp3AstNode *node) {
     xp3Atomic *first;
     xp3Atomic *last = NULL;
@@ -2203,7 +2204,7 @@ evalNodeSet(xp3Eval *ev, const xp3AstNode *expr, const char *name,
 }
 
 /* union, intersect, except (XPath 3.1, 3.4.2) */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalSetOperation(xp3Eval *ev, const xp3AstNode *node) {
     const char *name = operatorName(node->op);
     xp3SeqBuilder left;
@@ -2369,7 +2370,7 @@ sequenceMatches(xp3Eval *ev, const xp3Value *value,
 }
 
 /* instance of (XPath 3.1, 3.14.1) */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalInstanceOf(xp3Eval *ev, const xp3AstNode *node) {
     xp3Value *value = evalExpr(ev, node->first);
     int result;
@@ -2382,7 +2383,7 @@ evalInstanceOf(xp3Eval *ev, const xp3AstNode *node) {
 }
 
 /* treat as (XPath 3.1, 3.14.5): the value, if it matches the type */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalTreatAs(xp3Eval *ev, const xp3AstNode *node) {
     xp3Value *value = evalExpr(ev, node->first);
     int result;
@@ -2484,26 +2485,21 @@ castToTarget(const xp3Atomic *value, int target, xp3SeqBuilder *builder) {
 }
 
 /*
- * cast as and castable as (XPath 3.1, 3.14.2 and 3.14.3). For cast,
- * the result or an error; for castable, true or false.
+ * cast as and castable as of the atomized operand, which is consumed.
+ * Not inlined into evalCast(), so that its buffers are not on the
+ * stack while the operand is evaluated.
  */
-static xp3Value *
-evalCast(xp3Eval *ev, const xp3AstNode *node) {
+static XP3_NOINLINE xp3Value *
+castValue(xp3Eval *ev, const xp3AstNode *node, xp3Value *value) {
     int castable = (node->kind == XP3_AST_CASTABLE_AS);
     const xp3AstNode *seqType = node->last;
     const xp3AstNode *target = seqType->first;
     int optional = (seqType->op == XP3_OCC_OPTIONAL);
     char name[XP3_NAME_BUF];
     xp3SeqBuilder builder;
-    xp3Value *value;
     xp3Item item;
     xp3ErrCode err;
 
-    value = evalExpr(ev, node->first);
-    if (value != NULL)
-        value = atomize(ev, value, node->first);
-    if (value == NULL)
-        return(NULL);
     if (xp3ValueCount(value) != 1) {
         int empty = (xp3ValueCount(value) == 0);
 
@@ -2594,6 +2590,22 @@ evalCast(xp3Eval *ev, const xp3AstNode *node) {
 }
 
 /*
+ * cast as and castable as (XPath 3.1, 3.14.2 and 3.14.3). For cast,
+ * the result or an error; for castable, true or false.
+ */
+static XP3_NOINLINE xp3Value *
+evalCast(xp3Eval *ev, const xp3AstNode *node) {
+    xp3Value *value;
+
+    value = evalExpr(ev, node->first);
+    if (value != NULL)
+        value = atomize(ev, value, node->first);
+    if (value == NULL)
+        return(NULL);
+    return(castValue(ev, node, value));
+}
+
+/*
  * String concatenation and simple map
  */
 
@@ -2618,7 +2630,7 @@ concatOperand(xp3Eval *ev, const xp3AstNode *expr) {
 }
 
 /* E1 || E2 (XPath 3.1, 3.6): the same as fn:concat(E1, E2) */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalConcat(xp3Eval *ev, const xp3AstNode *node) {
     xmlChar *left = concatOperand(ev, node->first);
     xmlChar *right = NULL;
@@ -2666,7 +2678,7 @@ evalConcat(xp3Eval *ev, const xp3AstNode *node) {
  * item, with its position and size, and the results in that order,
  * neither sorted nor without duplicates.
  */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalSimpleMap(xp3Eval *ev, const xp3AstNode *node) {
     xp3Value *input = evalExpr(ev, node->first);
     xp3Focus saved = ev->focus;
@@ -3105,7 +3117,7 @@ callExtension(xp3Eval *ev, const xp3AstNode *node,
  * arguments are evaluated in order and converted to the parameter
  * types, then the implementation is called (3.1.5.1).
  */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalCall(xp3Eval *ev, const xp3AstNode *node) {
     const xp3FuncInfo *info = node->func;
     xp3Value *fixed[XP3_CALL_ARGS];
@@ -3551,7 +3563,7 @@ xp3FunctionUserData(xp3FunctionCall *call) {
 }
 
 /* Binary operators other than and and or */
-static xp3Value *
+static XP3_NOINLINE xp3Value *
 evalBinary(xp3Eval *ev, const xp3AstNode *node) {
     switch (node->op) {
         case XP3_OP_OR:
@@ -3641,6 +3653,8 @@ evalExpr(xp3Eval *ev, const xp3AstNode *node) {
     return(value);
 }
 
+/* The handlers are XP3_NOINLINE, so that each level of the recursion
+ * takes the frame of its own handler, not of all of them. */
 static xp3Value *
 evalNode(xp3Eval *ev, const xp3AstNode *node) {
     if (evalCount(ev, node) < 0)
