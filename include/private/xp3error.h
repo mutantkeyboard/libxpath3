@@ -95,9 +95,16 @@ struct _xp3Error
                    * be freed */
 };
 
+/*
+ * On MinGW, GCC checks the printf archetype against the Microsoft
+ * runtime, which lacks %zu. The build defines __USE_MINGW_ANSI_STDIO,
+ * so the formatting functions are C99 ones, which gnu_printf checks.
+ */
 xp3Error *xp3ErrorNew(xp3ErrCode code, int line, int column,
                       const char *format, ...)
-#ifdef __GNUC__
+#if defined(__MINGW32__)
+__attribute__((format(gnu_printf, 4, 5)))
+#elif defined(__GNUC__)
 __attribute__((format(printf, 4, 5)))
 #endif
 ;

@@ -26,6 +26,12 @@ include(CTest)
 
 find_package(LibXml2 2.9.0 REQUIRED)
 
+# MinGW's own stdio is C99-conforming, with %zu and %lld, unlike the
+# Microsoft runtime's; the format checks of xp3ErrorNew() rely on it.
+if(MINGW)
+    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1)
+endif()
+
 configure_file(
     include/libxpath3/xp3version.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/include/libxpath3/xp3version.h

@@ -17,6 +17,12 @@ cc = meson.get_compiler('c')
 # Variable-length arrays are not allowed.
 add_project_arguments(cc.get_supported_arguments('-Werror=vla'), language: 'c')
 
+# MinGW's own stdio is C99-conforming, with %zu and %lld, unlike the
+# Microsoft runtime's; the format checks of xp3ErrorNew() rely on it.
+if cc.get_define('__MINGW32__') != ''
+    add_project_arguments('-D__USE_MINGW_ANSI_STDIO=1', language: 'c')
+endif
+
 # The system clock and the local offset (xp3datetime.c), each from the
 # first of these that exists; Windows has its own. Without
 # localtime_r() and gmtime_r() the local offset is UTC, because
