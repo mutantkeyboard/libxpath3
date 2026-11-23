@@ -675,7 +675,7 @@ static const xp3EvalCase xp3Cases[] = {
     { "1 cast as xs:anyURI", "error:XPTY0004" },
     { "xs:anyURI('1') cast as xs:integer", "error:XPTY0004" },
     { "'a' cast as xs:QName", "error:UNSUPPORTED" },
-    { "'2020-01-01' cast as xs:date", "error:UNSUPPORTED" },
+    { "'2020-01-01' cast as xs:date", "date:2020-01-01" },
     { "1 cast as xs:date", "error:XPTY0004" },
     { "() cast as xs:integer?", "" },
     { "() cast as xs:integer", "error:XPTY0004" },
@@ -689,7 +689,7 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1, 2) castable as xs:integer", "boolean:false" },
     { "1 castable as xs:date", "boolean:false" },
     { "xs:double('NaN') castable as xs:integer", "boolean:false" },
-    { "'2020-01-01' castable as xs:date", "error:UNSUPPORTED" },
+    { "'2020-01-01' castable as xs:date", "boolean:true" },
     { "'1' cast as xs:numeric", "double:1" },
     { "1 cast as xs:numeric", "integer:1" },
     { "'a' cast as xs:numeric", "error:FORG0001" },
@@ -1792,13 +1792,15 @@ testQNameComparison(void) {
         check(0, "QNames created");
     } else {
         check((xp3CompareAtomics(XP3_OP_VAL_EQ, first, same, XP3_XPATH_31,
-                                 &result) == XP3_ERR_OK) && (result == 1),
+                                 NULL, &result) == XP3_ERR_OK) &&
+              (result == 1),
               "QNames with the same URI and local name are equal");
         check((xp3CompareAtomics(XP3_OP_GEN_NE, first, other, XP3_XPATH_31,
-                                 &result) == XP3_ERR_OK) && (result == 1),
+                                 NULL, &result) == XP3_ERR_OK) &&
+              (result == 1),
               "QNames in different namespaces differ");
         check(xp3CompareAtomics(XP3_OP_VAL_LT, first, same, XP3_XPATH_31,
-                                &result) == XP3_ERR_XPTY0004,
+                                NULL, &result) == XP3_ERR_XPTY0004,
               "QNames have no order");
         check((xp3NegateNumber(first, &negated) == XP3_ERR_XPTY0004) &&
               (negated == NULL), "a QName can't be negated");
@@ -3937,6 +3939,314 @@ done:
 }
 
 /*
+ * Dates, times and durations, evaluated with an implicit timezone of
+ * -05:00, as in the examples of F&O 3.1, 9.4
+ */
+static const xp3EvalCase xp3DateTimeCases[] = {
+    /* Casts */
+    { "xs:date(' 2026-01-01 ')", "date:2026-01-01" },
+    { "xs:untypedAtomic('2026-01-01Z') cast as xs:date", "date:2026-01-01Z" },
+    { "xs:dateTime('2026-11-19T11:25:47.5+01:00') cast as xs:gMonthDay",
+      "gMonthDay:--11-19+01:00" },
+    { "xs:date('2026-11-19') cast as xs:dateTime",
+      "dateTime:2026-11-19T00:00:00" },
+    { "xs:duration('P1Y2M3D') cast as xs:yearMonthDuration",
+      "yearMonthDuration:P1Y2M" },
+    { "string(xs:dayTimeDuration('PT36H'))", "string:P1DT12H" },
+    { "xs:time('24:00:00') || ''", "string:00:00:00" },
+    { "xs:dateTimeStamp('2026-01-01T00:00:00Z') instance of xs:dateTime",
+      "boolean:true" },
+    { "xs:date('2026-02-29')", "error:FORG0001" },
+    { "xs:date('2147483648-01-01')", "error:FODT0001" },
+    { "'2147483648-01-01' castable as xs:date", "boolean:false" },
+    { "xs:duration('PT9223372036854775808S')", "error:FODT0002" },
+    { "'PT9223372036854775808S' castable as xs:duration", "boolean:false" },
+    { "xs:dateTimeStamp('2026-01-01T00:00:00')", "error:FORG0001" },
+    { "xs:dateTime('2026-01-01T00:00:00') cast as xs:dateTimeStamp",
+      "error:FORG0001" },
+    { "xs:time('12:00:00') cast as xs:date", "error:XPTY0004" },
+    { "xs:time('12:00:00') castable as xs:date", "boolean:false" },
+    { "if (xs:date('2026-01-01')) then 1 else 2", "error:FORG0006" },
+    /* Value comparisons */
+    { "xs:date('2026-01-01') eq xs:date('2026-01-01Z')", "boolean:false" },
+    { "xs:date('2026-01-01') eq xs:date('2026-01-01-05:00')",
+      "boolean:true" },
+    { "xs:dateTime('2002-04-02T12:00:00') eq "
+      "xs:dateTime('2002-04-02T23:00:00+06:00')", "boolean:true" },
+    { "xs:time('08:00:00+09:00') lt xs:time('17:00:00-06:00')",
+      "boolean:true" },
+    { "xs:gYear('2026') ne xs:gYear('2027')", "boolean:true" },
+    { "xs:gYear('1976-05:00') eq xs:gYear('1976')", "boolean:true" },
+    { "xs:gYear('2026') lt xs:gYear('2027')", "error:XPTY0004" },
+    { "xs:duration('P1Y') lt xs:duration('P2Y')", "error:XPTY0004" },
+    { "xs:yearMonthDuration('P1Y') eq xs:duration('P12M')", "boolean:true" },
+    { "xs:yearMonthDuration('P0M') eq xs:dayTimeDuration('PT0S')",
+      "boolean:true" },
+    { "xs:dayTimeDuration('PT1H') ge xs:dayTimeDuration('PT60M')",
+      "boolean:true" },
+    { "xs:date('2026-01-01') eq xs:dateTime('2026-01-01T00:00:00')",
+      "error:XPTY0004" },
+    /* General comparisons cast untyped values to the other type */
+    { "xs:untypedAtomic('P1Y') < xs:yearMonthDuration('P13M')",
+      "boolean:true" },
+    { "xs:untypedAtomic('2026-01-01') = xs:date('2026-01-01-05:00')",
+      "boolean:true" },
+    { "(xs:date('2026-01-01'), xs:date('2026-01-03')) > "
+      "xs:date('2026-01-02Z')", "boolean:true" },
+    { "xs:untypedAtomic('x') = xs:date('2026-01-01')", "error:FORG0001" },
+    { "xs:untypedAtomic('2026-01-01T00:00:00') = "
+      "xs:dateTimeStamp('2026-01-01T00:00:00Z')", "error:FORG0001" },
+    /* Sequence functions */
+    { "distinct-values((xs:date('2026-01-01'), "
+      "xs:date('2026-01-01-05:00'), xs:dateTime('2026-01-01T00:00:00')))",
+      "date:2026-01-01 dateTime:2026-01-01T00:00:00" },
+    { "count(distinct-values((xs:yearMonthDuration('P1Y'), "
+      "xs:duration('P12M'), xs:dayTimeDuration('PT0S'), "
+      "xs:yearMonthDuration('P0M'))))", "integer:2" },
+    { "index-of((xs:time('24:00:00'), xs:time('00:00:00Z'), "
+      "xs:time('19:00:00')), xs:time('00:00:00'))", "integer:1" },
+    { "index-of((xs:gDay('---01'), 1, 'a'), xs:gDay('---01-05:00'))",
+      "integer:1" },
+    { "deep-equal((xs:gDay('---12'), xs:dayTimeDuration('P1D')), "
+      "(xs:gDay('---12-05:00'), xs:duration('PT24H')))", "boolean:true" },
+    { "deep-equal(xs:date('2026-01-01'), xs:dateTime('2026-01-01T00:00:00'))",
+      "boolean:false" },
+    { "min((xs:date('2026-01-02'), xs:date('2026-01-01Z')))",
+      "date:2026-01-01Z" },
+    { "max((xs:dayTimeDuration('PT1H'), xs:dayTimeDuration('PT61M')))",
+      "dayTimeDuration:PT1H1M" },
+    { "max((xs:time('23:00:00'), xs:time('23:30:00+14:00')))",
+      "time:23:00:00" },
+    { "min(xs:yearMonthDuration('P1M'))", "yearMonthDuration:P1M" },
+    { "max((xs:date('2026-01-02'), xs:dateTime('2026-01-01T00:00:00')))",
+      "error:FORG0006" },
+    { "min((xs:yearMonthDuration('P1Y'), xs:dayTimeDuration('P1D')))",
+      "error:FORG0006" },
+    { "min(xs:duration('P1D'))", "error:FORG0006" },
+    { "max((xs:gYear('2026'), xs:gYear('2027')))", "error:FORG0006" },
+    { "sum((xs:dayTimeDuration('P1D'), xs:dayTimeDuration('P1D')))",
+      "dayTimeDuration:P2D" },
+    { "avg((xs:yearMonthDuration('P1M'), xs:yearMonthDuration('P2M')))",
+      "yearMonthDuration:P2M" },
+    { "sum((xs:yearMonthDuration('P1M'), xs:dayTimeDuration('P1D')))",
+      "error:FORG0006" },
+    { "sum((xs:dayTimeDuration('P1D'), 1))", "error:FORG0006" },
+    { "avg(xs:duration('P1D'))", "error:FORG0006" },
+    /* Arithmetic */
+    { "xs:date('2026-01-01') + xs:dayTimeDuration('P1D')",
+      "date:2026-01-02" },
+    { "xs:yearMonthDuration('P1M') * 2", "yearMonthDuration:P2M" },
+    { "xs:time('12:00:00') - xs:time('11:00:00')", "dayTimeDuration:PT1H" },
+    { "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+      "dayTimeDuration:P1DT5H" },
+    { "xs:dayTimeDuration('P1D') div xs:dayTimeDuration('PT7S')",
+      "decimal:12342.85714285714285714286" },
+    { "'P1D' + xs:dayTimeDuration('P1D')", "error:XPTY0004" },
+    { "xs:date('2026-01-01') + xs:date('2026-01-01')", "error:XPTY0004" },
+    { "xs:date('2026-01-01') - xs:dateTime('2026-01-01T00:00:00')",
+      "error:XPTY0004" },
+    { "xs:duration('P1D') + xs:duration('P1D')", "error:XPTY0004" },
+    { "xs:yearMonthDuration('P1M') + xs:dayTimeDuration('P1D')",
+      "error:XPTY0004" },
+    { "xs:dayTimeDuration('P1D') idiv xs:dayTimeDuration('P1D')",
+      "error:XPTY0004" },
+    { "2 div xs:dayTimeDuration('P1D')", "error:XPTY0004" },
+    { "xs:gYear('2026') + xs:yearMonthDuration('P1Y')", "error:XPTY0004" },
+    { "-xs:dayTimeDuration('P1D')", "error:XPTY0004" }
+};
+
+static void
+testDateTimes(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    size_t i;
+
+    if ((ctx == NULL) || (plain == NULL) ||
+        (xp3SetImplicitTimezone(ctx, -300) < 0)) {
+        check(0, "contexts set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3DateTimeCases) /
+                        sizeof(xp3DateTimeCases[0]); i++) {
+            checkEval(NULL, ctx, xp3DateTimeCases[i].expr,
+                      xp3DateTimeCases[i].expected);
+            checkEval(plain, ctx, xp3DateTimeCases[i].expr,
+                      xp3DateTimeCases[i].expected);
+        }
+    }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+}
+
+static int clockReads;
+
+/* 2026-11-19T10:25:47Z, at +05:30 */
+static void
+countingClock(xp3ClockReading *reading) {
+    clockReads++;
+    reading->seconds = INT64_C(1795083947);
+    reading->nanoseconds = 0;
+    reading->offset = 330;
+}
+
+/* Evaluate an expression and count the clock readings */
+static int
+readingsOf(xp3DynamicContext *ctx, const char *expr, const char *expected) {
+    clockReads = 0;
+    checkEval(NULL, ctx, expr, expected);
+    return(clockReads);
+}
+
+/* Comparisons that need the implicit timezone, three times */
+#define XP3_NEEDS_TIMEZONE \
+    "xs:time('10:00:00') lt xs:time('04:30:01Z'), " \
+    "xs:date('2026-01-01') eq xs:date('2026-01-01+05:30'), " \
+    "count(distinct-values((xs:date('2026-01-01'), " \
+    "xs:date('2026-01-01Z'))))"
+
+static void
+testDateTimeContext(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (ctx == NULL) {
+        check(0, "context created");
+        return;
+    }
+    check(xp3SetImplicitTimezone(NULL, 0) < 0, "no context, no timezone");
+    check(xp3SetImplicitTimezone(ctx, 841) < 0, "+14:01 is out of range");
+    check(xp3SetImplicitTimezone(ctx, -841) < 0, "-14:01 is out of range");
+    check(xp3SetCurrentDateTime(NULL, BAD_CAST "2026-01-01T00:00:00Z") < 0,
+          "no context, no current dateTime");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST "2026-01-01T00:00:00") < 0,
+          "a current dateTime needs a timezone");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST "2026-01-01Z") < 0,
+          "a date is no current dateTime");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST " 2026-01-01T00:00:00Z") < 0,
+          "the current dateTime is a lexical form without spaces");
+
+    /* By default, the clock is read once per evaluation that needs it,
+     * and its local offset is the implicit timezone */
+    ctx->clockSource = countingClock;
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "the clock is read once per evaluation");
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "and again for the next evaluation");
+    check(readingsOf(ctx, "xs:date('2026-01-01Z') eq xs:date('2026-01-01Z')",
+                     "boolean:true") == 0,
+          "values with timezones don't read the clock");
+
+    /* An implicit timezone set */
+    check(xp3SetImplicitTimezone(ctx, 840) == 0, "+14:00 is set");
+    check(readingsOf(ctx, "xs:date('2026-01-01') eq "
+                     "xs:date('2026-01-01+14:00')", "boolean:true") == 0,
+          "the implicit timezone set, without reading the clock");
+    check(xp3SetImplicitTimezone(ctx, -840) == 0, "-14:00 is set");
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq "
+              "xs:date('2026-01-01-14:00')", "boolean:true");
+
+    /* A current dateTime set gives the implicit timezone */
+    check(xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL) == 0,
+          "back to the default implicit timezone");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST
+                                "2026-01-01T00:00:00.5-03:00") == 0,
+          "a current dateTime is set");
+    check(readingsOf(ctx, "xs:date('2026-01-01') eq "
+                     "xs:date('2026-01-01-03:00')", "boolean:true") == 0,
+          "the timezone of the current dateTime, without the clock");
+    check(xp3SetImplicitTimezone(ctx, 0) == 0, "UTC is set");
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq xs:date('2026-01-01Z')",
+              "boolean:true");
+    check(xp3SetCurrentDateTime(ctx, NULL) == 0,
+          "back to the system clock");
+    check(xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL) == 0,
+          "and the local offset");
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "the clock is read again");
+
+    /* The system clock, whatever the local offset */
+    ctx->clockSource = NULL;
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq xs:date('2026-01-01')",
+              "boolean:true");
+    xp3FreeDynamicContext(ctx);
+}
+
+/*
+ * Folding has no implicit timezone: a comparison or a subtraction that
+ * needs one stays for the evaluation, while values with timezones,
+ * casts and adding a duration to a date fold
+ */
+static void
+testDateTimeFolding(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *open = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01') eq "
+                               "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *closed = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01Z') eq "
+                                 "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *cast = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01')",
+                               NULL);
+    xp3Expr *openDifference = xp3Compile(NULL, BAD_CAST
+                                         "xs:date('2026-01-02') - "
+                                         "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *closedDifference = xp3Compile(NULL, BAD_CAST
+                                           "xs:date('2026-01-02Z') - "
+                                           "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *moved = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-31') + "
+                                "xs:yearMonthDuration('P1M')", NULL);
+    int utc;
+    int ahead;
+
+    if ((ctx == NULL) || (open == NULL) || (closed == NULL) ||
+        (cast == NULL) || (openDifference == NULL) ||
+        (closedDifference == NULL) || (moved == NULL)) {
+        check(0, "expressions compiled");
+        goto done;
+    }
+    check(open->ast->root->kind != XP3_AST_CONSTANT,
+          "a comparison that needs the implicit timezone is not folded");
+    check((open->ast->root->first->kind == XP3_AST_CONSTANT) &&
+          (open->ast->root->last->kind == XP3_AST_CONSTANT),
+          "its casts are");
+    check(closed->ast->root->kind == XP3_AST_CONSTANT,
+          "a comparison of values with timezones is folded");
+    check(cast->ast->root->kind == XP3_AST_CONSTANT, "a cast is folded");
+    check(openDifference->ast->root->kind != XP3_AST_CONSTANT,
+          "a subtraction that needs the implicit timezone is not folded");
+    check(closedDifference->ast->root->kind == XP3_AST_CONSTANT,
+          "a subtraction of values with timezones is folded");
+    check(moved->ast->root->kind == XP3_AST_CONSTANT,
+          "adding a duration to a date without a timezone is folded");
+
+    xp3SetImplicitTimezone(ctx, 0);
+    utc = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
+    xp3SetImplicitTimezone(ctx, 60);
+    ahead = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:PT23H");
+    check((utc == 1) && (ahead == 0),
+          "the result depends on the implicit timezone of the evaluation");
+    check(xp3EvaluateBoolean(closed, ctx, NULL) == 1,
+          "the folded comparison");
+    checkEval(NULL, ctx, "xs:date('2026-01-02Z') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
+    checkEval(NULL, ctx, "xs:date('2026-01-31') + "
+              "xs:yearMonthDuration('P1M')", "date:2026-02-28");
+
+done:
+    xp3FreeExpr(open);
+    xp3FreeExpr(closed);
+    xp3FreeExpr(cast);
+    xp3FreeExpr(openDifference);
+    xp3FreeExpr(closedDifference);
+    xp3FreeExpr(moved);
+    xp3FreeDynamicContext(ctx);
+}
+
+/*
  * Constant folding runs the regular expression functions, and an
  * error in the pattern stays an error of the evaluation
  */
@@ -4418,9 +4728,12 @@ testAtomicSequences(void) {
     checkAtomicSequence(XP3_TYPE_DECIMAL, "1.5", "x", "error:FORG0001");
     checkAtomicSequence(XP3_TYPE_POSITIVE_INTEGER, "0", NULL,
                         "error:FORG0001");
-    /* Casting to the date and time types comes with Part 10 */
-    checkAtomicSequence(XP3_TYPE_DATE, "2026-11-05", NULL,
-                        "error:UNSUPPORTED");
+    checkAtomicSequence(XP3_TYPE_DATE, " 2026-11-05 ", "-0001-02-28Z",
+                        "date:2026-11-05 date:-0001-02-28Z");
+    checkAtomicSequence(XP3_TYPE_DAY_TIME_DURATION, "PT36H", NULL,
+                        "dayTimeDuration:P1DT12H");
+    checkAtomicSequence(XP3_TYPE_DATE, "2026-02-29", NULL,
+                        "error:FORG0001");
 
     /* The message names the value and the type */
     lexicals[0] = BAD_CAST "x";
@@ -6270,6 +6583,9 @@ main(void) {
     XP3_TEST_RUN(testExtensionKeep);
     XP3_TEST_RUN(testSequenceRefAllocationFailures);
     XP3_TEST_RUN(testExtensionAllocationFailures);
+    XP3_TEST_RUN(testDateTimes);
+    XP3_TEST_RUN(testDateTimeContext);
+    XP3_TEST_RUN(testDateTimeFolding);
     XP3_TEST_RUN(testLocale);
 
     return(xp3TestDone());

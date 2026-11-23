@@ -252,6 +252,66 @@ xp3SetDynamicContextUserData(xp3DynamicContext *ctx, void *userData) {
     return(0);
 }
 
+/**
+ * Set the current dateTime of the evaluations, instead of reading the
+ * system clock. Unless xp3SetImplicitTimezone() sets one, its timezone
+ * is also the implicit timezone, which comparisons use for dates and
+ * times without a timezone. Both stay the same for the whole of each
+ * evaluation, as XPath requires.
+ *
+ * @param ctx       the context
+ * @param dateTime  an xs:dateTime in its lexical form, with a timezone,
+ *                  such as "2026-11-19T11:25:47.050651+01:00"; NULL
+ *                  goes back to the system clock
+ * @returns 0, or -1 if ctx is NULL or the string is not an xs:dateTime
+ *          with a timezone
+ */
+int
+xp3SetCurrentDateTime(xp3DynamicContext *ctx, const xmlChar *dateTime) {
+    xp3DateTime value;
+
+    if (ctx == NULL)
+        return(-1);
+    if (dateTime == NULL) {
+        ctx->hasCurrentDateTime = 0;
+        return(0);
+    }
+    if (xp3DateTimeParse(XP3_TYPE_DATE_TIME_STAMP, dateTime, &value) !=
+        XP3_ERR_OK)
+        return(-1);
+    ctx->currentDateTime = value;
+    ctx->hasCurrentDateTime = 1;
+    return(0);
+}
+
+/**
+ * Set the implicit timezone of the evaluations, which comparisons use
+ * for dates and times without a timezone. By default it is the
+ * timezone of the current dateTime set with xp3SetCurrentDateTime(),
+ * or else the local offset of the system when an evaluation first
+ * needs it.
+ *
+ * @param ctx      the context
+ * @param minutes  the offset from UTC in minutes, -840 to 840 (-14:00
+ *                 to +14:00), or #XP3_TIMEZONE_LOCAL to go back to the
+ *                 default
+ * @returns 0, or -1 if ctx is NULL or the offset is out of range
+ */
+int
+xp3SetImplicitTimezone(xp3DynamicContext *ctx, int minutes) {
+    if (ctx == NULL)
+        return(-1);
+    if (minutes == XP3_TIMEZONE_LOCAL) {
+        ctx->hasImplicitTimezone = 0;
+        return(0);
+    }
+    if ((minutes < -XP3_TIMEZONE_MAX) || (minutes > XP3_TIMEZONE_MAX))
+        return(-1);
+    ctx->implicitTimezone = minutes;
+    ctx->hasImplicitTimezone = 1;
+    return(0);
+}
+
 /*
  * Evaluation state
  */
@@ -277,6 +337,9 @@ typedef struct {
     size_t maxBytes;            /* folding only: most bytes of a value,
                                  * see evalCheckSize(); 0 for no limit */
     void *userData;             /* of the dynamic context */
+    xp3Clock clock;             /* the current dateTime and implicit
+                                 * timezone, not available while
+                                 * folding */
     xp3Error *err;              /* the first error */
 } xp3Eval;
 
@@ -1542,6 +1605,25 @@ typeName(xp3TypeId type) {
     return((name != NULL) ? (const char *) name : "?");
 }
 
+/*
+ * Count the steps of casting a string to a date, time or duration
+ * type: a step per XP3_BYTES_PER_STEP bytes read, as the string
+ * functions count them (doc/DESIGN.md 7.3). Returns 0 or -1.
+ */
+static int
+castSteps(xp3Eval *ev, const xp3AstNode *node, const xp3Atomic *value,
+          xp3TypeId target) {
+    xp3Representation rep = xp3TypeRepresentation(target);
+    size_t len;
+
+    if (xp3TypeRepresentation(value->type) != XP3_REP_STRING)
+        return(0);
+    if ((rep != XP3_REP_DATE_TIME) && (rep != XP3_REP_DURATION))
+        return(0);
+    len = strlen((const char *) value->u.str);
+    return(evalSteps(ev, node, len / XP3_BYTES_PER_STEP));
+}
+
 /* Cast an untyped value for an operator, recording a failure. Takes
  * over the reference to value. */
 static xp3Atomic *
@@ -1550,10 +1632,18 @@ castUntyped(xp3Eval *ev, xp3Atomic *value, xp3TypeId type,
     xp3Atomic *result;
     xp3ErrCode err;
 
+    if (castSteps(ev, node, value, type) < 0) {
+        xp3AtomicUnref(value);
+        return(NULL);
+    }
     err = xp3CastAtomic(value, type, &result);
     if (err == XP3_ERR_FORG0001)
         evalError(ev, err, node, "the untyped value \"%.40s\" is not a "
                   "valid xs:%s", (const char *) value->u.str,
+                  typeName(type));
+    else if ((err == XP3_ERR_FODT0001) || (err == XP3_ERR_FODT0002))
+        evalError(ev, err, node, "the untyped value \"%.40s\" is out of "
+                  "the range of xs:%s", (const char *) value->u.str,
                   typeName(type));
     else if (err == XP3_ERR_UNSUPPORTED)
         evalError(ev, err, node, "casting to xs:%s is not implemented "
@@ -1597,8 +1687,8 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
         xp3AtomicUnref(right);
         return(NULL);
     }
-
-    err = xp3Arithmetic((xp3AstOp) node->op, left, right, &result);
+    err = xp3Arithmetic((xp3AstOp) node->op, left, right, &ev->clock,
+                        &result);
     switch (err) {
         case XP3_ERR_OK:
             break;
@@ -1616,6 +1706,22 @@ evalArithmetic(xp3Eval *ev, const xp3AstNode *node) {
         case XP3_ERR_FOCA0002:
             evalError(ev, err, node, "the quotient of idiv is too large "
                       "for xs:integer");
+            break;
+        case XP3_ERR_FOCA0005:
+            evalError(ev, err, node, "%s of a duration by NaN", name);
+            break;
+        case XP3_ERR_FODT0001:
+            evalError(ev, err, node, "the result of %s is beyond the "
+                      "years -2147483647 to 2147483647", name);
+            break;
+        case XP3_ERR_FODT0002:
+            evalError(ev, err, node, "the result of %s is too large for "
+                      "a duration", name);
+            break;
+        case XP3_ERR_NEEDS_CONTEXT:
+            evalError(ev, err, node, "subtracting xs:%s values without a "
+                      "timezone needs the implicit timezone",
+                      typeName(left->type));
             break;
         default:
             evalNoMemory(ev);
@@ -1681,6 +1787,10 @@ compareError(xp3Eval *ev, xp3ErrCode err, const xp3AstNode *node,
         evalError(ev, err, node, "xs:%s and xs:%s can't be compared with "
                   "%s", typeName(left->type), typeName(right->type),
                   operatorName(node->op));
+    else if (err == XP3_ERR_NEEDS_CONTEXT)
+        evalError(ev, err, node, "comparing xs:%s values without a "
+                  "timezone needs the implicit timezone",
+                  typeName(left->type));
     else
         evalNoMemory(ev);
 }
@@ -1724,7 +1834,7 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
         return(NULL);
     }
     err = xp3CompareAtomics((xp3AstOp) node->op, left, right, ev->level,
-                            &result);
+                            &ev->clock, &result);
     if (err != XP3_ERR_OK)
         compareError(ev, err, node, left, right);
     xp3AtomicUnref(left);
@@ -1735,16 +1845,22 @@ evalValueComparison(xp3Eval *ev, const xp3AstNode *node) {
 /*
  * The type an untyped value is cast to when compared with another
  * value in a general comparison (XPath 3.1, 3.7.2): xs:double for
- * numbers, xs:string for untyped values, otherwise the primitive type
- * of the other value, so xs:anyURI for xs:anyURI, which collapses
- * whitespace.
+ * numbers, xs:string for untyped values, the dynamic type of a date,
+ * time or duration, so that an untyped value compared with an
+ * xs:yearMonthDuration becomes one and can be ordered, and otherwise
+ * the primitive type of the other value, so xs:anyURI for xs:anyURI,
+ * which collapses whitespace.
  */
 static xp3TypeId
 generalTarget(xp3TypeId other) {
+    xp3Representation rep = xp3TypeRepresentation(other);
+
     if (xp3TypeIsNumeric(other))
         return(XP3_TYPE_DOUBLE);
     if (other == XP3_TYPE_UNTYPED_ATOMIC)
         return(XP3_TYPE_STRING);
+    if ((rep == XP3_REP_DURATION) || (rep == XP3_REP_DATE_TIME))
+        return(other);
     return(xp3TypePrimitive(other));
 }
 
@@ -1769,7 +1885,7 @@ comparePair(xp3Eval *ev, const xp3AstNode *node, xp3Atomic *left,
     if ((left != NULL) && (right != NULL) &&
         (compareSteps(ev, node, left, right) == 0)) {
         err = xp3CompareAtomics((xp3AstOp) node->op, left, right,
-                                ev->level, &result);
+                                ev->level, &ev->clock, &result);
         if (err != XP3_ERR_OK) {
             compareError(ev, err, node, left, right);
             result = -1;
@@ -2409,11 +2525,17 @@ evalCast(xp3Eval *ev, const xp3AstNode *node) {
     }
     xp3ValueUnref(value);
 
+    if (castSteps(ev, node, item.u.atomic, (xp3TypeId) target->op) < 0) {
+        xp3ItemUnref(item);
+        return(NULL);
+    }
     builderInit(ev, &builder);
     err = castToTarget(item.u.atomic, target->op, &builder);
     if (castable && ((err == XP3_ERR_OK) || (err == XP3_ERR_FORG0001) ||
                      (err == XP3_ERR_XPTY0004) || (err == XP3_ERR_FOCA0001) ||
-                     (err == XP3_ERR_FOCA0002) || (err == XP3_ERR_FOCA0003))) {
+                     (err == XP3_ERR_FOCA0002) || (err == XP3_ERR_FOCA0003) ||
+                     (err == XP3_ERR_FODT0001) ||
+                     (err == XP3_ERR_FODT0002))) {
         xp3SeqBuilderClear(&builder);
         xp3ItemUnref(item);
         return(evalBoolean(ev, err == XP3_ERR_OK));
@@ -2443,6 +2565,15 @@ evalCast(xp3Eval *ev, const xp3AstNode *node) {
             break;
         case XP3_ERR_FOCA0002:
             evalError(ev, err, node, "NaN and infinity can't be cast to %s",
+                      displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_FODT0001:
+            evalError(ev, err, node, "the year is beyond the range of %s, "
+                      "-2147483647 to 2147483647",
+                      displayName(target, name, sizeof(name)));
+            break;
+        case XP3_ERR_FODT0002:
+            evalError(ev, err, node, "the duration is too long for %s",
                       displayName(target, name, sizeof(name)));
             break;
         case XP3_ERR_UNSUPPORTED:
@@ -3193,6 +3324,18 @@ xp3FuncLevel(xp3FuncCall *call) {
 }
 
 /**
+ * Get the clock of the evaluation, for the implicit timezone. While
+ * folding it isn't available, and asking it fails with NEEDS_CONTEXT.
+ *
+ * @param call  the call
+ * @returns the clock
+ */
+xp3Clock *
+xp3FuncClock(xp3FuncCall *call) {
+    return(&call->ev->clock);
+}
+
+/**
  * Start building a sequence with the limits of the evaluation.
  *
  * @param call     the call
@@ -3574,6 +3717,14 @@ evalSetup(xp3Eval *ev, const xp3Expr *expr, const xp3DynamicContext *ctx) {
     ev->maxOperations = (ctx != NULL) ? ctx->maxOperations : 0;
     ev->userData = (ctx != NULL) ? ctx->userData : NULL;
     ev->level = expr->level;
+    ev->clock.available = 1;
+    if (ctx != NULL) {
+        ev->clock.source = ctx->clockSource;
+        ev->clock.hasNow = ctx->hasCurrentDateTime;
+        ev->clock.now = ctx->currentDateTime;
+        ev->clock.hasTimezone = ctx->hasImplicitTimezone;
+        ev->clock.timezone = ctx->implicitTimezone;
+    }
     if ((ctx != NULL) && (ctx->contextNode != NULL)) {
         /* Mapped now, not when it was set: text may have been added
          * before it or removed since, which moves its run's node */
@@ -3736,7 +3887,9 @@ xp3EvaluateBoolean(const xp3Expr *expr, xp3DynamicContext *ctx,
 
 /**
  * Evaluate a subexpression on its own, as constant folding does: no
- * focus, no dynamic context, and a budget of steps and items. The
+ * focus, no dynamic context, and a budget of steps and items. Without
+ * a dynamic context there is no implicit timezone and no clock, so
+ * whatever needs them fails with NEEDS_CONTEXT and isn't folded. The
  * subexpression may bind variables of its own, which need slots: the
  * caller lends an array of them, all NULL, and gets it back so.
  *
@@ -3943,8 +4096,7 @@ xp3NewBooleanSequence(const int *values, size_t count) {
  * xs:decimal or xs:untypedAtomic, which the other constructors can't
  * make: each lexical form is cast to the type as from xs:string
  * (F&O 3.1, 19.2), so whitespace is handled as the type's facets say.
- * Casting to the date, time and duration types and to xs:QName is not
- * implemented yet and raises UNSUPPORTED.
+ * Casting to xs:QName is not implemented yet and raises UNSUPPORTED.
  *
  * @param type      the type of all values, not xs:anyAtomicType or
  *                  xs:NOTATION, which are abstract

@@ -1036,16 +1036,57 @@ decimalIsSmallNatural(const xp3Decimal *dec) {
            (v < ((int64_t) 1 << 31)));
 }
 
-/* Division at the scale max(18, sa - sb + 18), half down */
+/*
+ * Division rounded by mode to scale digits after the point, for b not
+ * zero. a / b = (A / B) * 10^(b->scale - a->scale), so the coefficient
+ * at the target scale is A * 10^e / B with
+ * e = scale + b->scale - a->scale; for a negative e, the divisor is
+ * shifted by -e instead.
+ */
+static xp3ErrCode
+decimalDivAt(const xp3Decimal *a, const xp3Decimal *b, long scale,
+             xp3RoundingMode mode, xp3Decimal **res) {
+    long e = scale + b->scale - a->scale;
+    size_t shift;
+    uint32_t *shifted;
+    size_t count;
+    xp3ErrCode ret;
+
+    if (e >= 0) {
+        shift = (size_t) e;
+        if (magDigits(a->limbs, a->count) + shift >
+            3 * XP3_DECIMAL_MAX_DIGITS)
+            return(XP3_ERR_LIMIT);
+        shifted = limbsAlloc(a->count + shift / XP3_BASE_DIGITS + 1);
+        if (shifted == NULL)
+            return(XP3_ERR_NO_MEMORY);
+        count = magShift10(a->limbs, a->count, shift, shifted);
+        ret = decimalQuotient(shifted, count, b->limbs, b->count,
+                              a->negative != b->negative, scale, mode, res);
+    } else {
+        shift = (size_t) -e;
+        shifted = limbsAlloc(b->count + shift / XP3_BASE_DIGITS + 1);
+        if (shifted == NULL)
+            return(XP3_ERR_NO_MEMORY);
+        count = magShift10(b->limbs, b->count, shift, shifted);
+        ret = decimalQuotient(a->limbs, a->count, shifted, count,
+                              a->negative != b->negative, scale, mode, res);
+    }
+    xmlFree(shifted);
+    return(ret);
+}
+
+/*
+ * Division at the scale max(18, sa - sb + 18), half down. Decimals are
+ * stored without trailing zeros after the point, so a->scale is
+ * max(sa, 0) and b->scale is at least sb, however the caller counted
+ * sa and sb, and the shift of decimalDivAt() is never negative: if
+ * sa > 0, e >= (sa - sb + 18) + sb - sa = 18; otherwise e >= 18 + 0.
+ */
 static xp3ErrCode
 decimalDivScaled(const xp3Decimal *a, long sa, const xp3Decimal *b, long sb,
                  xp3Decimal **res) {
     long scale;
-    long e;
-    uint32_t *num;
-    const uint32_t *n = a->limbs;
-    size_t nn = a->count;
-    xp3ErrCode ret;
 
     *res = NULL;
     if (b->count == 0)
@@ -1058,28 +1099,34 @@ decimalDivScaled(const xp3Decimal *a, long sa, const xp3Decimal *b, long sb,
         scale = XP3_DECIMAL_DIV_DIGITS;
     if (scale > XP3_DECIMAL_MAX_DIGITS)
         return(XP3_ERR_LIMIT);
+    return(decimalDivAt(a, b, scale, XP3_ROUND_HALF_DOWN, res));
+}
 
-    /*
-     * a / b = (A / B) * 10^(b->scale - a->scale), so the coefficient at
-     * the target scale is A * 10^e / B with
-     * e = scale + b->scale - a->scale. e is never negative, so only the
-     * dividend is ever shifted: decimals are stored without trailing
-     * zeros after the point, so a->scale is max(sa, 0) and b->scale is
-     * at least sb, however the caller counted sa and sb. If sa > 0,
-     * e >= (sa - sb + 18) + sb - sa = 18; otherwise e >= 18 + 0.
-     */
-    e = scale + b->scale - a->scale;
-    if (magDigits(n, nn) + (size_t) e > 3 * XP3_DECIMAL_MAX_DIGITS)
+/**
+ * Divide two decimals and round the quotient to a fixed number of
+ * digits after the point, without the trailing zeros. Dividing one
+ * duration by another uses it with 20 digits, half to even
+ * (doc/DESIGN.md 4.2), unlike the div operator on numbers.
+ *
+ * @param a          the dividend
+ * @param b          the divisor
+ * @param precision  digits after the point, 0 to XP3_DECIMAL_MAX_DIGITS
+ * @param mode       the rounding mode
+ * @param res        where to store the quotient
+ * @returns XP3_ERR_OK, XP3_ERR_FOAR0001 for division by zero,
+ *          XP3_ERR_LIMIT or XP3_ERR_NO_MEMORY
+ */
+xp3ErrCode
+xp3DecimalDivRound(const xp3Decimal *a, const xp3Decimal *b, int precision,
+                   xp3RoundingMode mode, xp3Decimal **res) {
+    *res = NULL;
+    if (b->count == 0)
+        return(XP3_ERR_FOAR0001);
+    if ((precision < 0) || (precision > XP3_DECIMAL_MAX_DIGITS))
         return(XP3_ERR_LIMIT);
-    num = limbsAlloc(nn + (size_t) e / XP3_BASE_DIGITS + 1);
-    if (num == NULL)
-        return(XP3_ERR_NO_MEMORY);
-    nn = magShift10(n, nn, (size_t) e, num);
-    ret = decimalQuotient(num, nn, b->limbs, b->count,
-                          a->negative != b->negative, scale,
-                          XP3_ROUND_HALF_DOWN, res);
-    xmlFree(num);
-    return(ret);
+    if (a->count == 0)
+        return(decimalMake(0, 0, NULL, 0, res));
+    return(decimalDivAt(a, b, precision, mode, res));
 }
 
 /**

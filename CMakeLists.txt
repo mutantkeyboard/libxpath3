@@ -26,6 +26,12 @@ include(CTest)
 
 find_package(LibXml2 2.9.0 REQUIRED)
 
+# MinGW's own stdio is C99-conforming, with %zu and %lld, unlike the
+# Microsoft runtime's; the format checks of xp3ErrorNew() rely on it.
+if(MINGW)
+    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1)
+endif()
+
 configure_file(
     include/libxpath3/xp3version.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/include/libxpath3/xp3version.h
@@ -36,6 +42,7 @@ set(XP3_SOURCES
     xp3ast.c
     xp3chars.c
     xp3context.c
+    xp3datetime.c
     xp3decimal.c
     xp3double.c
     xp3error.c
@@ -66,6 +73,28 @@ find_library(XP3_LIBM m)
 set(XP3_LIBM_LIBS "")
 if(XP3_LIBM)
     set(XP3_LIBM_LIBS ${XP3_LIBM})
+endif()
+
+# The system clock and the local offset (xp3datetime.c), each from the
+# first of these that exists; Windows has its own. Without
+# localtime_r() and gmtime_r() the local offset is UTC, because
+# localtime() shares its result between threads. Set for every target,
+# as the tests compile the sources too.
+include(CheckSymbolExists)
+set(CMAKE_REQUIRED_DEFINITIONS -D_POSIX_C_SOURCE=200809L)
+check_symbol_exists(clock_gettime "time.h" XP3_HAVE_CLOCK_GETTIME)
+check_symbol_exists(gettimeofday "sys/time.h" XP3_HAVE_GETTIMEOFDAY)
+check_symbol_exists(localtime_r "time.h" XP3_HAVE_LOCALTIME)
+check_symbol_exists(gmtime_r "time.h" XP3_HAVE_GMTIME_R)
+unset(CMAKE_REQUIRED_DEFINITIONS)
+if(XP3_HAVE_CLOCK_GETTIME)
+    add_compile_definitions(XP3_HAVE_CLOCK_GETTIME)
+endif()
+if(XP3_HAVE_GETTIMEOFDAY)
+    add_compile_definitions(XP3_HAVE_GETTIMEOFDAY)
+endif()
+if(XP3_HAVE_LOCALTIME AND XP3_HAVE_GMTIME_R)
+    add_compile_definitions(XP3_HAVE_LOCALTIME_R)
 endif()
 
 add_library(xpath3 ${XP3_SOURCES})
@@ -104,7 +133,7 @@ if(BUILD_TESTING)
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval
-            unicode regex)
+            unicode regex datetime)
         add_executable(test${name} test/test${name}.c test/testalloc.c
             test/testtap.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)

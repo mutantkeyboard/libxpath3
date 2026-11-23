@@ -34,6 +34,9 @@ typedef enum
     XP3_ERR_NO_MEMORY, /* not a W3C code: allocation failed */
     XP3_ERR_LIMIT,     /* not a W3C code: resource limit hit */
     XP3_ERR_UNSUPPORTED, /* not a W3C code: not implemented yet */
+    XP3_ERR_NEEDS_CONTEXT, /* not a W3C code: constant folding needs
+                            * the implicit timezone or the clock, which
+                            * only an evaluation has */
     XP3_ERR_XPST0003,  /* syntax error */
     XP3_ERR_XPST0008,  /* undeclared variable */
     XP3_ERR_XPST0010,  /* namespace axis not supported */
@@ -68,9 +71,13 @@ typedef enum
     XP3_ERR_FOCA0001,  /* value too large for xs:decimal */
     XP3_ERR_FOCA0002,  /* invalid value: NaN or INF to a decimal type */
     XP3_ERR_FOCA0003,  /* value too large for xs:integer */
+    XP3_ERR_FOCA0005,  /* NaN as a factor or divisor of a duration */
     XP3_ERR_FOCH0001,  /* code point not allowed in XML */
     XP3_ERR_FOCH0002,  /* unsupported collation */
     XP3_ERR_FOCH0003,  /* unsupported normalization form */
+    XP3_ERR_FODT0001,  /* overflow in date or time arithmetic */
+    XP3_ERR_FODT0002,  /* overflow in duration arithmetic */
+    XP3_ERR_FODT0003,  /* invalid timezone value */
     XP3_ERR_FOTY0013,  /* atomizing a function item */
     XP3_ERR_FOTY0014,  /* the string value of a function item */
     XP3_ERR_USER       /* raised by fn:error, QName stored in the object */
@@ -88,9 +95,16 @@ struct _xp3Error
                    * be freed */
 };
 
+/*
+ * On MinGW, GCC checks the printf archetype against the Microsoft
+ * runtime, which lacks %zu. The build defines __USE_MINGW_ANSI_STDIO,
+ * so the formatting functions are C99 ones, which gnu_printf checks.
+ */
 xp3Error *xp3ErrorNew(xp3ErrCode code, int line, int column,
                       const char *format, ...)
-#ifdef __GNUC__
+#if defined(__MINGW32__)
+__attribute__((format(gnu_printf, 4, 5)))
+#elif defined(__GNUC__)
 __attribute__((format(printf, 4, 5)))
 #endif
 ;

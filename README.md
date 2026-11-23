@@ -5,13 +5,14 @@
 
 libxpath3 is an XPath 3.1 engine in C for documents parsed with [libxml2](https://gitlab.gnome.org/GNOME/libxml2). It evaluates expressions directly on libxml2's tree, so existing libxml2 code can use it without converting documents.
 
-> **Early release.** libxpath3 evaluates paths, operators and the core of the function library: the string, sequence, numeric and node functions, and functions the application registers. Regular expressions, dates and times, and maps, arrays and higher-order functions are not implemented yet. The API may still change before 1.0.
+> **Early release.** libxpath3 evaluates paths, operators and the core of the function library: the string, regular expression, sequence, numeric and node functions, and functions the application registers. Dates, times and durations can be cast, compared and used in arithmetic, but their functions, and maps, arrays and higher-order functions, are not implemented yet. The API may still change before 1.0.
 
 ## Features and scope
 
 - **XPath 3.1 on libxml2's tree**, using only libxml2's public API.
 - **XPath 2.0 and 3.0 too.** XPath 3.1 is backwards compatible, so 2.0 and 3.0 expressions work with the same API. An option restricts the language to a specific version.
 - **Exact arithmetic.** `xs:decimal` and `xs:integer` have arbitrary precision.
+- **Dates, times and durations** as XML Schema 1.1 defines them: all nine date and time types and the three duration types, years from -2,147,483,647 to 2,147,483,647 with a year 0, and seconds to the nanosecond.
 - **Extension functions in C**, registered with a signature as the specification writes them, such as `u:f($a as xs:string?) as xs:decimal`. Arguments and results are converted and checked like those of the built-in functions.
 - **Safe for untrusted input.** Limits on recursion, operation count and sizes, and no file or network access unless the application allows it.
 - **A foundation for XSLT 2.0 and 3.0** in libxslt, in coordination with the libxslt maintainer.
@@ -81,6 +82,15 @@ main(void) {
 
 This prints `double: 7.5`: attributes are untyped, so the multiplication casts them to `xs:double`.
 
+The dynamic context also gives the current date and time and the implicit timezone, which comparisons and subtraction use for dates and times without a timezone. By default, an evaluation that needs them reads the system clock once and takes the local offset at that moment; both then stay the same for the whole evaluation. An application can set either, for example to get the same results on every machine:
+
+```c
+xp3SetCurrentDateTime(dctx, BAD_CAST "2026-11-19T12:00:00+01:00");  /* NULL: the clock again */
+xp3SetImplicitTimezone(dctx, 60);           /* minutes; XP3_TIMEZONE_LOCAL: the default again */
+```
+
+Without `xp3SetImplicitTimezone()`, the timezone of a current dateTime that was set is the implicit timezone.
+
 ## Conformance
 
 Conformance is measured against the W3C [QT3 test suite](https://github.com/w3c/qt3tests), and the pass rate is published here with each release. Fuzzers with allocation-failure injection run in the same style as libxml2's.
@@ -97,13 +107,13 @@ The gate is compile-only mode: each expression is compiled with the namespaces a
 
 The known failure, `fn-serialize/serialize-xml-012`, uses the namespace axis without declaring that it needs it. Without the namespace axis, the specification requires the static error XPST0010, which libxpath3 raises; the test expects the error of serializing a namespace node instead. `qt3/known-failures-*.txt` lists it with that explanation.
 
-Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `||`, the simple map `!`, arrows to named functions, `cast`, `castable`, `instance of` and `treat` are evaluated. Function calls apply the function conversion rules, and the first built-in functions are implemented: `true`, `false`, `not`, `boolean`, `exists`, `empty`, `count`, `sum`, `avg`, `min`, `max`, `distinct-values`, `index-of`, `deep-equal`, `exactly-one`, `zero-or-one`, `one-or-more`, `string`, `data`, `number`, the string functions `concat`, `string-join`, `string-length`, `substring`, `substring-before`, `substring-after`, `contains`, `starts-with`, `ends-with`, `normalize-space`, `normalize-unicode` (NFC, NFD, NFKC and NFKD), `upper-case`, `lower-case`, `translate`, `compare`, `codepoint-equal`, `codepoints-to-string`, `string-to-codepoints`, `contains-token` and `tokenize` with one argument, with the Unicode codepoint and the HTML ASCII case-insensitive collations, while UCA collation URIs fall back to the codepoint collation, `default-collation`, the regular expression functions `matches`, `replace` and `tokenize` with a pattern, the URI functions `encode-for-uri`, `iri-to-uri` and `escape-html-uri`, the node functions `name`, `local-name`, `namespace-uri`, `node-name`, `lang`, `root`, `path`, `has-children`, `innermost`, `outermost`, `base-uri`, `document-uri` and `generate-id`, the namespace functions `in-scope-prefixes` and `namespace-uri-for-prefix`, `abs`, `ceiling`, `floor`, `round`, `round-half-to-even`, the `math:` functions `pi`, `exp`, `exp10`, `log`, `log10`, `pow`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan` and `atan2`, `position`, `last`, `head`, `tail`, `reverse`, `subsequence`, `remove`, `insert-before` and `error`; the others raise `UNSUPPORTED` when called. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit:
+Evaluation is under way: paths, predicates, `for`, `let`, `some`, `every`, `if`, the logical, comparison and arithmetic operators, ranges, `union`, `intersect`, `except`, `||`, the simple map `!`, arrows to named functions, `cast`, `castable`, `instance of` and `treat` are evaluated. Function calls apply the function conversion rules, and the first built-in functions are implemented: `true`, `false`, `not`, `boolean`, `exists`, `empty`, `count`, `sum`, `avg`, `min`, `max`, `distinct-values`, `index-of`, `deep-equal`, `exactly-one`, `zero-or-one`, `one-or-more`, `string`, `data`, `number`, the string functions `concat`, `string-join`, `string-length`, `substring`, `substring-before`, `substring-after`, `contains`, `starts-with`, `ends-with`, `normalize-space`, `normalize-unicode` (NFC, NFD, NFKC and NFKD), `upper-case`, `lower-case`, `translate`, `compare`, `codepoint-equal`, `codepoints-to-string`, `string-to-codepoints`, `contains-token` and `tokenize` with one argument, with the Unicode codepoint and the HTML ASCII case-insensitive collations, while UCA collation URIs fall back to the codepoint collation, `default-collation`, the regular expression functions `matches`, `replace` and `tokenize` with a pattern, the URI functions `encode-for-uri`, `iri-to-uri` and `escape-html-uri`, the node functions `name`, `local-name`, `namespace-uri`, `node-name`, `lang`, `root`, `path`, `has-children`, `innermost`, `outermost`, `base-uri`, `document-uri` and `generate-id`, the namespace functions `in-scope-prefixes` and `namespace-uri-for-prefix`, `abs`, `ceiling`, `floor`, `round`, `round-half-to-even`, the `math:` functions `pi`, `exp`, `exp10`, `log`, `log10`, `pow`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan` and `atan2`, `position`, `last`, `head`, `tail`, `reverse`, `subsequence`, `remove`, `insert-before` and `error`; the others raise `UNSUPPORTED` when called. `cast` and `castable` cover every built-in atomic type except strings to `xs:QName` and `xs:NOTATION`. The date, time and duration types are cast, compared with the value and general comparisons, and handled by `distinct-values`, `index-of`, `deep-equal`, `min` and `max`; fractional seconds beyond nanoseconds are truncated, and a timezone beyond ±14:00 is an invalid value, as XML Schema 1.1 says (`doc/DESIGN.md` 4.2). The arithmetic operators take them as F&O 3.1, 8.4 and 9.7 define, and `sum` and `avg` add up durations: adding months pins the day to the end of a shorter month, a dayTimeDuration multiplied or divided by a number is truncated to the nanosecond, a yearMonthDuration rounded to the month, a duration divided by a duration gives an `xs:decimal` with 20 digits after the point, and a result beyond the limits raises `FODT0001` or `FODT0002` instead of wrapping around (`doc/DESIGN.md` 4.2). The functions on them raise `UNSUPPORTED`. `qt3run -e` evaluates each test and checks its assertions; tests that need anything not implemented yet are "not judged" rather than failed. Against the same commit:
 
 | Spec | Passed | Failed | Not judged |
 |---|---|---|---|
-| XPath 2.0 | 10,403 | 4 | 4,886 |
-| XPath 3.0 | 12,270 | 5 (1 known) | 7,098 |
-| XPath 3.1 | 12,651 | 59 (1 known) | 9,321 |
+| XPath 2.0 | 13,545 | 4 | 1,744 |
+| XPath 3.0 | 15,434 | 5 (1 known) | 3,934 |
+| XPath 3.1 | 15,815 | 59 (1 known) | 6,157 |
 
 The failures are the known one above, two ranges of millions of integers beyond 64 bits, which hit the sequence length limit (`doc/DESIGN.md` 4.1), and at 2.0 and 3.0 `fn-error/K-ErrorFunc-4` and `fn-string-join/fn-string-join-27`: `fn:error(())` raises FOER0000 as F&O 3.1 defines it, while F&O 1.0 and 3.0 required a QName, and `fn:string-join` takes any atomic values as in F&O 3.1, while F&O 1.0 and 3.0 took strings only, so the tests expect XPTY0004 there; the 3.1 signatures apply at every level (`doc/DESIGN.md` 6.3). At 3.1, the other 56 failures use UCA collations with tailorings such as `strength=primary` or `numeric=yes`: without a UCA implementation they fall back to the codepoint collation, as F&O 3.1, 5.3.3 allows (`doc/DESIGN.md` 5), so the results differ from the expected ones. CI runs this as a report, which doesn't fail the pipeline yet. It also evaluates every test a second time without constant folding and path rewrites (`qt3run -e -c`), and any test whose outcome differs fails the pipeline.
 
@@ -224,7 +234,7 @@ meson test -C build
 
 ### Windows
 
-Windows builds are not covered by CI yet.
+Two CI jobs build and test on Windows, by themselves on `test` and `main` and by hand on other branches: `mingw` in MSYS2 UCRT64 and `msvc` with Visual Studio 2019, both as shown below.
 
 **MSYS2 (MinGW).** In the MSYS2 UCRT64 shell:
 

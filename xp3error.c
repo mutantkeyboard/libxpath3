@@ -37,6 +37,7 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_NO_MEMORY] = "NO_MEMORY",
     [XP3_ERR_LIMIT]     = "LIMIT",
     [XP3_ERR_UNSUPPORTED] = "UNSUPPORTED",
+    [XP3_ERR_NEEDS_CONTEXT] = "NEEDS_CONTEXT",
     [XP3_ERR_XPST0003]  = "XPST0003",
     [XP3_ERR_XPST0008]  = "XPST0008",
     [XP3_ERR_XPST0010]  = "XPST0010",
@@ -71,9 +72,13 @@ static const char *const xp3ErrCodeNames[] = {
     [XP3_ERR_FOCA0001]  = "FOCA0001",
     [XP3_ERR_FOCA0002]  = "FOCA0002",
     [XP3_ERR_FOCA0003]  = "FOCA0003",
+    [XP3_ERR_FOCA0005]  = "FOCA0005",
     [XP3_ERR_FOCH0001]  = "FOCH0001",
     [XP3_ERR_FOCH0002]  = "FOCH0002",
     [XP3_ERR_FOCH0003]  = "FOCH0003",
+    [XP3_ERR_FODT0001]  = "FODT0001",
+    [XP3_ERR_FODT0002]  = "FODT0002",
+    [XP3_ERR_FODT0003]  = "FODT0003",
     [XP3_ERR_FOTY0013]  = "FOTY0013",
     [XP3_ERR_FOTY0014]  = "FOTY0014",
     [XP3_ERR_USER]      = NULL      /* the QName is stored in the object */
@@ -278,6 +283,7 @@ xp3ErrorNamespace(const xp3Error *error) {
         case XP3_ERR_NO_MEMORY:
         case XP3_ERR_LIMIT:
         case XP3_ERR_UNSUPPORTED:
+        case XP3_ERR_NEEDS_CONTEXT:
             return(NULL);
         default:
             return(BAD_CAST XP3_ERR_NS);
