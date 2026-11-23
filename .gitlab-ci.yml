@@ -3,7 +3,7 @@
 # All jobs use the public Fedora image, so no project-specific image is needed.
 # glibc-langpack-de provides a locale with a decimal comma, so testvalue checks
 # that number formatting ignores the locale.
-# The mingw job builds on Windows, on GNOME's Windows runners.
+# The mingw and msvc jobs build on Windows, on GNOME's Windows runners.
 
 stages:
   - build
@@ -249,6 +249,29 @@ mingw:
       - build/meson-logs/
     reports:
       junit: build/meson-logs/testlog.junit.xml
+
+# Windows with MSVC: Visual Studio 2019 and CMake, warnings as errors,
+# against a libxml2 release built with the same compiler
+# (.gitlab-ci/test-msvc.ps1). The libxml2 build is cached per version.
+# It runs when mingw does.
+msvc:
+  stage: build
+  needs: []
+  tags:
+    - win32-ps
+  variables:
+    LIBXML2_VERSION: v2.15.4
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"
+    - when: manual
+      allow_failure: true
+  before_script: []
+  script:
+    - .gitlab-ci/test-msvc.ps1
+  cache:
+    key: "msvc-libxml2-$LIBXML2_VERSION"
+    paths:
+      - libxml2-install/
 
 docs:
   stage: docs

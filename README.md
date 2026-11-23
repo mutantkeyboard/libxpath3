@@ -234,7 +234,7 @@ meson test -C build
 
 ### Windows
 
-The `mingw` CI job builds and tests in MSYS2 UCRT64 as shown below, by itself on `test` and `main` and by hand on other branches. MSVC builds are not covered by CI yet.
+Two CI jobs build and test on Windows, by themselves on `test` and `main` and by hand on other branches: `mingw` in MSYS2 UCRT64 and `msvc` with Visual Studio 2019, both as shown below.
 
 **MSYS2 (MinGW).** In the MSYS2 UCRT64 shell:
 
