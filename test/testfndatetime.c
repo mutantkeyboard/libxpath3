@@ -14,6 +14,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -21,6 +22,8 @@
 #include <libxml/xmlmemory.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3datetime.h"
+#include "private/xp3eval.h"
 #include "private/xp3static.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
@@ -564,6 +567,13 @@ testFolding(void) {
           "nor adjust-dateTime-to-timezone#1");
     check(isFolded("adjust-time-to-timezone(xs:time('00:00:00'))") == 0,
           "nor adjust-time-to-timezone#1");
+    check(isFolded("current-date()") == 0, "current-date() is not folded");
+    check(isFolded("year-from-date(current-date())") == 0,
+          "nor anything that uses it");
+    check(isFolded("current-dateTime()") == 0, "nor current-dateTime()");
+    check(isFolded("current-time()") == 0, "nor current-time()");
+    check(isFolded("implicit-timezone()") == 0,
+          "nor implicit-timezone()");
     check(isFolded("adjust-date-to-timezone(xs:date('2026-01-01'), "
                    "xs:dayTimeDuration('PT15H'))") == 0,
           "an error stays for the evaluation");
@@ -583,6 +593,197 @@ testFolding(void) {
     xp3FreeDynamicContext(ctx);
 }
 
+/*
+ * The clock (F&O 3.1, 15.3 to 15.6)
+ */
+
+static int clockReads;
+
+/* 2026-11-19T10:25:47.050651Z, at +05:30 */
+static void
+countingClock(xp3ClockReading *reading) {
+    clockReads++;
+    reading->seconds = INT64_C(1795083947);
+    reading->nanoseconds = 50651000;
+    reading->offset = 330;
+}
+
+#define XP3_CLOCK_CALLS \
+    "current-dateTime(), current-date(), current-time(), " \
+    "implicit-timezone()"
+
+/* Evaluate an expression and count the clock readings */
+static int
+readingsOf(xp3DynamicContext *ctx, const char *expr, const char *expected) {
+    clockReads = 0;
+    checkEval(NULL, ctx, expr, expected);
+    return(clockReads);
+}
+
+static void
+testSetClock(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (ctx == NULL) {
+        check(0, "context created");
+        return;
+    }
+    ctx->clockSource = countingClock;
+
+    /* The clock read, in its local offset */
+    check(readingsOf(ctx, XP3_CLOCK_CALLS ", " XP3_CLOCK_CALLS,
+                     "dateTimeStamp:2026-11-19T15:55:47.050651+05:30 "
+                     "date:2026-11-19+05:30 time:15:55:47.050651+05:30 "
+                     "dayTimeDuration:PT5H30M "
+                     "dateTimeStamp:2026-11-19T15:55:47.050651+05:30 "
+                     "date:2026-11-19+05:30 time:15:55:47.050651+05:30 "
+                     "dayTimeDuration:PT5H30M") == 1,
+          "the clock is read once for every call");
+    check(readingsOf(ctx, "current-dateTime() instance of "
+                     "xs:dateTimeStamp", "boolean:true") == 1,
+          "the current dateTime is an xs:dateTimeStamp");
+    check(readingsOf(ctx, "year-from-date(xs:date('2026-01-01'))",
+                     "integer:2026") == 0,
+          "other functions don't read the clock");
+
+    /* An implicit timezone set moves the clock to it */
+    xp3SetImplicitTimezone(ctx, 0);
+    check(readingsOf(ctx, XP3_CLOCK_CALLS,
+                     "dateTimeStamp:2026-11-19T10:25:47.050651Z "
+                     "date:2026-11-19Z time:10:25:47.050651Z "
+                     "dayTimeDuration:PT0S") == 1,
+          "the clock in the implicit timezone set");
+    xp3SetImplicitTimezone(ctx, -840);
+    checkEval(NULL, ctx, XP3_CLOCK_CALLS,
+              "dateTimeStamp:2026-11-18T20:25:47.050651-14:00 "
+              "date:2026-11-18-14:00 time:20:25:47.050651-14:00 "
+              "dayTimeDuration:-PT14H");
+    check(readingsOf(ctx, "implicit-timezone()",
+                     "dayTimeDuration:-PT14H") == 0,
+          "the implicit timezone set doesn't read the clock");
+
+    /* Back to the local offset */
+    xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL);
+    checkEval(NULL, ctx, "implicit-timezone()", "dayTimeDuration:PT5H30M");
+
+    /* A current dateTime set, alone and with an implicit timezone */
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST
+                                "2026-11-24T10:20:30.123456789+01:00") == 0,
+          "a current dateTime is set");
+    check(readingsOf(ctx, XP3_CLOCK_CALLS,
+                     "dateTimeStamp:2026-11-24T10:20:30.123456789+01:00 "
+                     "date:2026-11-24+01:00 time:10:20:30.123456789+01:00 "
+                     "dayTimeDuration:PT1H") == 0,
+          "exactly the dateTime set, without reading the clock");
+    xp3SetImplicitTimezone(ctx, -300);
+    checkEval(NULL, ctx, XP3_CLOCK_CALLS,
+              "dateTimeStamp:2026-11-24T04:20:30.123456789-05:00 "
+              "date:2026-11-24-05:00 time:04:20:30.123456789-05:00 "
+              "dayTimeDuration:-PT5H");
+    checkEval(NULL, ctx, "current-dateTime() eq "
+              "xs:dateTime('2026-11-24T10:20:30.123456789+01:00')",
+              "boolean:true");
+    xp3SetCurrentDateTime(ctx, BAD_CAST "2026-01-01T02:00:00+01:00");
+    xp3SetImplicitTimezone(ctx, -840);
+    checkEval(NULL, ctx, "current-date(), current-time()",
+              "date:2025-12-31-14:00 time:11:00:00-14:00");
+    xp3SetCurrentDateTime(ctx, BAD_CAST "-0001-12-31T23:00:00Z");
+    xp3SetImplicitTimezone(ctx, 60);
+    checkEval(NULL, ctx, "current-dateTime(), year-from-date(current-date())",
+              "dateTimeStamp:0000-01-01T00:00:00+01:00 integer:0");
+    xp3SetCurrentDateTime(ctx, BAD_CAST "2147483647-12-31T23:00:00Z");
+    xp3SetImplicitTimezone(ctx, 840);
+    checkEval(NULL, ctx, "current-dateTime()", "error:FODT0001");
+    checkEval(NULL, ctx, "implicit-timezone()", "dayTimeDuration:PT14H");
+    xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL);
+    checkEval(NULL, ctx, XP3_CLOCK_CALLS,
+              "dateTimeStamp:2147483647-12-31T23:00:00Z "
+              "date:2147483647-12-31Z time:23:00:00Z dayTimeDuration:PT0S");
+
+    /* The functions that need the implicit timezone use the same */
+    xp3SetCurrentDateTime(ctx, NULL);
+    check(readingsOf(ctx, "adjust-time-to-timezone(xs:time('00:00:00')), "
+                     "current-time()",
+                     "time:00:00:00+05:30 time:15:55:47.050651+05:30") == 1,
+          "adjust-time-to-timezone#1 and the clock share one reading");
+    xp3FreeDynamicContext(ctx);
+}
+
+/* The number of digits after the point of the seconds of a lexical
+ * dateTime with a timezone, such as "...T10:20:30.123456+01:00" */
+static int
+fractionDigits(const char *lexical) {
+    const char *point = strchr(lexical, '.');
+    int digits = 0;
+
+    if (point == NULL)
+        return(0);
+    point++;
+    while ((*point >= '0') && (*point <= '9')) {
+        digits++;
+        point++;
+    }
+    return(digits);
+}
+
+static void
+testSystemClock(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3ClockReading reading;
+    char first[128];
+    char next[128];
+    char expected[64];
+    const char *minus = "";
+    int offset;
+    int i;
+
+    if (ctx == NULL) {
+        check(0, "context created");
+        return;
+    }
+    checkEval(NULL, ctx, "let $now := current-dateTime() return "
+              "(for $i in 1 to 100000 return $i)[last()] ! "
+              "(current-dateTime() eq $now and "
+              "current-date() eq xs:date($now) and "
+              "current-time() eq xs:time($now))", "boolean:true");
+    checkEval(NULL, ctx, "timezone-from-dateTime(current-dateTime()) eq "
+              "implicit-timezone()", "boolean:true");
+
+    /* Microseconds, which change between evaluations */
+    run(NULL, ctx, "string(current-dateTime())", first, sizeof(first));
+    check(fractionDigits(first) <= 6, "no more than microseconds");
+    for (i = 0; i < 1000000; i++) {
+        run(NULL, ctx, "string(current-dateTime())", next, sizeof(next));
+        if (strcmp(first, next) != 0)
+            break;
+    }
+    check(i < 1000000, "two evaluations get different dateTimes");
+
+    /* XP3_TIMEZONE_LOCAL goes back to the local offset */
+    xp3SetImplicitTimezone(ctx, 840);
+    checkEval(NULL, ctx, "implicit-timezone()", "dayTimeDuration:PT14H");
+    xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL);
+    xp3SystemClock(&reading);
+    offset = reading.offset;
+    if (offset < 0) {
+        minus = "-";
+        offset = -offset;
+    }
+    if (offset == 0)
+        snprintf(expected, sizeof(expected), "dayTimeDuration:PT0S");
+    else if (offset % 60 == 0)
+        snprintf(expected, sizeof(expected), "dayTimeDuration:%sPT%dH",
+                 minus, offset / 60);
+    else if (offset < 60)
+        snprintf(expected, sizeof(expected), "dayTimeDuration:%sPT%dM",
+                 minus, offset);
+    else
+        snprintf(expected, sizeof(expected), "dayTimeDuration:%sPT%dH%dM",
+                 minus, offset / 60, offset % 60);
+    checkEval(NULL, ctx, "implicit-timezone()", expected);
+    xp3FreeDynamicContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -592,6 +793,8 @@ main(void) {
     XP3_TEST_RUN(testDateTimeConstructor);
     XP3_TEST_RUN(testAdjustToTimezone);
     XP3_TEST_RUN(testFolding);
+    XP3_TEST_RUN(testSetClock);
+    XP3_TEST_RUN(testSystemClock);
 
     return(xp3TestDone());
 }

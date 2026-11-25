@@ -1546,6 +1546,20 @@ readingToDateTime(const xp3ClockReading *reading, xp3DateTime *value) {
     value->timezone = (int16_t) reading->offset;
 }
 
+/* Read the clock of an evaluation, the system clock or the source of a
+ * test, as its current dateTime in the local offset */
+static void
+readClock(xp3Clock *clock) {
+    xp3ClockReading reading;
+
+    if (clock->source != NULL)
+        clock->source(&reading);
+    else
+        xp3SystemClock(&reading);
+    readingToDateTime(&reading, &clock->now);
+    clock->hasNow = 1;
+}
+
 /**
  * Get the implicit timezone of an evaluation: the one the dynamic
  * context set, else the timezone of the current dateTime it set, else
@@ -1562,19 +1576,51 @@ xp3ClockTimezone(xp3Clock *clock, int *minutes) {
     if ((clock == NULL) || !clock->available)
         return(XP3_ERR_NEEDS_CONTEXT);
     if (!clock->hasTimezone) {
-        if (!clock->hasNow) {
-            xp3ClockReading reading;
-
-            if (clock->source != NULL)
-                clock->source(&reading);
-            else
-                xp3SystemClock(&reading);
-            readingToDateTime(&reading, &clock->now);
-            clock->hasNow = 1;
-        }
+        if (!clock->hasNow)
+            readClock(clock);
         clock->timezone = clock->now.timezone;
         clock->hasTimezone = 1;
     }
     *minutes = clock->timezone;
+    return(XP3_ERR_OK);
+}
+
+/**
+ * Get the current dateTime of an evaluation (F&O 3.1, 15.3): the one
+ * the dynamic context set, else the clock, read once, in the implicit
+ * timezone. The notes of 15.3 require that timezone, so a dateTime set
+ * together with a different implicit timezone is moved to it, as the
+ * same instant.
+ *
+ * @param clock  the clock of the evaluation, or NULL for none
+ * @param now    set to the current dateTime, with a timezone
+ * @returns XP3_ERR_OK, XP3_ERR_NEEDS_CONTEXT without a clock or while
+ *          folding, or XP3_ERR_FODT0001 if moving a dateTime set to the
+ *          implicit timezone goes beyond XP3_YEAR_MAX either way
+ */
+xp3ErrCode
+xp3ClockNow(xp3Clock *clock, xp3DateTime *now) {
+    xp3Duration shift;
+    xp3ErrCode err;
+    int timezone;
+
+    memset(now, 0, sizeof(*now));
+    err = xp3ClockTimezone(clock, &timezone);
+    if (err != XP3_ERR_OK)
+        return(err);
+    if (!clock->hasNow)
+        readClock(clock);
+    if (clock->now.timezone == timezone) {
+        *now = clock->now;
+        return(XP3_ERR_OK);
+    }
+    shift.months = 0;
+    shift.seconds = (int64_t) (timezone - clock->now.timezone) * 60;
+    shift.nanoseconds = 0;
+    err = xp3DateTimeAddDuration(XP3_TYPE_DATE_TIME, &clock->now, &shift,
+                                 now);
+    if (err != XP3_ERR_OK)
+        return(err);
+    now->timezone = (int16_t) timezone;
     return(XP3_ERR_OK);
 }

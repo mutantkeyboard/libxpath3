@@ -607,4 +607,16 @@ xp3FnAdjustDateToTimezone(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnAdjustTimeToTimezone(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnCurrentDateTime(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCurrentDate(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCurrentTime(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnImplicitTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

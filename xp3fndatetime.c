@@ -607,3 +607,129 @@ xp3FnAdjustTimeToTimezone(xp3FuncCall *call, xp3Value **args, int count) {
     return(adjustToTimezone(call, "fn:adjust-time-to-timezone",
                             XP3_TYPE_TIME, args, count));
 }
+
+/*
+ * The clock (F&O 3.1, 15.3 to 15.6). The evaluation reads it at most
+ * once, or takes the values the dynamic context set, so every call in
+ * one evaluation gives the same values (doc/DESIGN.md 5). Folding has
+ * no clock: these functions are context-dependent and never folded.
+ */
+
+/* The current dateTime of the evaluation, in the implicit timezone.
+ * Returns 0, or -1 after recording an error. */
+static int
+currentDateTime(xp3FuncCall *call, const char *name, xp3DateTime *now) {
+    xp3ErrCode err = xp3ClockNow(xp3FuncClock(call), now);
+
+    if (err == XP3_ERR_OK)
+        return(0);
+    if (err == XP3_ERR_NEEDS_CONTEXT)
+        xp3FuncError(call, err, "%s needs the clock", name);
+    else
+        xp3FuncError(call, err, "the current dateTime in the implicit "
+                     "timezone is beyond the years -2147483647 to "
+                     "2147483647");
+    return(-1);
+}
+
+/* The date or the time of the current dateTime, as fn:current-date and
+ * fn:current-time give them */
+static xp3Value *
+currentPart(xp3FuncCall *call, const char *name, xp3TypeId type) {
+    xp3DateTime now;
+    xp3DateTime part;
+    xp3ErrCode err;
+
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    if (currentDateTime(call, name, &now) < 0)
+        return(NULL);
+    err = xp3DateTimeConvert(XP3_TYPE_DATE_TIME, &now, type, &part);
+    if (err != XP3_ERR_OK) {
+        xp3FuncError(call, err, NULL);
+        return(NULL);
+    }
+    return(xp3FuncAtomic(call, xp3AtomicNewDateTime(type, &part)));
+}
+
+/**
+ * fn:current-dateTime#0 (F&O 3.1, 15.3): the current dateTime of the
+ * evaluation, an xs:dateTimeStamp in the implicit timezone, with the
+ * microseconds of the system clock.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:dateTimeStamp, or NULL on error
+ */
+xp3Value *
+xp3FnCurrentDateTime(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3DateTime now;
+
+    (void) args;
+    (void) count;
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    if (currentDateTime(call, "fn:current-dateTime", &now) < 0)
+        return(NULL);
+    return(xp3FuncAtomic(call, xp3AtomicNewDateTime(
+        XP3_TYPE_DATE_TIME_STAMP, &now)));
+}
+
+/**
+ * fn:current-date#0 (F&O 3.1, 15.4): the date of the current dateTime,
+ * with its timezone.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:date, or NULL on error
+ */
+xp3Value *
+xp3FnCurrentDate(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) args;
+    (void) count;
+    return(currentPart(call, "fn:current-date", XP3_TYPE_DATE));
+}
+
+/**
+ * fn:current-time#0 (F&O 3.1, 15.5): the time of the current dateTime,
+ * with its timezone.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:time, or NULL on error
+ */
+xp3Value *
+xp3FnCurrentTime(xp3FuncCall *call, xp3Value **args, int count) {
+    (void) args;
+    (void) count;
+    return(currentPart(call, "fn:current-time", XP3_TYPE_TIME));
+}
+
+/**
+ * fn:implicit-timezone#0 (F&O 3.1, 15.6): the implicit timezone of the
+ * evaluation as an xs:dayTimeDuration.
+ *
+ * @param call   the call
+ * @param args   none
+ * @param count  0
+ * @returns an xs:dayTimeDuration, or NULL on error
+ */
+xp3Value *
+xp3FnImplicitTimezone(xp3FuncCall *call, xp3Value **args, int count) {
+    xp3ErrCode err;
+    int minutes;
+
+    (void) args;
+    (void) count;
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    err = xp3ClockTimezone(xp3FuncClock(call), &minutes);
+    if (err != XP3_ERR_OK) {
+        xp3FuncError(call, err, "fn:implicit-timezone needs the clock");
+        return(NULL);
+    }
+    return(newTimezone(call, minutes));
+}

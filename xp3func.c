@@ -220,6 +220,10 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     /* Context functions (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
     [XP3_FN_LAST_0] = xp3FnLast,
+    [XP3_FN_CURRENT_DATETIME_0] = xp3FnCurrentDateTime,
+    [XP3_FN_CURRENT_DATE_0] = xp3FnCurrentDate,
+    [XP3_FN_CURRENT_TIME_0] = xp3FnCurrentTime,
+    [XP3_FN_IMPLICIT_TIMEZONE_0] = xp3FnImplicitTimezone,
     [XP3_FN_DEFAULT_COLLATION_0] = xp3FnDefaultCollation
 };
 
