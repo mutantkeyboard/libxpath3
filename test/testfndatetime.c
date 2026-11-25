@@ -22,11 +22,13 @@
 #include <libxml/xmlmemory.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3context.h"
 #include "private/xp3datetime.h"
 #include "private/xp3eval.h"
 #include "private/xp3static.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
+#include "testalloc.h"
 #include "testtap.h"
 
 static void
@@ -61,7 +63,11 @@ describe(const xp3Sequence *seq, char *out, size_t size) {
         xmlChar *value = xp3SequenceStringValue(seq, i);
         char item[256];
 
-        if ((type < 0) || (value == NULL))
+        if (value == NULL) {
+            snprintf(out, size, "error:NO_MEMORY");
+            return;
+        }
+        if (type < 0)
             snprintf(item, sizeof(item), "?");
         else
             snprintf(item, sizeof(item), "%s:%s",
@@ -933,6 +939,91 @@ testParseIetfDate(void) {
     xp3FreeDynamicContext(ctx);
 }
 
+/*
+ * Allocation failures
+ */
+
+/* Every function, unfolded, on a clock that is set, as strings */
+static const char xp3AllocExpr[] =
+    "string-join(("
+    "years-from-duration(xs:duration('-P1Y2M')), "
+    "months-from-duration(xs:duration('-P1Y2M')), "
+    "days-from-duration(xs:dayTimeDuration('P3DT4H')), "
+    "hours-from-duration(xs:dayTimeDuration('P3DT4H')), "
+    "minutes-from-duration(xs:dayTimeDuration('PT5M')), "
+    "seconds-from-duration(xs:dayTimeDuration('-PT1.5S')), "
+    "year-from-dateTime(xs:dateTime('2026-11-24T10:20:30.25+05:30')), "
+    "month-from-date(xs:date('2026-11-24')), "
+    "day-from-date(xs:date('2026-11-24')), "
+    "hours-from-time(xs:time('10:20:30')), "
+    "minutes-from-dateTime(xs:dateTime('2026-11-24T10:20:30')), "
+    "seconds-from-dateTime(xs:dateTime('2026-11-24T10:20:30.25')), "
+    "timezone-from-dateTime(xs:dateTime('2026-11-24T10:20:30+05:30')), "
+    "dateTime(xs:date('2026-11-24'), xs:time('10:20:30Z')), "
+    "adjust-date-to-timezone(xs:date('2026-11-24+01:00'), "
+    "xs:dayTimeDuration('PT0S')), "
+    "adjust-dateTime-to-timezone(xs:dateTime('2026-11-24T10:20:30')), "
+    "adjust-time-to-timezone(xs:time('10:20:30Z'), ()), "
+    "current-dateTime(), current-date(), current-time(), "
+    "implicit-timezone(), "
+    "parse-ietf-date('Wed, 06 Jun 1994 07:29:35 GMT')"
+    ") ! string(.), ' ')";
+
+static const char xp3AllocExpected[] =
+    "string:-1 -2 3 4 5 -1.5 2026 11 24 10 20 30.25 PT5H30M "
+    "2026-11-24T10:20:30Z 2026-11-23Z 2026-11-24T10:20:30-03:00 "
+    "10:20:30 2026-11-24T10:20:30.5-03:00 2026-11-24-03:00 "
+    "10:20:30.5-03:00 -PT3H 1994-06-06T07:29:35Z";
+
+static void
+testAllocationFailures(void) {
+    xp3StaticContext *plain = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    char actual[1024];
+    int i;
+
+    if ((plain == NULL) || (ctx == NULL) ||
+        (xp3SetCurrentDateTime(ctx, BAD_CAST
+                               "2026-11-24T10:20:30.5-03:00") < 0)) {
+        check(0, "contexts created");
+        goto done;
+    }
+    /* Not folded, so that the evaluation does the work */
+    plain->noOptimize = 1;
+    run(plain, ctx, xp3AllocExpr, actual, sizeof(actual));
+    if (strcmp(actual, xp3AllocExpected) != 0) {
+        xp3TestFail("the functions gave %s", actual);
+        goto done;
+    }
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
+        xp3TestAllocRestore();
+        goto done;
+    }
+    for (i = 0; i < 5000; i++) {
+        xp3TestAllocFailAt(i);
+        run(plain, ctx, xp3AllocExpr, actual, sizeof(actual));
+        if (!xp3TestAllocFailed()) {
+            xp3TestAllocFailAt(-1);
+            check(strcmp(actual, xp3AllocExpected) == 0,
+                  "the functions complete after allocation failures");
+            break;
+        }
+        xp3TestAllocFailAt(-1);
+        if (strcmp(actual, "error:NO_MEMORY") != 0) {
+            xp3TestFail("allocation failure %d gave %s", i, actual);
+            break;
+        }
+    }
+    check((i > 0) && (i < 5000), "allocation failure points exercised");
+    xp3TestAllocRestore();
+
+done:
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -945,6 +1036,7 @@ main(void) {
     XP3_TEST_RUN(testParseIetfDate);
     XP3_TEST_RUN(testSetClock);
     XP3_TEST_RUN(testSystemClock);
+    XP3_TEST_RUN(testAllocationFailures);
 
     return(xp3TestDone());
 }
