@@ -47,6 +47,7 @@ set(XP3_SOURCES
     xp3double.c
     xp3error.c
     xp3eval.c
+    xp3fndatetime.c
     xp3fnnode.c
     xp3fnnumeric.c
     xp3fnregex.c
@@ -144,7 +145,7 @@ if(BUILD_TESTING)
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval
-            unicode regex datetime)
+            unicode regex datetime fndatetime)
         add_executable(test${name} test/test${name}.c test/testalloc.c
             test/testtap.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
