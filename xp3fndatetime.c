@@ -461,3 +461,149 @@ xp3FnDateTime(xp3FuncCall *call, xp3Value **args, int count) {
     return(xp3FuncAtomic(call, xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME,
                                                     &result)));
 }
+
+/*
+ * Adjusting to a timezone (F&O 3.1, 9.6)
+ */
+
+/* The minutes of +-PT14H, the largest timezones */
+#define XP3_TIMEZONE_MAX_SECONDS ((int64_t) XP3_TIMEZONE_MAX * 60)
+
+/*
+ * The timezone a value is adjusted to: the $timezone argument, which
+ * must be within -PT14H and PT14H in whole minutes (FODT0003), or the
+ * implicit timezone without one. Returns 1 with *minutes set, 0 for
+ * the empty sequence, which removes the timezone, or -1 after recording
+ * an error.
+ */
+static int
+targetTimezone(xp3FuncCall *call, const char *name, xp3Value **args,
+               int count, int *minutes) {
+    const xp3Atomic *value;
+    const xp3Duration *duration;
+    xp3ErrCode err;
+
+    *minutes = 0;
+    if (count == 1) {
+        err = xp3ClockTimezone(xp3FuncClock(call), minutes);
+        if (err != XP3_ERR_OK) {
+            xp3FuncError(call, err, "%s needs the implicit timezone", name);
+            return(-1);
+        }
+        return(1);
+    }
+    value = argAtomic(args[1]);
+    if (value == NULL)
+        return(0);
+    duration = &value->u.dur;
+    if ((duration->nanoseconds != 0) || (duration->seconds % 60 != 0) ||
+        (duration->seconds > XP3_TIMEZONE_MAX_SECONDS) ||
+        (duration->seconds < -XP3_TIMEZONE_MAX_SECONDS)) {
+        xp3FuncError(call, XP3_ERR_FODT0003, "%s got a timezone that "
+                     "isn't a whole number of minutes from -PT14H to "
+                     "PT14H", name);
+        return(-1);
+    }
+    *minutes = (int) (duration->seconds / 60);
+    return(1);
+}
+
+/*
+ * Adjust a date or time value to a timezone, or remove its timezone,
+ * as F&O 3.1, 9.6.1 to 9.6.3 describe. A value without a timezone gets
+ * the target timezone and keeps its local value. A value with one is
+ * moved by the difference of the two timezones, so it stays the same
+ * instant: an xs:date from its start, 00:00:00, which may land on the
+ * day before or after, and an xs:time around midnight, as both go
+ * through xp3DateTimeAddDuration(). Removing the timezone keeps the
+ * local value.
+ */
+static xp3Value *
+adjustToTimezone(xp3FuncCall *call, const char *name, xp3TypeId type,
+                 xp3Value **args, int count) {
+    const xp3Atomic *value = argAtomic(args[0]);
+    const xp3DateTime *local;
+    xp3DateTime result;
+    xp3Duration shift;
+    xp3ErrCode err;
+    int target;
+    int hasTarget;
+
+    if (value == NULL)
+        return(xp3ValueEmpty());
+    hasTarget = targetTimezone(call, name, args, count, &target);
+    if (hasTarget < 0)
+        return(NULL);
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    local = &value->u.dt;
+    result = *local;
+    if (!hasTarget) {
+        result.hasTimezone = 0;
+        result.timezone = 0;
+    } else if (!local->hasTimezone) {
+        result.hasTimezone = 1;
+        result.timezone = (int16_t) target;
+    } else {
+        shift.months = 0;
+        shift.seconds = (int64_t) (target - local->timezone) * 60;
+        shift.nanoseconds = 0;
+        err = xp3DateTimeAddDuration(type, local, &shift, &result);
+        if (err != XP3_ERR_OK) {
+            xp3FuncError(call, err, "the result of %s is beyond the years "
+                         "-2147483647 to 2147483647", name);
+            return(NULL);
+        }
+        result.timezone = (int16_t) target;
+    }
+    return(xp3FuncAtomic(call, xp3AtomicNewDateTime(type, &result)));
+}
+
+/**
+ * fn:adjust-dateTime-to-timezone#1 and #2 (F&O 3.1, 9.6.1): the same
+ * instant in another timezone, or the local value without a timezone.
+ * #1 adjusts to the implicit timezone.
+ *
+ * @param call   the call
+ * @param args   the xs:dateTime?, and the xs:dayTimeDuration? timezone
+ * @param count  1 or 2
+ * @returns an xs:dateTime or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnAdjustDateTimeToTimezone(xp3FuncCall *call, xp3Value **args,
+                              int count) {
+    return(adjustToTimezone(call, "fn:adjust-dateTime-to-timezone",
+                            XP3_TYPE_DATE_TIME, args, count));
+}
+
+/**
+ * fn:adjust-date-to-timezone#1 and #2 (F&O 3.1, 9.6.2): the date in
+ * another timezone that contains the start of the date, or the date
+ * without a timezone. #1 adjusts to the implicit timezone.
+ *
+ * @param call   the call
+ * @param args   the xs:date?, and the xs:dayTimeDuration? timezone
+ * @param count  1 or 2
+ * @returns an xs:date or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnAdjustDateToTimezone(xp3FuncCall *call, xp3Value **args, int count) {
+    return(adjustToTimezone(call, "fn:adjust-date-to-timezone",
+                            XP3_TYPE_DATE, args, count));
+}
+
+/**
+ * fn:adjust-time-to-timezone#1 and #2 (F&O 3.1, 9.6.3): the time in
+ * another timezone, wrapping around midnight, or the time without a
+ * timezone. #1 adjusts to the implicit timezone.
+ *
+ * @param call   the call
+ * @param args   the xs:time?, and the xs:dayTimeDuration? timezone
+ * @param count  1 or 2
+ * @returns an xs:time or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnAdjustTimeToTimezone(xp3FuncCall *call, xp3Value **args, int count) {
+    return(adjustToTimezone(call, "fn:adjust-time-to-timezone",
+                            XP3_TYPE_TIME, args, count));
+}

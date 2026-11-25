@@ -372,6 +372,137 @@ testDateTimeConstructor(void) {
     CHECK_CASES(constructorCases);
 }
 
+/*
+ * Adjusting to a timezone (F&O 3.1, 9.6)
+ */
+
+#define TZ_MINUS_10 "xs:dayTimeDuration('-PT10H')"
+
+static const xp3EvalCase adjustCases[] = {
+    /* The examples of 9.6.1 to 9.6.3 that give the timezone */
+    { "adjust-dateTime-to-timezone(xs:dateTime('2002-03-07T10:00:00'), "
+      TZ_MINUS_10 ")", "dateTime:2002-03-07T10:00:00-10:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2002-03-07T10:00:00-07:00'), " TZ_MINUS_10 ")",
+      "dateTime:2002-03-07T07:00:00-10:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2002-03-07T10:00:00-07:00'), "
+      "xs:dayTimeDuration('PT10H'))", "dateTime:2002-03-08T03:00:00+10:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2002-03-07T00:00:00+01:00'), "
+      "xs:dayTimeDuration('-PT8H'))", "dateTime:2002-03-06T15:00:00-08:00" },
+    { "adjust-dateTime-to-timezone(xs:dateTime('2002-03-07T10:00:00'), ())",
+      "dateTime:2002-03-07T10:00:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2002-03-07T10:00:00-07:00'), ())",
+      "dateTime:2002-03-07T10:00:00" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07'), " TZ_MINUS_10 ")",
+      "date:2002-03-07-10:00" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07-07:00'), " TZ_MINUS_10
+      ")", "date:2002-03-06-10:00" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07'), ())",
+      "date:2002-03-07" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07-07:00'), ())",
+      "date:2002-03-07" },
+    { "adjust-time-to-timezone(xs:time('10:00:00'), " TZ_MINUS_10 ")",
+      "time:10:00:00-10:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00-07:00'), " TZ_MINUS_10 ")",
+      "time:07:00:00-10:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00'), ())", "time:10:00:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00-07:00'), ())",
+      "time:10:00:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00-07:00'), "
+      "xs:dayTimeDuration('PT10H'))", "time:03:00:00+10:00" },
+
+    /* The examples of 9.5 that adjust to UTC */
+    { "month-from-dateTime(adjust-dateTime-to-timezone("
+      "xs:dateTime('1999-12-31T19:20:00-05:00'), "
+      "xs:dayTimeDuration('PT0S')))", "integer:1" },
+    { "day-from-dateTime(adjust-dateTime-to-timezone("
+      "xs:dateTime('1999-12-31T19:20:00-05:00'), "
+      "xs:dayTimeDuration('PT0S')))", "integer:1" },
+    { "hours-from-dateTime(adjust-dateTime-to-timezone("
+      "xs:dateTime('1999-12-31T21:20:00-05:00'), "
+      "xs:dayTimeDuration('PT0S')))", "integer:2" },
+    { "hours-from-time(adjust-time-to-timezone(xs:time('01:23:00+05:00'), "
+      "xs:dayTimeDuration('PT0S')))", "integer:20" },
+
+    /* Across midnight, the year and year 0 */
+    { "adjust-date-to-timezone(xs:date('2026-01-01-14:00'), "
+      "xs:dayTimeDuration('PT14H'))", "date:2026-01-02+14:00" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01+14:00'), "
+      "xs:dayTimeDuration('-PT14H'))", "date:2025-12-30-14:00" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01+01:00'), "
+      "xs:dayTimeDuration('PT0S'))", "date:2025-12-31Z" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01-01:00'), "
+      "xs:dayTimeDuration('PT0S'))", "date:2026-01-01Z" },
+    { "adjust-date-to-timezone(xs:date('0000-01-01Z'), "
+      "xs:dayTimeDuration('-PT1H'))", "date:-0001-12-31-01:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('-0001-12-31T23:30:00-00:30'), "
+      "xs:dayTimeDuration('PT0S'))", "dateTime:0000-01-01T00:00:00Z" },
+    { "adjust-dateTime-to-timezone(xs:dateTime('2000-02-28T24:00:00Z'), "
+      "xs:dayTimeDuration('-PT0M'))", "dateTime:2000-02-29T00:00:00Z" },
+    { "adjust-time-to-timezone(xs:time('24:00:00+01:00'), "
+      "xs:dayTimeDuration('PT0S'))", "time:23:00:00Z" },
+    { "adjust-time-to-timezone(xs:time('23:59:59.5-14:00'), "
+      "xs:dayTimeDuration('PT14H'))", "time:03:59:59.5+14:00" },
+    { "adjust-dateTime-to-timezone(xs:dateTime('2026-01-01T00:00:00-00:00'),"
+      " ())", "dateTime:2026-01-01T00:00:00" },
+    { "adjust-dateTime-to-timezone(xs:dateTime('2026-01-01T00:00:00Z'), "
+      "xs:dayTimeDuration('PT5H45M'))", "dateTime:2026-01-01T05:45:00+05:45" },
+
+    /* An xs:dateTimeStamp in, an xs:dateTime out */
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTimeStamp('2026-01-01T00:00:00Z'), ())",
+      "dateTime:2026-01-01T00:00:00" },
+
+    /* Beyond the year limits */
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2147483647-12-31T23:00:00Z'), "
+      "xs:dayTimeDuration('PT14H'))", "error:FODT0001" },
+    { "adjust-date-to-timezone(xs:date('-2147483647-01-01Z'), "
+      "xs:dayTimeDuration('-PT1M'))", "error:FODT0001" },
+    { "adjust-date-to-timezone(xs:date('2147483647-12-31-14:00'), "
+      "xs:dayTimeDuration('PT14H'))", "error:FODT0001" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2147483647-12-31T23:00:00'), "
+      "xs:dayTimeDuration('PT14H'))",
+      "dateTime:2147483647-12-31T23:00:00+14:00" },
+
+    /* Timezones that aren't (FODT0003) */
+    { "adjust-dateTime-to-timezone(xs:dateTime('2026-01-01T00:00:00Z'), "
+      "xs:dayTimeDuration('PT14H1M'))", "error:FODT0003" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01'), "
+      "xs:dayTimeDuration('-PT14H1M'))", "error:FODT0003" },
+    { "adjust-time-to-timezone(xs:time('00:00:00'), "
+      "xs:dayTimeDuration('PT1S'))", "error:FODT0003" },
+    { "adjust-time-to-timezone(xs:time('00:00:00Z'), "
+      "xs:dayTimeDuration('PT0.000000001S'))", "error:FODT0003" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01'), "
+      "xs:dayTimeDuration('P1D'))", "error:FODT0003" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01'), "
+      "xs:dayTimeDuration('-PT14H'))", "date:2026-01-01-14:00" },
+    { "adjust-time-to-timezone(xs:time('12:00:00Z'), "
+      "xs:dayTimeDuration('PT14H'))", "time:02:00:00+14:00" },
+
+    /* The empty sequence, and the wrong types */
+    { "adjust-dateTime-to-timezone((), ())", "" },
+    { "adjust-date-to-timezone((), xs:dayTimeDuration('PT1H'))", "" },
+    { "adjust-time-to-timezone((), ())", "" },
+    { "adjust-date-to-timezone(xs:date('2026-01-01'), "
+      "xs:yearMonthDuration('P0M'))", "error:XPTY0004" },
+    { "adjust-time-to-timezone(xs:time('00:00:00'), 'PT1H')",
+      "error:XPTY0004" },
+    { "adjust-date-to-timezone(xs:dateTime('2026-01-01T00:00:00'), ())",
+      "error:XPTY0004" }
+};
+
+static void
+testAdjustToTimezone(void) {
+    CHECK_CASES(adjustCases);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -379,6 +510,7 @@ main(void) {
     XP3_TEST_RUN(testDurationComponents);
     XP3_TEST_RUN(testDateTimeComponents);
     XP3_TEST_RUN(testDateTimeConstructor);
+    XP3_TEST_RUN(testAdjustToTimezone);
 
     return(xp3TestDone());
 }

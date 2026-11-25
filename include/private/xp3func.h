@@ -597,4 +597,14 @@ xp3FnTimezoneFrom(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnDateTime(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnAdjustDateTimeToTimezone(xp3FuncCall *call, xp3Value **args,
+                              int count);
+
+xp3Value *
+xp3FnAdjustDateToTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnAdjustTimeToTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */
