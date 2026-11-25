@@ -2,11 +2,15 @@
  * xp3fndatetime.c: the functions on dates, times and durations
  *
  * Implementations of the functions of F&O 3.1,
- * https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/, that
- * take dates, times and durations apart (8.3 and 9.5), bound to their
- * signatures in xp3func.c. The evaluator has applied the function
+ * https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/, on
+ * dates, times and durations, bound to their signatures in xp3func.c:
+ * the components (8.3 and 9.5), fn:dateTime (9.3.1),
+ * adjust-*-to-timezone (9.6), fn:parse-ietf-date (9.9.1) and the
+ * clock (15.3 to 15.6). The evaluator has applied the function
  * conversion rules to the arguments already, so an xs:duration?
  * argument is the empty sequence or one value of a duration type.
+ * fn:format-date, fn:format-time and fn:format-dateTime come with
+ * fn:format-integer (doc/DESIGN.md 4.2).
  *
  * Components are those of the value as it is kept (xp3datetime.h):
  * the local value of a date or time, never normalized to UTC, and the
@@ -14,7 +18,13 @@
  * by idiv and mod, which truncate toward zero as C's / and % do, so
  * every component has the sign of the duration.
  *
- * Every call that does some work counts one step.
+ * The clock and the implicit timezone come from the evaluation, which
+ * reads them at most once (doc/DESIGN.md 5). Folding has neither, so
+ * the functions that need them are context-dependent in the table and
+ * never folded.
+ *
+ * Every call that does some work counts one step, and
+ * fn:parse-ietf-date the bytes of its input too.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
