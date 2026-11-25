@@ -21,6 +21,7 @@
 #include <libxml/xmlmemory.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3static.h"
 #include "private/xp3types.h"
 #include "private/xp3value.h"
 #include "testtap.h"
@@ -379,6 +380,21 @@ testDateTimeConstructor(void) {
 #define TZ_MINUS_10 "xs:dayTimeDuration('-PT10H')"
 
 static const xp3EvalCase adjustCases[] = {
+    /* The examples of 9.6.1 to 9.6.3 with the implicit timezone */
+    { "adjust-dateTime-to-timezone(xs:dateTime('2002-03-07T10:00:00'))",
+      "dateTime:2002-03-07T10:00:00-05:00" },
+    { "adjust-dateTime-to-timezone("
+      "xs:dateTime('2002-03-07T10:00:00-07:00'))",
+      "dateTime:2002-03-07T12:00:00-05:00" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07'))",
+      "date:2002-03-07-05:00" },
+    { "adjust-date-to-timezone(xs:date('2002-03-07-07:00'))",
+      "date:2002-03-07-05:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00'))", "time:10:00:00-05:00" },
+    { "adjust-time-to-timezone(xs:time('10:00:00-07:00'))",
+      "time:12:00:00-05:00" },
+    { "adjust-date-to-timezone(())", "" },
+
     /* The examples of 9.6.1 to 9.6.3 that give the timezone */
     { "adjust-dateTime-to-timezone(xs:dateTime('2002-03-07T10:00:00'), "
       TZ_MINUS_10 ")", "dateTime:2002-03-07T10:00:00-10:00" },
@@ -503,6 +519,70 @@ testAdjustToTimezone(void) {
     CHECK_CASES(adjustCases);
 }
 
+/*
+ * Folding: a call folds unless it reads the clock or the implicit
+ * timezone, which only an evaluation has
+ */
+
+/* Whether an expression compiles to a constant */
+static int
+isFolded(const char *expr) {
+    xp3Expr *compiled = xp3Compile(NULL, BAD_CAST expr, NULL);
+    int folded;
+
+    if (compiled == NULL) {
+        xp3TestFail("%s doesn't compile", expr);
+        return(-1);
+    }
+    folded = (compiled->ast->root->kind == XP3_AST_CONSTANT);
+    xp3FreeExpr(compiled);
+    return(folded);
+}
+
+static void
+testFolding(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    check(isFolded("year-from-date(xs:date('2026-01-01'))") == 1,
+          "year-from-date of a literal is folded");
+    check(isFolded("adjust-date-to-timezone(xs:date('2026-01-01'), ())") ==
+          1, "adjust-date-to-timezone#2 is folded");
+    check(isFolded("adjust-dateTime-to-timezone("
+                   "xs:dateTime('2026-01-01T00:00:00Z'), "
+                   "xs:dayTimeDuration('PT1H'))") == 1,
+          "so is adjusting to a timezone given");
+    check(isFolded("timezone-from-time(xs:time('10:00:00'))") == 1,
+          "the timezone of a value without one is folded");
+    check(isFolded("dateTime(xs:date('2026-01-01'), xs:time('10:00:00'))") ==
+          1, "fn:dateTime is folded");
+    check(isFolded("seconds-from-duration(xs:dayTimeDuration('PT1.5S'))") ==
+          1, "seconds-from-duration is folded");
+    check(isFolded("adjust-date-to-timezone(xs:date('2026-01-01'))") == 0,
+          "adjust-date-to-timezone#1 is not folded");
+    check(isFolded("adjust-dateTime-to-timezone("
+                   "xs:dateTime('2026-01-01T00:00:00'))") == 0,
+          "nor adjust-dateTime-to-timezone#1");
+    check(isFolded("adjust-time-to-timezone(xs:time('00:00:00'))") == 0,
+          "nor adjust-time-to-timezone#1");
+    check(isFolded("adjust-date-to-timezone(xs:date('2026-01-01'), "
+                   "xs:dayTimeDuration('PT15H'))") == 0,
+          "an error stays for the evaluation");
+
+    if ((ctx == NULL) || (xp3SetImplicitTimezone(ctx, 840) < 0)) {
+        check(0, "context created");
+        xp3FreeDynamicContext(ctx);
+        return;
+    }
+    checkEval(NULL, ctx, "adjust-date-to-timezone(xs:date('2026-01-01'))",
+              "date:2026-01-01+14:00");
+    xp3SetImplicitTimezone(ctx, -840);
+    checkEval(NULL, ctx, "adjust-date-to-timezone(xs:date('2026-01-01'))",
+              "date:2026-01-01-14:00");
+    checkEval(NULL, ctx, "adjust-date-to-timezone(xs:date('2026-01-01'), "
+              "xs:dayTimeDuration('PT15H'))", "error:FODT0003");
+    xp3FreeDynamicContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -511,6 +591,7 @@ main(void) {
     XP3_TEST_RUN(testDateTimeComponents);
     XP3_TEST_RUN(testDateTimeConstructor);
     XP3_TEST_RUN(testAdjustToTimezone);
+    XP3_TEST_RUN(testFolding);
 
     return(xp3TestDone());
 }
