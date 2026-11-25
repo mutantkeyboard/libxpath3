@@ -554,4 +554,72 @@ xp3MathAtan(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3MathAtan2(xp3FuncCall *call, xp3Value **args, int count);
 
+/* Implementations in xp3fndatetime.c */
+xp3Value *
+xp3FnYearsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMonthsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDaysFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHoursFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMinutesFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSecondsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnYearFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMonthFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDayFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHoursFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMinutesFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSecondsFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnTimezoneFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDateTime(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnAdjustDateTimeToTimezone(xp3FuncCall *call, xp3Value **args,
+                              int count);
+
+xp3Value *
+xp3FnAdjustDateToTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnAdjustTimeToTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCurrentDateTime(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCurrentDate(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnCurrentTime(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnImplicitTimezone(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnParseIetfDate(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

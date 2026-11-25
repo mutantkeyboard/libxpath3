@@ -2107,6 +2107,517 @@ done:
     return(bad);
 }
 
+/*
+ * The functions on dates, times and durations
+ */
+
+/* The string values of a result, separated by spaces, or
+ * "error:CODE" */
+static void
+resultStrings(const xp3Expr *expr, xp3DynamicContext *ctx, char *out,
+              size_t size) {
+    xp3Error *err = NULL;
+    xp3Sequence *result = xp3Evaluate(expr, ctx, &err);
+    size_t used = 0;
+    size_t i;
+
+    out[0] = 0;
+    if (result == NULL) {
+        snprintf(out, size, "error:%s", (const char *) xp3ErrorCode(err));
+        xp3ErrorFree(err);
+        return;
+    }
+    for (i = 0; i < xp3SequenceLength(result); i++) {
+        xmlChar *str = xp3SequenceStringValue(result, i);
+        const char *text = "?";
+        const char *space = "";
+
+        if (str != NULL)
+            text = (const char *) str;
+        if (i > 0)
+            space = " ";
+        if (used < size)
+            used += (size_t) snprintf(out + used, size - used, "%s%s",
+                                      space, text);
+        xmlFree(str);
+    }
+    xp3FreeSequence(result);
+}
+
+/* Bind a variable to one value of a type, given by its lexical form,
+ * or to the empty sequence for NULL. Returns 0 or -1. */
+static int
+bindLexical(xp3DynamicContext *ctx, const char *name, xp3TypeId type,
+            const xmlChar *lexical) {
+    xp3Sequence *seq;
+    size_t count = 0;
+    int ret;
+
+    if (lexical != NULL)
+        count = 1;
+    seq = xp3NewAtomicSequence((xp3AtomicType) type, &lexical, count, NULL);
+    if (seq == NULL)
+        return(-1);
+    ret = xp3BindVariable(ctx, NULL, BAD_CAST name, seq);
+    xp3FreeSequence(seq);
+    return(ret);
+}
+
+/* Read "[-]s[.fffffffff]" as whole seconds and nanoseconds with the
+ * same sign. Returns 0 or -1. */
+static int
+readSeconds(const char *text, int64_t *seconds, int32_t *nanos) {
+    int negative = 0;
+    int64_t whole = 0;
+    int32_t fraction = 0;
+    int digits = 0;
+
+    if (*text == '-') {
+        negative = 1;
+        text++;
+    }
+    if ((*text < '0') || (*text > '9'))
+        return(-1);
+    while ((*text >= '0') && (*text <= '9')) {
+        whole = whole * 10 + (*text - '0');
+        text++;
+    }
+    if (*text == '.') {
+        text++;
+        while ((*text >= '0') && (*text <= '9') && (digits < 9)) {
+            fraction = fraction * 10 + (*text - '0');
+            digits++;
+            text++;
+        }
+    }
+    if (*text != 0)
+        return(-1);
+    while (digits < 9) {
+        fraction *= 10;
+        digits++;
+    }
+    if (negative) {
+        whole = -whole;
+        fraction = -fraction;
+    }
+    *seconds = whole;
+    *nanos = fraction;
+    return(0);
+}
+
+/* The functions that take a date or time apart, by type, all of them
+ * with the timezone in minutes last */
+static const char xp3DateTimeParts[] =
+    "(year-from-dateTime($v), month-from-dateTime($v), "
+    "day-from-dateTime($v), hours-from-dateTime($v), "
+    "minutes-from-dateTime($v), seconds-from-dateTime($v), "
+    "timezone-from-dateTime($v) div xs:dayTimeDuration('PT1M'))";
+static const char xp3DateParts[] =
+    "(year-from-date($v), month-from-date($v), day-from-date($v), 0, 0, "
+    "0, timezone-from-date($v) div xs:dayTimeDuration('PT1M'))";
+static const char xp3TimeParts[] =
+    "(0, 0, 0, hours-from-time($v), minutes-from-time($v), "
+    "seconds-from-time($v), "
+    "timezone-from-time($v) div xs:dayTimeDuration('PT1M'))";
+static const char xp3DurationParts[] =
+    "(years-from-duration($v), months-from-duration($v), "
+    "days-from-duration($v), hours-from-duration($v), "
+    "minutes-from-duration($v), seconds-from-duration($v))";
+
+/* Rebuild a date or time from what its component functions give */
+static int
+rebuildDateTime(const char *parts, xp3DateTime *dt) {
+    long long year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    char seconds[64];
+    int timezone;
+    int64_t whole;
+    int32_t nanos;
+    int count;
+
+    count = sscanf(parts, "%lld %d %d %d %d %63s %d", &year, &month, &day,
+                   &hour, &minute, seconds, &timezone);
+    if ((count != 6) && (count != 7))
+        return(-1);
+    if (readSeconds(seconds, &whole, &nanos) < 0)
+        return(-1);
+    memset(dt, 0, sizeof(*dt));
+    dt->year = (int32_t) year;
+    dt->month = (unsigned char) month;
+    dt->day = (unsigned char) day;
+    dt->hour = (unsigned char) hour;
+    dt->minute = (unsigned char) minute;
+    dt->second = (unsigned char) whole;
+    dt->nanosecond = nanos;
+    if (count == 7) {
+        dt->hasTimezone = 1;
+        dt->timezone = (int16_t) timezone;
+    }
+    return(0);
+}
+
+/* Rebuild a duration from what its component functions give */
+static int
+rebuildDuration(const char *parts, xp3Duration *dur) {
+    long long years;
+    long long months;
+    long long days;
+    long long hours;
+    long long minutes;
+    char seconds[64];
+    int64_t whole;
+    int32_t nanos;
+
+    if (sscanf(parts, "%lld %lld %lld %lld %lld %63s", &years, &months,
+               &days, &hours, &minutes, seconds) != 6)
+        return(-1);
+    if (readSeconds(seconds, &whole, &nanos) < 0)
+        return(-1);
+    dur->months = (int64_t) years * 12 + months;
+    dur->seconds = (int64_t) days * 86400 + (int64_t) hours * 3600 +
+                   (int64_t) minutes * 60 + whole;
+    dur->nanoseconds = nanos;
+    return(0);
+}
+
+/*
+ * The components of random dates, times and durations rebuild the same
+ * values: the local value and the timezone of a date or time, and the
+ * months and seconds of a duration
+ */
+static int
+componentsRebuild(void) {
+    static const xp3TypeId durationTypes[] = {
+        XP3_TYPE_DURATION, XP3_TYPE_YEAR_MONTH_DURATION,
+        XP3_TYPE_DAY_TIME_DURATION
+    };
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *exprs[4] = { NULL, NULL, NULL, NULL };
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0)) {
+        bad++;
+        goto done;
+    }
+    exprs[0] = xp3Compile(sctx, BAD_CAST xp3DateTimeParts, NULL);
+    exprs[1] = xp3Compile(sctx, BAD_CAST xp3DateParts, NULL);
+    exprs[2] = xp3Compile(sctx, BAD_CAST xp3TimeParts, NULL);
+    exprs[3] = xp3Compile(sctx, BAD_CAST xp3DurationParts, NULL);
+    if ((exprs[0] == NULL) || (exprs[1] == NULL) || (exprs[2] == NULL) ||
+        (exprs[3] == NULL)) {
+        bad++;
+        goto done;
+    }
+    for (i = 0; i < 20000; i++) {
+        int kind = (int) randomBelow(4);
+        xmlChar *lexical;
+        char parts[512];
+        int same;
+
+        if (kind < 3) {
+            static const xp3TypeId types[] = {
+                XP3_TYPE_DATE_TIME, XP3_TYPE_DATE, XP3_TYPE_TIME
+            };
+            xp3TypeId type = types[kind];
+            xp3DateTime dt;
+            xp3DateTime rebuilt;
+
+            randomDateTime(type, (int) randomBelow(2), &dt);
+            lexical = xp3DateTimeToString(type, &dt);
+            if (bindLexical(ctx, "v", type, lexical) < 0) {
+                xmlFree(lexical);
+                bad++;
+                break;
+            }
+            resultStrings(exprs[kind], ctx, parts, sizeof(parts));
+            same = (rebuildDateTime(parts, &rebuilt) == 0) &&
+                   sameDateTime(&dt, &rebuilt);
+        } else {
+            xp3TypeId type = durationTypes[randomBelow(3)];
+            xp3Duration dur;
+            xp3Duration rebuilt;
+
+            randomDuration(type, (int) randomBelow(2), &dur);
+            lexical = xp3DurationToString(type, &dur);
+            if (bindLexical(ctx, "v", type, lexical) < 0) {
+                xmlFree(lexical);
+                bad++;
+                break;
+            }
+            resultStrings(exprs[3], ctx, parts, sizeof(parts));
+            same = (rebuildDuration(parts, &rebuilt) == 0) &&
+                   (xp3DurationCompare(&dur, &rebuilt) == 0);
+        }
+        if (!same) {
+            if (bad == 0)
+                xp3TestFail("the components of %s are %s",
+                            (const char *) lexical, parts);
+            bad++;
+        }
+        xmlFree(lexical);
+    }
+
+done:
+    for (i = 0; i < 4; i++)
+        xp3FreeExpr(exprs[i]);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    return(bad);
+}
+
+/* Whether moving a date or dateTime to another timezone leaves the
+ * years, by the oracle's calendar */
+static int
+oracleOverflows(xp3TypeId type, const xp3DateTime *dt, int target) {
+    int64_t local = oracleSeconds(type, dt, 0) + (int64_t) target * 60;
+    int64_t day = local / 86400;
+
+    if ((type == XP3_TYPE_TIME) || !dt->hasTimezone)
+        return(0);
+    if (local % 86400 < 0)
+        day--;
+    return((day < oracleDays(-XP3_YEAR_MAX, 1, 1)) ||
+           (day > oracleDays(XP3_YEAR_MAX, 12, 31)));
+}
+
+/*
+ * Whether an adjusted value is right, by the oracle's instants: a
+ * value with a timezone moved to another stays the same instant, a
+ * date the date that holds its start, a time the same time of day;
+ * a value without one keeps its local value, as does removing the
+ * timezone
+ */
+static int
+adjustedRight(xp3TypeId type, const xp3DateTime *dt, int hasTarget,
+              int target, const xp3DateTime *result) {
+    xp3DateTime local = *dt;
+    int64_t before;
+    int64_t after;
+
+    if (!hasTarget || !dt->hasTimezone) {
+        local.hasTimezone = (unsigned char) hasTarget;
+        local.timezone = 0;
+        if (hasTarget)
+            local.timezone = (int16_t) target;
+        return(sameDateTime(&local, result));
+    }
+    if (!result->hasTimezone || (result->timezone != target) ||
+        (result->nanosecond != dt->nanosecond))
+        return(0);
+    before = oracleSeconds(type, dt, 0);
+    after = oracleSeconds(type, result, 0);
+    if (type == XP3_TYPE_DATE)
+        return((after <= before) && (before < after + 86400));
+    if (type == XP3_TYPE_TIME)
+        return((before - after) % 86400 == 0);
+    return(before == after);
+}
+
+/*
+ * adjust-*-to-timezone#2 keeps the instant of random values with a
+ * timezone, and the local value when it adds or removes one
+ */
+static int
+adjustingAgrees(void) {
+    static const xp3TypeId types[] = {
+        XP3_TYPE_DATE_TIME, XP3_TYPE_DATE, XP3_TYPE_TIME
+    };
+    static const char *const sources[] = {
+        "adjust-dateTime-to-timezone($v, $tz)",
+        "adjust-date-to-timezone($v, $tz)",
+        "adjust-time-to-timezone($v, $tz)"
+    };
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *exprs[3] = { NULL, NULL, NULL };
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "v") < 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "tz") < 0)) {
+        bad++;
+        goto done;
+    }
+    for (i = 0; i < 3; i++) {
+        exprs[i] = xp3Compile(sctx, BAD_CAST sources[i], NULL);
+        if (exprs[i] == NULL) {
+            bad++;
+            goto done;
+        }
+    }
+    for (i = 0; i < 20000; i++) {
+        int kind = (int) randomBelow(3);
+        xp3TypeId type = types[kind];
+        int hasTarget = (randomBelow(5) != 0);
+        int target = (int) randomBetween(-XP3_TIMEZONE_MAX,
+                                         XP3_TIMEZONE_MAX);
+        xmlChar *lexical;
+        xmlChar *zone = NULL;
+        xp3Duration offset;
+        xp3DateTime dt;
+        xp3DateTime result;
+        char actual[256];
+        int right;
+
+        randomDateTime(type, (int) randomBelow(2), &dt);
+        if (randomBelow(8) == 0)
+            target = 0;
+        offset.months = 0;
+        offset.seconds = (int64_t) target * 60;
+        offset.nanoseconds = 0;
+        if (hasTarget)
+            zone = xp3DurationToString(XP3_TYPE_DAY_TIME_DURATION, &offset);
+        lexical = xp3DateTimeToString(type, &dt);
+        if ((bindLexical(ctx, "v", type, lexical) < 0) ||
+            (bindLexical(ctx, "tz", XP3_TYPE_DAY_TIME_DURATION,
+                         zone) < 0)) {
+            xmlFree(lexical);
+            xmlFree(zone);
+            bad++;
+            break;
+        }
+        resultStrings(exprs[kind], ctx, actual, sizeof(actual));
+        if (hasTarget && oracleOverflows(type, &dt, target))
+            right = (strcmp(actual, "error:FODT0001") == 0);
+        else
+            right = (xp3DateTimeParse(type, BAD_CAST actual, &result) ==
+                     XP3_ERR_OK) &&
+                    adjustedRight(type, &dt, hasTarget, target, &result);
+        if (!right) {
+            const char *zoneText = "()";
+
+            if (zone != NULL)
+                zoneText = (const char *) zone;
+            if (bad == 0)
+                xp3TestFail("%s with $v = %s and $tz = %s gave %s",
+                            sources[kind], (const char *) lexical, zoneText,
+                            actual);
+            bad++;
+        }
+        xmlFree(lexical);
+        xmlFree(zone);
+    }
+
+done:
+    for (i = 0; i < 3; i++)
+        xp3FreeExpr(exprs[i]);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    return(bad);
+}
+
+/*
+ * fn:dateTime of a random date and time gives them back through the
+ * casts to xs:date and xs:time, with the timezone either has, and
+ * FORG0008 for two different timezones
+ */
+static int
+combiningAgrees(void) {
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *expr = NULL;
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "d") < 0) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "t") < 0)) {
+        bad++;
+        goto done;
+    }
+    expr = xp3Compile(sctx, BAD_CAST
+                      "let $r := dateTime($d, $t) return "
+                      "(string($r), string(xs:date($r)), "
+                      "string(xs:time($r)))", NULL);
+    if (expr == NULL) {
+        bad++;
+        goto done;
+    }
+    for (i = 0; i < 20000; i++) {
+        xp3DateTime date;
+        xp3DateTime time;
+        xp3DateTime combined;
+        xmlChar *dateText;
+        xmlChar *timeText;
+        char expected[256];
+        char actual[256];
+
+        randomDateTime(XP3_TYPE_DATE, (int) randomBelow(2), &date);
+        randomDateTime(XP3_TYPE_TIME, (int) randomBelow(2), &time);
+        if (randomBelow(3) == 0) {
+            time.hasTimezone = date.hasTimezone;
+            time.timezone = date.timezone;
+        }
+        combined = date;
+        combined.hour = time.hour;
+        combined.minute = time.minute;
+        combined.second = time.second;
+        combined.nanosecond = time.nanosecond;
+        if (!date.hasTimezone) {
+            combined.hasTimezone = time.hasTimezone;
+            combined.timezone = time.timezone;
+        }
+        if (date.hasTimezone && time.hasTimezone &&
+            (date.timezone != time.timezone)) {
+            snprintf(expected, sizeof(expected), "error:FORG0008");
+        } else {
+            xmlChar *whole = xp3DateTimeToString(XP3_TYPE_DATE_TIME,
+                                                 &combined);
+            xmlChar *datePart;
+            xmlChar *timePart;
+            xp3DateTime part;
+
+            keepParts(XP3_TYPE_DATE, &combined);
+            datePart = xp3DateTimeToString(XP3_TYPE_DATE, &combined);
+            part = combined;
+            part.hour = time.hour;
+            part.minute = time.minute;
+            part.second = time.second;
+            part.nanosecond = time.nanosecond;
+            keepParts(XP3_TYPE_TIME, &part);
+            timePart = xp3DateTimeToString(XP3_TYPE_TIME, &part);
+            snprintf(expected, sizeof(expected), "%s %s %s",
+                     (const char *) whole, (const char *) datePart,
+                     (const char *) timePart);
+            xmlFree(whole);
+            xmlFree(datePart);
+            xmlFree(timePart);
+        }
+        dateText = xp3DateTimeToString(XP3_TYPE_DATE, &date);
+        timeText = xp3DateTimeToString(XP3_TYPE_TIME, &time);
+        if ((bindLexical(ctx, "d", XP3_TYPE_DATE, dateText) < 0) ||
+            (bindLexical(ctx, "t", XP3_TYPE_TIME, timeText) < 0)) {
+            xmlFree(dateText);
+            xmlFree(timeText);
+            bad++;
+            break;
+        }
+        resultStrings(expr, ctx, actual, sizeof(actual));
+        if (strcmp(actual, expected) != 0) {
+            if (bad == 0)
+                xp3TestFail("dateTime(%s, %s) gave %s, expected %s",
+                            (const char *) dateText,
+                            (const char *) timeText, actual, expected);
+            bad++;
+        }
+        xmlFree(dateText);
+        xmlFree(timeText);
+    }
+
+done:
+    xp3FreeExpr(expr);
+    xp3FreeStaticContext(sctx);
+    xp3FreeDynamicContext(ctx);
+    return(bad);
+}
+
 static void
 testProperties(void) {
     check(roundTrips() == 0,
@@ -2130,6 +2641,15 @@ testProperties(void) {
     check(sumsAgree() == 0,
           "fn:sum and fn:avg agree with + and div on 2000 random "
           "sequences");
+    check(componentsRebuild() == 0,
+          "the components of 20000 random dates, times and durations "
+          "rebuild them");
+    check(adjustingAgrees() == 0,
+          "adjust-*-to-timezone keeps the instant of 20000 random values, "
+          "or their local value when it adds or removes a timezone");
+    check(combiningAgrees() == 0,
+          "fn:dateTime of 20000 random dates and times gives them back "
+          "through the casts");
 }
 
 /*

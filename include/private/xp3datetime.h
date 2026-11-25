@@ -174,4 +174,7 @@ xp3SystemClock(xp3ClockReading *reading);
 xp3ErrCode
 xp3ClockTimezone(xp3Clock *clock, int *minutes);
 
+xp3ErrCode
+xp3ClockNow(xp3Clock *clock, xp3DateTime *now);
+
 #endif /* XP3_XP3DATETIME_H */
