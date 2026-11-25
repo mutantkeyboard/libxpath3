@@ -554,4 +554,23 @@ xp3MathAtan(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3MathAtan2(xp3FuncCall *call, xp3Value **args, int count);
 
+/* Implementations in xp3fndatetime.c */
+xp3Value *
+xp3FnYearsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMonthsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDaysFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHoursFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMinutesFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSecondsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

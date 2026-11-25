@@ -135,6 +135,13 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_FALSE_0] = xp3FnFalse,
     [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
     [XP3_FN_NOT_1] = xp3FnNot,
+    /* Components of durations (8.3) */
+    [XP3_FN_YEARS_FROM_DURATION_1] = xp3FnYearsFromDuration,
+    [XP3_FN_MONTHS_FROM_DURATION_1] = xp3FnMonthsFromDuration,
+    [XP3_FN_DAYS_FROM_DURATION_1] = xp3FnDaysFromDuration,
+    [XP3_FN_HOURS_FROM_DURATION_1] = xp3FnHoursFromDuration,
+    [XP3_FN_MINUTES_FROM_DURATION_1] = xp3FnMinutesFromDuration,
+    [XP3_FN_SECONDS_FROM_DURATION_1] = xp3FnSecondsFromDuration,
     /* Namespaces of elements (10.2) */
     [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
     [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,
