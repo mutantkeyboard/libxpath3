@@ -379,6 +379,8 @@ testImplementations(void) {
         { "year-from-date", 1, 0 }, { "month-from-date", 1, 0 },
         { "day-from-date", 1, 0 }, { "hours-from-time", 1, 0 },
         { "minutes-from-time", 1, 0 }, { "seconds-from-time", 1, 0 },
+        { "timezone-from-dateTime", 1, 0 }, { "timezone-from-date", 1, 0 },
+        { "timezone-from-time", 1, 0 },
         { "node-name", 1, 0 }, { "name", 1, 0 }, { "local-name", 1, 0 },
         { "namespace-uri", 1, 0 },
         { "root", 1, 0 }, { "has-children", 1, 0 }, { "innermost", 1, 0 },

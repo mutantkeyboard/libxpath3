@@ -374,3 +374,41 @@ xp3FnSecondsFrom(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     return(newSeconds(call, value->u.dt.second, value->u.dt.nanosecond));
 }
+
+/* A timezone in minutes as an xs:dayTimeDuration */
+static xp3Value *
+newTimezone(xp3FuncCall *call, int minutes) {
+    xp3Duration duration;
+
+    duration.months = 0;
+    duration.seconds = (int64_t) minutes * 60;
+    duration.nanoseconds = 0;
+    return(xp3FuncAtomic(call, xp3AtomicNewDuration(
+        XP3_TYPE_DAY_TIME_DURATION, &duration)));
+}
+
+/**
+ * fn:timezone-from-dateTime#1, fn:timezone-from-date#1 and
+ * fn:timezone-from-time#1 (F&O 3.1, 9.5.7, 9.5.11 and 9.5.15): the
+ * timezone as an xs:dayTimeDuration from -PT14H to PT14H, or the empty
+ * sequence for a value without one.
+ *
+ * @param call   the call
+ * @param args   the xs:dateTime?, xs:date? or xs:time?
+ * @param count  1
+ * @returns an xs:dayTimeDuration or the empty sequence, or NULL on
+ *          error
+ */
+xp3Value *
+xp3FnTimezoneFrom(xp3FuncCall *call, xp3Value **args, int count) {
+    const xp3Atomic *value = argAtomic(args[0]);
+
+    (void) count;
+    if (value == NULL)
+        return(xp3ValueEmpty());
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    if (!value->u.dt.hasTimezone)
+        return(xp3ValueEmpty());
+    return(newTimezone(call, value->u.dt.timezone));
+}

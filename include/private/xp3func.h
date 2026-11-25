@@ -591,4 +591,7 @@ xp3FnMinutesFrom(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnSecondsFrom(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnTimezoneFrom(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

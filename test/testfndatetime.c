@@ -248,6 +248,35 @@ static const xp3EvalCase componentCases[] = {
     { "minutes-from-time(xs:time('13:00:00Z'))", "integer:0" },
     { "seconds-from-time(xs:time('13:20:10.5'))", "decimal:10.5" },
 
+    /* The examples of 9.5.7, 9.5.11 and 9.5.15 */
+    { "timezone-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "dayTimeDuration:-PT5H" },
+    { "timezone-from-dateTime(xs:dateTime('2000-06-12T13:20:00Z'))",
+      "dayTimeDuration:PT0S" },
+    { "timezone-from-dateTime(xs:dateTime('2004-08-27T00:00:00'))", "" },
+    { "timezone-from-date(xs:date('1999-05-31-05:00'))",
+      "dayTimeDuration:-PT5H" },
+    { "timezone-from-date(xs:date('2000-06-12Z'))", "dayTimeDuration:PT0S" },
+    { "timezone-from-time(xs:time('13:20:00-05:00'))",
+      "dayTimeDuration:-PT5H" },
+    { "timezone-from-time(xs:time('13:20:00'))", "" },
+
+    /* The limits, -00:00 and minutes */
+    { "timezone-from-dateTime(xs:dateTime('2026-01-01T00:00:00+14:00'))",
+      "dayTimeDuration:PT14H" },
+    { "timezone-from-date(xs:date('2026-01-01-14:00'))",
+      "dayTimeDuration:-PT14H" },
+    { "timezone-from-time(xs:time('00:00:00-00:00'))",
+      "dayTimeDuration:PT0S" },
+    { "timezone-from-time(xs:time('24:00:00+05:30'))",
+      "dayTimeDuration:PT5H30M" },
+    { "timezone-from-date(xs:date('2026-01-01-00:45'))",
+      "dayTimeDuration:-PT45M" },
+    { "timezone-from-dateTime(())", "" },
+    { "timezone-from-date(())", "" },
+    { "timezone-from-time(())", "" },
+    { "timezone-from-time(xs:date('2026-01-01Z'))", "error:XPTY0004" },
+
     /* The local value, whatever the timezone */
     { "let $d := xs:dateTime('-0001-12-31T23:59:59.999999999+14:00') "
       "return (year-from-dateTime($d), month-from-dateTime($d), "
