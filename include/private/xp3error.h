@@ -64,6 +64,7 @@ typedef enum
     XP3_ERR_FORG0004,  /* fn:one-or-more with the empty sequence */
     XP3_ERR_FORG0005,  /* fn:exactly-one without exactly one item */
     XP3_ERR_FORG0006,  /* no effective boolean value */
+    XP3_ERR_FORG0008,  /* fn:dateTime with two different timezones */
     XP3_ERR_FORX0001,  /* invalid regular expression flags */
     XP3_ERR_FORX0002,  /* invalid regular expression */
     XP3_ERR_FORX0003,  /* regular expression matches the empty string */

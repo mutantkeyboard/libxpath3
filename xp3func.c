@@ -142,6 +142,8 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_HOURS_FROM_DURATION_1] = xp3FnHoursFromDuration,
     [XP3_FN_MINUTES_FROM_DURATION_1] = xp3FnMinutesFromDuration,
     [XP3_FN_SECONDS_FROM_DURATION_1] = xp3FnSecondsFromDuration,
+    /* Constructing a dateTime (9.3) */
+    [XP3_FN_DATETIME_2] = xp3FnDateTime,
     /* Components of dates and times (9.5) */
     [XP3_FN_YEAR_FROM_DATETIME_1] = xp3FnYearFrom,
     [XP3_FN_MONTH_FROM_DATETIME_1] = xp3FnMonthFrom,

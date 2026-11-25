@@ -320,12 +320,65 @@ testDateTimeComponents(void) {
     CHECK_CASES(componentCases);
 }
 
+/*
+ * fn:dateTime (F&O 3.1, 9.3.1)
+ */
+
+static const xp3EvalCase constructorCases[] = {
+    /* The examples of 9.3.1 */
+    { "dateTime(xs:date('1999-12-31'), xs:time('12:00:00'))",
+      "dateTime:1999-12-31T12:00:00" },
+    { "dateTime(xs:date('1999-12-31'), xs:time('24:00:00'))",
+      "dateTime:1999-12-31T00:00:00" },
+
+    /* The timezone of either, or of both if they agree */
+    { "dateTime(xs:date('2026-11-24+14:00'), xs:time('10:20:30.5'))",
+      "dateTime:2026-11-24T10:20:30.5+14:00" },
+    { "dateTime(xs:date('2026-11-24'), xs:time('10:20:30-14:00'))",
+      "dateTime:2026-11-24T10:20:30-14:00" },
+    { "dateTime(xs:date('2026-11-24Z'), xs:time('10:20:30-00:00'))",
+      "dateTime:2026-11-24T10:20:30Z" },
+    { "dateTime(xs:date('2026-11-24+05:30'), xs:time('10:20:30+05:30'))",
+      "dateTime:2026-11-24T10:20:30+05:30" },
+    { "dateTime(xs:date('2026-11-24Z'), xs:time('10:20:30+00:01'))",
+      "error:FORG0008" },
+    { "dateTime(xs:date('2026-11-24-05:00'), xs:time('10:20:30'))",
+      "dateTime:2026-11-24T10:20:30-05:00" },
+
+    /* Negative years and year 0 */
+    { "dateTime(xs:date('-0001-12-31'), xs:time('23:59:59.999999999'))",
+      "dateTime:-0001-12-31T23:59:59.999999999" },
+    { "dateTime(xs:date('0000-02-29Z'), xs:time('00:00:00'))",
+      "dateTime:0000-02-29T00:00:00Z" },
+    { "dateTime(xs:date('2147483647-12-31'), xs:time('24:00:00'))",
+      "dateTime:2147483647-12-31T00:00:00" },
+
+    /* The empty sequence */
+    { "dateTime((), xs:time('10:00:00'))", "" },
+    { "dateTime(xs:date('2026-01-01'), ())", "" },
+    { "dateTime((), ())", "" },
+
+    /* The wrong types; untyped values are cast */
+    { "dateTime(xs:time('10:00:00'), xs:date('2026-01-01'))",
+      "error:XPTY0004" },
+    { "dateTime(xs:dateTime('2026-01-01T00:00:00'), xs:time('10:00:00'))",
+      "error:XPTY0004" },
+    { "dateTime(xs:untypedAtomic('2026-01-01'), "
+      "xs:untypedAtomic('10:00:00Z'))", "dateTime:2026-01-01T10:00:00Z" }
+};
+
+static void
+testDateTimeConstructor(void) {
+    CHECK_CASES(constructorCases);
+}
+
 int
 main(void) {
     xmlInitParser();
 
     XP3_TEST_RUN(testDurationComponents);
     XP3_TEST_RUN(testDateTimeComponents);
+    XP3_TEST_RUN(testDateTimeConstructor);
 
     return(xp3TestDone());
 }

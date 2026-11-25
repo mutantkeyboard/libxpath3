@@ -412,3 +412,52 @@ xp3FnTimezoneFrom(xp3FuncCall *call, xp3Value **args, int count) {
         return(xp3ValueEmpty());
     return(newTimezone(call, value->u.dt.timezone));
 }
+
+/*
+ * Constructing a dateTime (F&O 3.1, 9.3.1)
+ */
+
+/**
+ * fn:dateTime#2 (F&O 3.1, 9.3.1): the date of an xs:date with the time
+ * of an xs:time, and the timezone that either has. Both having
+ * different timezones is FORG0008; -00:00 is Z, so the two are the
+ * same.
+ *
+ * @param call   the call
+ * @param args   the xs:date? and the xs:time?
+ * @param count  2
+ * @returns an xs:dateTime or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnDateTime(xp3FuncCall *call, xp3Value **args, int count) {
+    const xp3Atomic *date = argAtomic(args[0]);
+    const xp3Atomic *time = argAtomic(args[1]);
+    const xp3DateTime *dateValue;
+    const xp3DateTime *timeValue;
+    xp3DateTime result;
+
+    (void) count;
+    if ((date == NULL) || (time == NULL))
+        return(xp3ValueEmpty());
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    dateValue = &date->u.dt;
+    timeValue = &time->u.dt;
+    if (dateValue->hasTimezone && timeValue->hasTimezone &&
+        (dateValue->timezone != timeValue->timezone)) {
+        xp3FuncError(call, XP3_ERR_FORG0008, "fn:dateTime got a date and "
+                     "a time with different timezones");
+        return(NULL);
+    }
+    result = *dateValue;
+    result.hour = timeValue->hour;
+    result.minute = timeValue->minute;
+    result.second = timeValue->second;
+    result.nanosecond = timeValue->nanosecond;
+    if (!result.hasTimezone) {
+        result.hasTimezone = timeValue->hasTimezone;
+        result.timezone = timeValue->timezone;
+    }
+    return(xp3FuncAtomic(call, xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME,
+                                                    &result)));
+}
