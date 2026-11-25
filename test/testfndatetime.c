@@ -196,11 +196,107 @@ testDurationComponents(void) {
     CHECK_CASES(durationCases);
 }
 
+/*
+ * Components of dates and times (F&O 3.1, 9.5)
+ */
+
+static const xp3EvalCase componentCases[] = {
+    /* The examples of 9.5.1 to 9.5.14 */
+    { "year-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "integer:1999" },
+    { "year-from-dateTime(xs:dateTime('1999-05-31T21:30:00-05:00'))",
+      "integer:1999" },
+    { "year-from-dateTime(xs:dateTime('1999-12-31T19:20:00'))",
+      "integer:1999" },
+    { "year-from-dateTime(xs:dateTime('1999-12-31T24:00:00'))",
+      "integer:2000" },
+    { "year-from-dateTime(xs:dateTime('-0002-06-06T00:00:00'))",
+      "integer:-2" },
+    { "month-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "integer:5" },
+    { "month-from-dateTime(xs:dateTime('1999-12-31T19:20:00-05:00'))",
+      "integer:12" },
+    { "day-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "integer:31" },
+    { "day-from-dateTime(xs:dateTime('1999-12-31T20:00:00-05:00'))",
+      "integer:31" },
+    { "hours-from-dateTime(xs:dateTime('1999-05-31T08:20:00-05:00'))",
+      "integer:8" },
+    { "hours-from-dateTime(xs:dateTime('1999-12-31T21:20:00-05:00'))",
+      "integer:21" },
+    { "hours-from-dateTime(xs:dateTime('1999-12-31T12:00:00'))",
+      "integer:12" },
+    { "hours-from-dateTime(xs:dateTime('1999-12-31T24:00:00'))",
+      "integer:0" },
+    { "minutes-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "integer:20" },
+    { "minutes-from-dateTime(xs:dateTime('1999-05-31T13:30:00+05:30'))",
+      "integer:30" },
+    { "seconds-from-dateTime(xs:dateTime('1999-05-31T13:20:00-05:00'))",
+      "decimal:0" },
+    { "year-from-date(xs:date('1999-05-31'))", "integer:1999" },
+    { "year-from-date(xs:date('2000-01-01+05:00'))", "integer:2000" },
+    { "year-from-date(xs:date('-0002-06-01'))", "integer:-2" },
+    { "month-from-date(xs:date('1999-05-31-05:00'))", "integer:5" },
+    { "month-from-date(xs:date('2000-01-01+05:00'))", "integer:1" },
+    { "day-from-date(xs:date('1999-05-31-05:00'))", "integer:31" },
+    { "day-from-date(xs:date('2000-01-01+05:00'))", "integer:1" },
+    { "hours-from-time(xs:time('11:23:00'))", "integer:11" },
+    { "hours-from-time(xs:time('21:23:00'))", "integer:21" },
+    { "hours-from-time(xs:time('01:23:00+05:00'))", "integer:1" },
+    { "hours-from-time(xs:time('24:00:00'))", "integer:0" },
+    { "minutes-from-time(xs:time('13:00:00Z'))", "integer:0" },
+    { "seconds-from-time(xs:time('13:20:10.5'))", "decimal:10.5" },
+
+    /* The local value, whatever the timezone */
+    { "let $d := xs:dateTime('-0001-12-31T23:59:59.999999999+14:00') "
+      "return (year-from-dateTime($d), month-from-dateTime($d), "
+      "day-from-dateTime($d), hours-from-dateTime($d), "
+      "minutes-from-dateTime($d), seconds-from-dateTime($d))",
+      "integer:-1 integer:12 integer:31 integer:23 integer:59 "
+      "decimal:59.999999999" },
+    { "let $d := xs:date('0000-02-29-14:00') return "
+      "(year-from-date($d), month-from-date($d), day-from-date($d))",
+      "integer:0 integer:2 integer:29" },
+    { "year-from-dateTime(xs:dateTime('-0001-12-31T24:00:00'))",
+      "integer:0" },
+    { "day-from-dateTime(xs:dateTime('2000-02-28T24:00:00Z'))",
+      "integer:29" },
+    { "year-from-date(xs:date('-2147483647-01-01'))",
+      "integer:-2147483647" },
+    { "year-from-dateTime(xs:dateTime('2147483647-12-31T23:59:59Z'))",
+      "integer:2147483647" },
+    { "seconds-from-time(xs:time('00:00:00.000000001-00:00'))",
+      "decimal:0.000000001" },
+    { "seconds-from-dateTime(xs:dateTimeStamp('2026-11-24T10:00:07Z'))",
+      "decimal:7" },
+    { "minutes-from-time(xs:untypedAtomic('10:42:00'))", "integer:42" },
+
+    /* The empty sequence */
+    { "year-from-dateTime(())", "" },
+    { "month-from-date(())", "" },
+    { "seconds-from-time(())", "" },
+
+    /* The wrong type */
+    { "year-from-date(xs:dateTime('2026-01-01T00:00:00'))",
+      "error:XPTY0004" },
+    { "hours-from-time(xs:dateTime('2026-01-01T00:00:00'))",
+      "error:XPTY0004" },
+    { "hours-from-dateTime(xs:time('10:00:00'))", "error:XPTY0004" },
+    { "year-from-date(xs:untypedAtomic('2026-13-01'))", "error:FORG0001" }
+};
+
+static void
+testDateTimeComponents(void) {
+    CHECK_CASES(componentCases);
+}
+
 int
 main(void) {
     xmlInitParser();
 
     XP3_TEST_RUN(testDurationComponents);
+    XP3_TEST_RUN(testDateTimeComponents);
 
     return(xp3TestDone());
 }

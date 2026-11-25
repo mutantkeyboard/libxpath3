@@ -573,4 +573,22 @@ xp3FnMinutesFromDuration(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnSecondsFromDuration(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnYearFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMonthFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnDayFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnHoursFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnMinutesFrom(xp3FuncCall *call, xp3Value **args, int count);
+
+xp3Value *
+xp3FnSecondsFrom(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */
