@@ -619,4 +619,7 @@ xp3FnCurrentTime(xp3FuncCall *call, xp3Value **args, int count);
 xp3Value *
 xp3FnImplicitTimezone(xp3FuncCall *call, xp3Value **args, int count);
 
+xp3Value *
+xp3FnParseIetfDate(xp3FuncCall *call, xp3Value **args, int count);
+
 #endif /* XP3_XP3FUNC_H */

@@ -784,6 +784,155 @@ testSystemClock(void) {
     xp3FreeDynamicContext(ctx);
 }
 
+/*
+ * fn:parse-ietf-date (F&O 3.1, 9.9.1)
+ */
+
+#define IETF(input) "parse-ietf-date('" input "')"
+
+static const xp3EvalCase ietfCases[] = {
+    /* The example of 9.9.1 */
+    { IETF("Wed, 06 Jun 1994 07:29:35 GMT"),
+      "dateTime:1994-06-06T07:29:35Z" },
+
+    /* The three formats: RFC 1123, RFC 850 and asctime() */
+    { IETF("Sun, 06 Nov 1994 08:49:37 GMT"),
+      "dateTime:1994-11-06T08:49:37Z" },
+    { IETF("Sunday, 06-Nov-94 08:49:37 GMT"),
+      "dateTime:1994-11-06T08:49:37Z" },
+    { IETF("Sun Nov  6 08:49:37 1994"), "dateTime:1994-11-06T08:49:37Z" },
+
+    /* Optional parts, case and whitespace */
+    { IETF(" \t\n\r20 Aug 2014 19:36:01 GMT \t"),
+      "dateTime:2014-08-20T19:36:01Z" },
+    { IETF("Wed 20 Aug 2014 19:36:01 GMT"),
+      "dateTime:2014-08-20T19:36:01Z" },
+    { IETF("WEDNESDAY, 20 AUG 2014 19:36:01 gmt"),
+      "dateTime:2014-08-20T19:36:01Z" },
+    { IETF("wed, 20 aug 2014 19:36"), "dateTime:2014-08-20T19:36:00Z" },
+    { IETF("Wed, 20 Aug 2014 19:36:01GMT"),
+      "dateTime:2014-08-20T19:36:01Z" },
+    { IETF("Wed, 20 - Aug - 2014 19:36"), "dateTime:2014-08-20T19:36:00Z" },
+    { IETF("Wed, 20-Aug -2014 9:36"), "dateTime:2014-08-20T09:36:00Z" },
+    { IETF("Tue, 9 Sep 2014 19:36:01.25 UT"),
+      "dateTime:2014-09-09T19:36:01.25Z" },
+    { IETF("Aug-20 19:36 2014"), "dateTime:2014-08-20T19:36:00Z" },
+    { IETF("Wed, Aug 20 14:36:01EST 2014"),
+      "dateTime:2014-08-20T14:36:01-05:00" },
+    { IETF("1 Jan 2026 00:00:00.12345678912 UTC"),
+      "dateTime:2026-01-01T00:00:00.123456789Z" },
+
+    /* Every tzname */
+    { IETF("1 Jan 2026 12:00 EDT"), "dateTime:2026-01-01T12:00:00-04:00" },
+    { IETF("1 Jan 2026 12:00 CST"), "dateTime:2026-01-01T12:00:00-06:00" },
+    { IETF("1 Jan 2026 12:00 CDT"), "dateTime:2026-01-01T12:00:00-05:00" },
+    { IETF("1 Jan 2026 12:00 MST"), "dateTime:2026-01-01T12:00:00-07:00" },
+    { IETF("1 Jan 2026 12:00 MDT"), "dateTime:2026-01-01T12:00:00-06:00" },
+    { IETF("1 Jan 2026 12:00 PST"), "dateTime:2026-01-01T12:00:00-08:00" },
+    { IETF("1 Jan 2026 12:00 pdt"), "dateTime:2026-01-01T12:00:00-07:00" },
+
+    /* Offsets: H, HH, HMM, HHMM, with a colon, and a tzname ignored */
+    { IETF("Wed, 20 Aug 2014 14:36:01 -5"),
+      "dateTime:2014-08-20T14:36:01-05:00" },
+    { IETF("Wed, 20 Aug 2014 14:36:01+05"),
+      "dateTime:2014-08-20T14:36:01+05:00" },
+    { IETF("Wed, 20 Aug 2014 14:36:01 -530"),
+      "dateTime:2014-08-20T14:36:01-05:30" },
+    { IETF("Wed, 20 Aug 2014 14:36:01 +0545"),
+      "dateTime:2014-08-20T14:36:01+05:45" },
+    { IETF("Wed, 20 Aug 2014 14:36:01 -5:30"),
+      "dateTime:2014-08-20T14:36:01-05:30" },
+    { IETF("Wed, 20 Aug 2014 14:36:01-05:"),
+      "dateTime:2014-08-20T14:36:01-05:00" },
+    { IETF("Wed, 20 Aug 2014 14:36:01 -05:00 ( EST )"),
+      "dateTime:2014-08-20T14:36:01-05:00" },
+    { IETF("Wed, 20 Aug 2014 14:36:01 +0500(GMT)"),
+      "dateTime:2014-08-20T14:36:01+05:00" },
+    { IETF("Aug-20 14:36:01-05(EST) 14"),
+      "dateTime:1914-08-20T14:36:01-05:00" },
+    { IETF("Feb-02 02:02-02: 02"), "dateTime:1902-02-02T02:02:00-02:00" },
+    { IETF("1 Jan 2026 00:00 +14:00"), "dateTime:2026-01-01T00:00:00+14:00" },
+    { IETF("1 Jan 2026 00:00 -1400"), "dateTime:2026-01-01T00:00:00-14:00" },
+    { IETF("1 Jan 2026 00:00 -00:00"), "dateTime:2026-01-01T00:00:00Z" },
+
+    /* Two-digit years are in the 1900s; four digits are as written */
+    { IETF("20 Aug 14 19:36:01"), "dateTime:1914-08-20T19:36:01Z" },
+    { IETF("28 Feb 00 00:00"), "dateTime:1900-02-28T00:00:00Z" },
+    { IETF("29 Feb 00 00:00"), "error:FORG0010" },
+    { IETF("29 Feb 2000 00:00"), "dateTime:2000-02-29T00:00:00Z" },
+    { IETF("1 Jan 0070 00:00"), "dateTime:0070-01-01T00:00:00Z" },
+    { IETF("29 Feb 0000 00:00"), "dateTime:0000-02-29T00:00:00Z" },
+
+    /* 24:00 is midnight of the next day */
+    { IETF("Aug 20 24:00:00 2014"), "dateTime:2014-08-21T00:00:00Z" },
+    { IETF("31 Dec 9999 24:00 +0100"),
+      "dateTime:10000-01-01T00:00:00+01:00" },
+
+    /* Not the grammar, or not a valid dateTime (FORG0010) */
+    { IETF(""), "error:FORG0010" },
+    { IETF("   "), "error:FORG0010" },
+    { IETF("2014-08-20T19:36:01Z"), "error:FORG0010" },
+    { IETF("Wed,20 Aug 2014 19:36:01"), "error:FORG0010" },
+    { IETF("Wed, 020 Aug 2014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Wed, 20 August 2014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Wed, 20 Aug 114 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Wed, 20 Aug 02014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Wed, 20 Aug 2014 19:36:01 CET"), "error:FORG0010" },
+    { IETF("Mon, 32 Aug 2014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Wed, 00 Aug 2014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Sat, 29 Feb 2014 19:36:01 GMT"), "error:FORG0010" },
+    { IETF("Feb 28 19:36:01 GMT -2000"), "error:FORG0010" },
+    { IETF("Mond, 20 Aug 2014 19:36"), "error:FORG0010" },
+    { IETF("Aug,20 19:36:01 2014"), "error:FORG0010" },
+    { IETF("Aug20 19:36:01 2014"), "error:FORG0010" },
+    { IETF("20 Aug2014 19:36:01"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01GMT2014"), "error:FORG0010" },
+    { IETF("Wed, 20 Aug 2014 19:36:01 GMT Manchester"), "error:FORG0010" },
+    { IETF("Aug 20 19:3:01GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:0.1GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01.GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:0 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:00 () 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:00 (CET) 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:00 (EST 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:00 EST 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36(EST) 2014"), "error:FORG0010" },
+    { IETF("Aug 20 29:36:01GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 24:00:01 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:60:01GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:60GMT 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -15:00 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 +14:01 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05:60 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 -05000 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 - 2014"), "error:FORG0010" },
+    { IETF("Aug 20 19:36:01 2014 GMT"), "error:FORG0010" },
+
+    /* The empty sequence */
+    { "parse-ietf-date(())", "" }
+};
+
+static void
+testParseIetfDate(void) {
+    xp3StaticContext *level30 = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    CHECK_CASES(ietfCases);
+    check(isFolded(IETF("Wed, 06 Jun 1994 07:29:35 GMT")) == 1,
+          "parse-ietf-date is folded");
+
+    /* Only XPath 3.1 has it */
+    if ((level30 == NULL) || (ctx == NULL) ||
+        (xp3SetStaticContextLanguageLevel(level30, XP3_XPATH_30) < 0)) {
+        check(0, "contexts created");
+    } else {
+        checkEval(level30, ctx, IETF("Wed, 06 Jun 1994 07:29:35 GMT"),
+                  "error:XPST0017");
+    }
+    xp3FreeStaticContext(level30);
+    xp3FreeDynamicContext(ctx);
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -793,6 +942,7 @@ main(void) {
     XP3_TEST_RUN(testDateTimeConstructor);
     XP3_TEST_RUN(testAdjustToTimezone);
     XP3_TEST_RUN(testFolding);
+    XP3_TEST_RUN(testParseIetfDate);
     XP3_TEST_RUN(testSetClock);
     XP3_TEST_RUN(testSystemClock);
 

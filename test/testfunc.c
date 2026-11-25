@@ -387,6 +387,7 @@ testImplementations(void) {
         { "adjust-dateTime-to-timezone", 1, XP3_FUNC_CONTEXT },
         { "adjust-date-to-timezone", 1, XP3_FUNC_CONTEXT },
         { "adjust-time-to-timezone", 1, XP3_FUNC_CONTEXT },
+        { "parse-ietf-date", 1, 0 },
         { "node-name", 1, 0 }, { "name", 1, 0 }, { "local-name", 1, 0 },
         { "namespace-uri", 1, 0 },
         { "root", 1, 0 }, { "has-children", 1, 0 }, { "innermost", 1, 0 },

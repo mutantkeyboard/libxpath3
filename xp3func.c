@@ -167,6 +167,8 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_ADJUST_DATE_TO_TIMEZONE_2] = xp3FnAdjustDateToTimezone,
     [XP3_FN_ADJUST_TIME_TO_TIMEZONE_1] = xp3FnAdjustTimeToTimezone,
     [XP3_FN_ADJUST_TIME_TO_TIMEZONE_2] = xp3FnAdjustTimeToTimezone,
+    /* Parsing dates (9.9) */
+    [XP3_FN_PARSE_IETF_DATE_1] = xp3FnParseIetfDate,
     /* Namespaces of elements (10.2) */
     [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
     [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,

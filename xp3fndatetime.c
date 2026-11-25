@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <libxml/xmlstring.h>
 
@@ -732,4 +733,453 @@ xp3FnImplicitTimezone(xp3FuncCall *call, xp3Value **args, int count) {
         return(NULL);
     }
     return(newTimezone(call, minutes));
+}
+
+/*
+ * fn:parse-ietf-date (F&O 3.1, 9.9.1)
+ *
+ * The input is read by the grammar of 9.9.1, one function per
+ * production, ignoring case. A production that fails leaves the input
+ * where it stopped; the optional parts that the grammar can only tell
+ * by looking ahead, the space before a timezone and the tzname in
+ * parentheses after an offset, go back to where they started.
+ */
+
+/* What the input gives, before it is checked to be a valid dateTime */
+typedef struct {
+    int year;                   /* as written, 0 to 9999 */
+    int yearDigits;             /* 2 or 4 */
+    int month;                  /* 1 to 12 */
+    int day;                    /* as written, 0 to 99 */
+    int hour;                   /* as written, 0 to 99 */
+    int minute;
+    int second;
+    int32_t nanos;
+    int timezone;               /* minutes east of UTC, as written */
+    int timezoneMinutes;        /* the minutes part of an offset */
+} xp3IetfDate;
+
+/* The tznames of 9.9.1 and their offsets in minutes; "utc" comes before
+ * "ut", which is a prefix of it */
+static const struct {
+    const char *name;
+    int offset;
+} xp3IetfZones[] = {
+    { "utc", 0 }, { "ut", 0 }, { "gmt", 0 }, { "est", -300 },
+    { "edt", -240 }, { "cst", -360 }, { "cdt", -300 }, { "mst", -420 },
+    { "mdt", -360 }, { "pst", -480 }, { "pdt", -420 }
+};
+
+/* The daynames of 9.9.1, each full name before its abbreviation, which
+ * is a prefix of it */
+static const char *const xp3IetfDayNames[] = {
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+};
+
+static const char *const xp3IetfMonthNames[12] = {
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+    "nov", "dec"
+};
+
+/* Production S: x09, x0A, x0D or x20 */
+static int
+isIetfSpace(int c) {
+    return((c == 0x20) || (c == 0x9) || (c == 0xA) || (c == 0xD));
+}
+
+static int
+isIetfDigit(int c) {
+    return((c >= '0') && (c <= '9'));
+}
+
+static int
+isIetfLetter(int c) {
+    return(((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')));
+}
+
+/* Skip whitespace. Returns the number of characters skipped. */
+static int
+skipIetfSpace(const xmlChar **cur) {
+    int count = 0;
+
+    while (isIetfSpace(**cur)) {
+        (*cur)++;
+        count++;
+    }
+    return(count);
+}
+
+/* Skip a word written in lower case if the input starts with it in
+ * any case. Returns 1, or 0 if it doesn't. */
+static int
+matchIetfWord(const xmlChar **cur, const char *word) {
+    size_t i;
+
+    for (i = 0; word[i] != 0; i++) {
+        int c = (*cur)[i];
+
+        if ((c >= 'A') && (c <= 'Z'))
+            c = c - 'A' + 'a';
+        if (c != word[i])
+            return(0);
+    }
+    *cur += i;
+    return(1);
+}
+
+/* The number of digits at the input */
+static int
+countIetfDigits(const xmlChar *cur) {
+    int count = 0;
+
+    while (isIetfDigit(cur[count]))
+        count++;
+    return(count);
+}
+
+/* Read count digits as a number */
+static int
+readIetfNumber(const xmlChar **cur, int count) {
+    int value = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        value = value * 10 + (**cur - '0');
+        (*cur)++;
+    }
+    return(value);
+}
+
+/* Read from minDigits to maxDigits digits, as daynum, hours, minutes,
+ * seconds and year need. Returns the number of digits, or -1. */
+static int
+scanIetfNumber(const xmlChar **cur, int minDigits, int maxDigits,
+               int *value) {
+    int count = countIetfDigits(*cur);
+
+    if ((count < minDigits) || (count > maxDigits))
+        return(-1);
+    *value = readIetfNumber(cur, count);
+    return(count);
+}
+
+/* dsep ::= S | (S? "-" S?). Returns 0 or -1. */
+static int
+scanIetfSeparator(const xmlChar **cur) {
+    int spaces = skipIetfSpace(cur);
+
+    if (**cur == '-') {
+        (*cur)++;
+        skipIetfSpace(cur);
+        return(0);
+    }
+    if (spaces == 0)
+        return(-1);
+    return(0);
+}
+
+/* monthname. Returns 0 or -1. */
+static int
+scanIetfMonth(const xmlChar **cur, xp3IetfDate *date) {
+    int i;
+
+    for (i = 0; i < 12; i++) {
+        if (matchIetfWord(cur, xp3IetfMonthNames[i])) {
+            date->month = i + 1;
+            return(0);
+        }
+    }
+    return(-1);
+}
+
+/* year ::= digit digit (digit digit)?. Returns 0 or -1. */
+static int
+scanIetfYear(const xmlChar **cur, xp3IetfDate *date) {
+    int digits = scanIetfNumber(cur, 2, 4, &date->year);
+
+    if ((digits != 2) && (digits != 4))
+        return(-1);
+    date->yearDigits = digits;
+    return(0);
+}
+
+/* tzname. Returns 0 or -1. */
+static int
+scanIetfZoneName(const xmlChar **cur, int *offset) {
+    size_t i;
+
+    for (i = 0; i < sizeof(xp3IetfZones) / sizeof(xp3IetfZones[0]); i++) {
+        if (matchIetfWord(cur, xp3IetfZones[i].name)) {
+            *offset = xp3IetfZones[i].offset;
+            return(0);
+        }
+    }
+    return(-1);
+}
+
+/*
+ * tzoffset ::= ("+"|"-") hours ":"? minutes?. With a colon, the hours
+ * are before it and the minutes, if any, after it; without one, one to
+ * four digits are H, HH, HMM or HHMM. The minutes default to 00.
+ * Returns 0 or -1.
+ */
+static int
+scanIetfOffset(const xmlChar **cur, xp3IetfDate *date) {
+    int sign = 1;
+    int digits;
+    int hours = 0;
+    int minutes = 0;
+
+    if (**cur == '-')
+        sign = -1;
+    (*cur)++;
+    digits = countIetfDigits(*cur);
+    if ((*cur)[digits] == ':') {
+        if ((digits < 1) || (digits > 2))
+            return(-1);
+        hours = readIetfNumber(cur, digits);
+        (*cur)++;
+        digits = countIetfDigits(*cur);
+        if (digits == 2)
+            minutes = readIetfNumber(cur, 2);
+        else if (digits != 0)
+            return(-1);
+    } else if ((digits == 1) || (digits == 2)) {
+        hours = readIetfNumber(cur, digits);
+    } else if ((digits == 3) || (digits == 4)) {
+        hours = readIetfNumber(cur, digits - 2);
+        minutes = readIetfNumber(cur, 2);
+    } else {
+        return(-1);
+    }
+    date->timezoneMinutes = minutes;
+    date->timezone = sign * (hours * 60 + minutes);
+    return(0);
+}
+
+/* timezone ::= tzname | tzoffset (S? "(" S? tzname S? ")")?, where a
+ * tzname after an offset is ignored. Returns 0 or -1. */
+static int
+scanIetfTimezone(const xmlChar **cur, xp3IetfDate *date) {
+    const xmlChar *start;
+    int ignored;
+
+    if ((**cur != '+') && (**cur != '-'))
+        return(scanIetfZoneName(cur, &date->timezone));
+    if (scanIetfOffset(cur, date) < 0)
+        return(-1);
+    start = *cur;
+    skipIetfSpace(cur);
+    if (**cur != '(') {
+        *cur = start;
+        return(0);
+    }
+    (*cur)++;
+    skipIetfSpace(cur);
+    if (scanIetfZoneName(cur, &ignored) < 0)
+        return(-1);
+    skipIetfSpace(cur);
+    if (**cur != ')')
+        return(-1);
+    (*cur)++;
+    return(0);
+}
+
+/*
+ * time ::= hours ":" minutes (":" seconds)? (S? timezone)?, with
+ * seconds ::= digit digit ("." digit+)?. A timezone starts with a sign
+ * or a letter, which tells it from the year of asctime after a space.
+ * The fraction is truncated to nanoseconds. Returns 0 or -1.
+ */
+static int
+scanIetfTime(const xmlChar **cur, xp3IetfDate *date) {
+    const xmlChar *start;
+
+    if (scanIetfNumber(cur, 1, 2, &date->hour) < 0)
+        return(-1);
+    if (**cur != ':')
+        return(-1);
+    (*cur)++;
+    if (scanIetfNumber(cur, 2, 2, &date->minute) < 0)
+        return(-1);
+    if (**cur == ':') {
+        (*cur)++;
+        if (scanIetfNumber(cur, 2, 2, &date->second) < 0)
+            return(-1);
+        if (**cur == '.') {
+            int digits = 0;
+
+            (*cur)++;
+            while (isIetfDigit(**cur)) {
+                if (digits < 9)
+                    date->nanos = date->nanos * 10 + (**cur - '0');
+                digits++;
+                (*cur)++;
+            }
+            if (digits == 0)
+                return(-1);
+            while (digits < 9) {
+                date->nanos *= 10;
+                digits++;
+            }
+        }
+    }
+    start = *cur;
+    skipIetfSpace(cur);
+    if ((**cur == '+') || (**cur == '-') || isIetfLetter(**cur))
+        return(scanIetfTimezone(cur, date));
+    *cur = start;
+    return(0);
+}
+
+/*
+ * input ::= S? (dayname ","? S)? ((datespec S time) | asctime) S?, with
+ * datespec ::= daynum dsep monthname dsep year and
+ * asctime ::= monthname dsep daynum S time S year.
+ * Returns 0 or -1.
+ */
+static int
+scanIetfDate(const xmlChar *str, xp3IetfDate *date) {
+    const xmlChar *cur = str;
+    size_t i;
+
+    memset(date, 0, sizeof(*date));
+    skipIetfSpace(&cur);
+    for (i = 0; i < sizeof(xp3IetfDayNames) / sizeof(xp3IetfDayNames[0]);
+         i++) {
+        if (matchIetfWord(&cur, xp3IetfDayNames[i])) {
+            if (*cur == ',')
+                cur++;
+            if (skipIetfSpace(&cur) == 0)
+                return(-1);
+            break;
+        }
+    }
+    if (isIetfDigit(*cur)) {
+        if (scanIetfNumber(&cur, 1, 2, &date->day) < 0)
+            return(-1);
+        if (scanIetfSeparator(&cur) < 0)
+            return(-1);
+        if (scanIetfMonth(&cur, date) < 0)
+            return(-1);
+        if (scanIetfSeparator(&cur) < 0)
+            return(-1);
+        if (scanIetfYear(&cur, date) < 0)
+            return(-1);
+        if (skipIetfSpace(&cur) == 0)
+            return(-1);
+        if (scanIetfTime(&cur, date) < 0)
+            return(-1);
+    } else {
+        if (scanIetfMonth(&cur, date) < 0)
+            return(-1);
+        if (scanIetfSeparator(&cur) < 0)
+            return(-1);
+        if (scanIetfNumber(&cur, 1, 2, &date->day) < 0)
+            return(-1);
+        if (skipIetfSpace(&cur) == 0)
+            return(-1);
+        if (scanIetfTime(&cur, date) < 0)
+            return(-1);
+        if (skipIetfSpace(&cur) == 0)
+            return(-1);
+        if (scanIetfYear(&cur, date) < 0)
+            return(-1);
+    }
+    skipIetfSpace(&cur);
+    if (*cur != 0)
+        return(-1);
+    return(0);
+}
+
+/*
+ * The xs:dateTime of what the input gives, by the rules of 9.9.1: a
+ * two-digit year is in the 1900s, and a four-digit one is as written.
+ * It must be a valid xs:dateTime: a day of the month, a time of day or
+ * 24:00:00, which is midnight of the next day, and a timezone of at most
+ * 14:00. Returns 0 or -1.
+ */
+static int
+ietfToDateTime(const xp3IetfDate *date, xp3DateTime *value) {
+    int year = date->year;
+    int endOfDay = 0;
+
+    memset(value, 0, sizeof(*value));
+    if (date->yearDigits == 2)
+        year += 1900;
+    if ((date->day < 1) || (date->day > xp3DaysInMonth(year, date->month)))
+        return(-1);
+    if (date->hour == 24) {
+        if ((date->minute != 0) || (date->second != 0) ||
+            (date->nanos != 0))
+            return(-1);
+        endOfDay = 1;
+    } else if (date->hour > 23) {
+        return(-1);
+    }
+    if ((date->minute > 59) || (date->second > 59))
+        return(-1);
+    if ((date->timezoneMinutes > 59) ||
+        (date->timezone > XP3_TIMEZONE_MAX) ||
+        (date->timezone < -XP3_TIMEZONE_MAX))
+        return(-1);
+    value->year = year;
+    value->month = (unsigned char) date->month;
+    value->day = (unsigned char) date->day;
+    value->minute = (unsigned char) date->minute;
+    value->second = (unsigned char) date->second;
+    value->nanosecond = date->nanos;
+    value->hasTimezone = 1;
+    value->timezone = (int16_t) date->timezone;
+    if (endOfDay) {
+        xp3DateTime start = *value;
+        xp3Duration day;
+
+        day.months = 0;
+        day.seconds = XP3_SECONDS_PER_DAY;
+        day.nanoseconds = 0;
+        /* Years have at most four digits, so this never overflows */
+        if (xp3DateTimeAddDuration(XP3_TYPE_DATE_TIME, &start, &day,
+                                   value) != XP3_ERR_OK)
+            return(-1);
+    } else {
+        value->hour = (unsigned char) date->hour;
+    }
+    return(0);
+}
+
+/**
+ * fn:parse-ietf-date#1 (F&O 3.1, 9.9.1): the xs:dateTime of a date in
+ * the formats of RFC 1123, RFC 850 or asctime(), with the timezone it
+ * gives, or UTC without one. Anything the grammar doesn't match, or
+ * that isn't a valid xs:dateTime, is FORG0010.
+ *
+ * @param call   the call
+ * @param args   the string, xs:string?
+ * @param count  1
+ * @returns an xs:dateTime or the empty sequence, or NULL on error
+ */
+xp3Value *
+xp3FnParseIetfDate(xp3FuncCall *call, xp3Value **args, int count) {
+    const xmlChar *str = xp3FuncString(args[0]);
+    xp3IetfDate date;
+    xp3DateTime value;
+
+    (void) count;
+    if (xp3ValueCount(args[0]) == 0)
+        return(xp3ValueEmpty());
+    if (xp3FuncSteps(call, 1) < 0)
+        return(NULL);
+    if (xp3FuncBytes(call, (uint64_t) strlen((const char *) str)) < 0)
+        return(NULL);
+    if ((scanIetfDate(str, &date) < 0) ||
+        (ietfToDateTime(&date, &value) < 0)) {
+        xp3FuncError(call, XP3_ERR_FORG0010, "fn:parse-ietf-date got a "
+                     "string that isn't a valid date in the formats it "
+                     "accepts");
+        return(NULL);
+    }
+    return(xp3FuncAtomic(call, xp3AtomicNewDateTime(XP3_TYPE_DATE_TIME,
+                                                    &value)));
 }
