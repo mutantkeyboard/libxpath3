@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Prices and quantities as they came in from five different systems -->
+<inventory>
+  <item sku="A1" price=" 12.50 " qty="3"/>
+  <item sku="A2" price="1e3" qty="1"/>
+  <item sku="A3" price="NaN" qty="0"/>
+  <item sku="A4" price="-0" qty="2"/>
+  <item sku="A5" price="" qty="1"/>
+  <item sku="A6" qty="5"/>
+  <item sku="A7" price="0.000000000000000000000000000001" qty="1"/>
+  <item sku="A8" price="+5"
+        qty="1234567890123456789012345678901234567890"/>
+  <item sku="A9" price=".5" qty="4"/>
+  <item sku="A10" price="5." qty="4"/>
+  <item sku="A11" price="1,250.00" qty="1"/>
+</inventory>

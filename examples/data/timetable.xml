@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ferry timetable, merged from ports that each wrote times their own
+     way: in UTC, with an offset, or in local time without one. -->
+<timetable>
+  <trip id="t1">
+    <depart>2026-03-29T01:30:00Z</depart>
+    <arrive>2026-03-29T04:30:00+02:00</arrive>
+  </trip>
+  <trip id="t2">
+    <depart>2026-03-29T09:00:00+14:00</depart>
+    <arrive>2026-03-28T11:30:00-12:00</arrive>
+  </trip>
+  <trip id="t3">
+    <depart>2026-03-29T08:00:00</depart>
+    <arrive>2026-03-29T07:45:00Z</arrive>
+  </trip>
+  <trip id="t4">
+    <depart>2024-02-29T23:00:00Z</depart>
+    <arrive>2024-02-29T24:00:00Z</arrive>
+  </trip>
+  <trip id="t5">
+    <depart>2025-02-30T10:00:00Z</depart>
+    <arrive>2025-03-02T10:00:00Z</arrive>
+  </trip>
+  <trip id="t6">
+    <depart>2026-06-01T12:00:00.123456789Z</depart>
+    <arrive>2026-06-01T12:00:00.1234567899Z</arrive>
+  </trip>
+  <trip id="t7">
+    <depart>2026-06-01</depart>
+    <arrive>2026-06-01T18:00:00Z</arrive>
+  </trip>
+  <trip id="t8">
+    <depart>-0001-12-31T23:00:00Z</depart>
+    <arrive>0000-01-01T01:00:00Z</arrive>
+  </trip>
+  <grace standard="P1M" short="P30D"/>
+</timetable>

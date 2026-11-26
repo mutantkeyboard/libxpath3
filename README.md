@@ -91,6 +91,10 @@ xp3SetImplicitTimezone(dctx, 60);           /* minutes; XP3_TIMEZONE_LOCAL: the 
 
 Without `xp3SetImplicitTimezone()`, the timezone of a current dateTime that was set is the implicit timezone. With both set, `current-dateTime()` gives the instant that was set in the implicit timezone, as F&O 3.1, 15.3 requires.
 
+### Tutorials
+
+[`doc/tutorial/`](doc/tutorial/README.md) has seven tutorials, from a first query to accepting expressions from users. Each walks through a complete program in `examples/`, run as a test on a document full of the input that real data contains: mixed content, namespaces bound twice, numbers in five notations, dates in every timezone.
+
 ## Conformance
 
 Conformance is measured against the W3C [QT3 test suite](https://github.com/w3c/qt3tests), and the pass rate is published here with each release. Fuzzers with allocation-failure injection run in the same style as libxml2's.

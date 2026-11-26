@@ -1,0 +1,44 @@
+Size and depth:
+100,000 nested parentheses -> ERROR LIMIT when compiling
+  afterwards count(//book) -> xs:integer 6
+1+1+...+1 with 100,000 terms -> ERROR LIMIT when compiling
+  afterwards count(//book) -> xs:integer 6
+string-length() of a 2 MB literal -> ERROR LIMIT when compiling
+  afterwards count(//book) -> xs:integer 6
+Work and memory:
+count(1 to 1000000000000) -> xs:integer 1000000000000
+  afterwards count(//book) -> xs:integer 6
+(1 to 1000000000000)[. mod 7 = 0][last()] -> ERROR LIMIT
+  afterwards count(//book) -> xs:integer 6
+count(for $a in 1 to 100000, $b in 1 to 100000 return 1) -> ERROR LIMIT
+  afterwards count(//book) -> xs:integer 6
+a string doubled 60 times -> ERROR LIMIT
+  afterwards count(//book) -> xs:integer 6
+matches(string-join((1 to 30) ! 'a') || 'b', '^(a+)+\1$') -> ERROR LIMIT
+  afterwards count(//book) -> xs:integer 6
+Bytes that are not text:
+1 + 1, a NUL and more -> xs:integer 2
+  afterwards count(//book) -> xs:integer 6
+1 + 1, a NUL and more -> rejected before compiling
+'\xC3\x28', invalid UTF-8 -> ERROR XPST0003 when compiling
+  afterwards count(//book) -> xs:integer 6
+'\xC0\xAF', an overlong / -> ERROR XPST0003 when compiling
+  afterwards count(//book) -> xs:integer 6
+Outside the process:
+doc('file:///etc/passwd') -> ERROR UNSUPPORTED
+  afterwards count(//book) -> xs:integer 6
+unparsed-text('file:///etc/passwd') -> ERROR UNSUPPORTED
+  afterwards count(//book) -> xs:integer 6
+environment-variable('HOME') -> ERROR UNSUPPORTED
+  afterwards count(//book) -> xs:integer 6
+XPath 2.0 only:
+//book ! title -> ERROR XPST0003 when compiling
+  afterwards count(//book) -> xs:integer 6
+'a' || 'b' -> ERROR XPST0003 when compiling
+  afterwards count(//book) -> xs:integer 6
+'abc' => string-length() -> ERROR XPST0003 when compiling
+  afterwards count(//book) -> xs:integer 6
+head(//book) -> ERROR XPST0017 when compiling
+  afterwards count(//book) -> xs:integer 6
+environment-variable('HOME') -> ERROR XPST0017 when compiling
+  afterwards count(//book) -> xs:integer 6
