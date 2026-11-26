@@ -55,6 +55,12 @@ xp3DecimalParse(const xmlChar *str, size_t len, int integerOnly,
 xp3Decimal *
 xp3DecimalFromInt64(int64_t value);
 
+xp3ErrCode
+xp3DecimalFromDouble(double value, xp3Decimal **res);
+
+int
+xp3DecimalScaleOfDouble(double value);
+
 int
 xp3DecimalToInt64(const xp3Decimal *dec, int64_t *value);
 

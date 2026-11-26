@@ -729,6 +729,83 @@ testConversions(void) {
     }
 }
 
+/*
+ * The exact values of doubles, from Python's decimal.Decimal(float),
+ * which converts exactly, and the digits after their points
+ */
+static const struct {
+    double value;
+    const char *exact;
+    int scale;
+} fromDoubleCases[] = {
+    { 0.0, "0", 0 },
+    { -0.0, "0", 0 },
+    { 1.0, "1", 0 },
+    { 0.5, "0.5", 1 },
+    { -2.5, "-2.5", 1 },
+    { 0.1, "0.1000000000000000055511151231257827021181583404541015625", 55 },
+    { 35.425, "35.4249999999999971578290569595992565155029296875", 46 },
+    { 1.5e-7, "0.0000001499999999999999932122167738829388028420908085536211"
+              "7290496826171875", 74 },
+    { 3.0517578125e-05, "0.000030517578125", 15 },
+    { 1e23, "99999999999999991611392", 0 },
+    { 9007199254740993.0, "9007199254740992", 0 },
+    { -1e20, "-100000000000000000000", 0 }
+};
+
+static void
+testFromDouble(void) {
+    xp3Decimal *d;
+    xmlChar *str;
+    size_t i;
+
+    for (i = 0; i < sizeof(fromDoubleCases) / sizeof(fromDoubleCases[0]);
+         i++) {
+        char what[128];
+
+        snprintf(what, sizeof(what), "exact value of %.17g",
+                 fromDoubleCases[i].value);
+        d = NULL;
+        check(xp3DecimalFromDouble(fromDoubleCases[i].value, &d) ==
+              XP3_ERR_OK, what);
+        expectStr(d, fromDoubleCases[i].exact, what);
+        snprintf(what, sizeof(what), "digits after the point of %.17g",
+                 fromDoubleCases[i].value);
+        check(xp3DecimalScaleOfDouble(fromDoubleCases[i].value) ==
+              fromDoubleCases[i].scale, what);
+    }
+
+    /* The smallest subnormal, 2^-1074, is 5^1074 * 10^-1074: 323 zeros
+     * after the point, then the 751 digits of 5^1074 */
+    d = NULL;
+    check(xp3DecimalFromDouble(ldexp(1.0, -1074), &d) == XP3_ERR_OK,
+          "the smallest subnormal converts");
+    str = xp3DecimalToString(d);
+    check((str != NULL) && (strlen((const char *) str) == 1076) &&
+          (strspn((const char *) str + 2, "0") == 323) &&
+          (strncmp((const char *) str + 325, "4940656458412465441765687",
+                   25) == 0) &&
+          (strcmp((const char *) str + 1056, "19718265533447265625") == 0),
+          "the smallest subnormal has 1074 digits after the point");
+    check(xp3DecimalScaleOfDouble(ldexp(1.0, -1074)) == 1074,
+          "the smallest subnormal has scale 1074");
+    check(xp3DecimalScaleOfDouble(-ldexp(1.0, -1022)) == 1022,
+          "the smallest normal double has scale 1022");
+    xmlFree(str);
+    xp3DecimalFree(d);
+
+    /* The largest double, (2^53 - 1) * 2^971, has 309 digits */
+    d = NULL;
+    check(xp3DecimalFromDouble(1.7976931348623157e308, &d) == XP3_ERR_OK,
+          "the largest double converts");
+    expectStr(d, "1797693134862315708145274237317043567980705675258449965989"
+                 "1747680315726078002853876058955863276687817154045895351438"
+                 "2464234321326889464182768467546703537516986049910576551282"
+                 "0762454900903893289440758685084551339423045832369032229481"
+                 "6580855933212334827479782620414472316873817718091929988125"
+                 "0404026184124858368", "the largest double");
+}
+
 static void
 testLimits(void) {
     static char buf[2 * XP3_DECIMAL_MAX_DIGITS + 8];
@@ -852,6 +929,50 @@ testAllocationFailures(void) {
     xmlFree(expected);
 }
 
+/* The exact value of each double fails with NO_MEMORY, or not at all */
+static void
+testFromDoubleAllocationFailures(void) {
+    static const double values[] = {
+        0.1, -1e23, 1.7976931348623157e308, 4.9e-324
+    };
+    size_t v;
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
+        xp3TestAllocRestore();
+        return;
+    }
+    for (v = 0; v < sizeof(values) / sizeof(values[0]); v++) {
+        xp3Decimal *reference = NULL;
+        int i;
+
+        xp3TestAllocFailAt(-1);
+        check(xp3DecimalFromDouble(values[v], &reference) == XP3_ERR_OK,
+              "reference conversion");
+        for (i = 0; i < 100; i++) {
+            xp3Decimal *d = NULL;
+            xp3ErrCode code;
+
+            xp3TestAllocFailAt(i);
+            code = xp3DecimalFromDouble(values[v], &d);
+            if (!xp3TestAllocFailed()) {
+                xp3TestAllocFailAt(-1);
+                check((code == XP3_ERR_OK) && (reference != NULL) &&
+                      (xp3DecimalCompare(d, reference) == 0),
+                      "conversion complete after allocation failures");
+                xp3DecimalFree(d);
+                break;
+            }
+            xp3TestAllocFailAt(-1);
+            check((code == XP3_ERR_NO_MEMORY) && (d == NULL),
+                  "failed allocation reported as NO_MEMORY");
+        }
+        check(i > 0 && i < 100, "allocation failure points exercised");
+        xp3DecimalFree(reference);
+    }
+    xp3TestAllocRestore();
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -865,8 +986,10 @@ main(void) {
     XP3_TEST_RUN(testDivRound);
     XP3_TEST_RUN(testCompare);
     XP3_TEST_RUN(testConversions);
+    XP3_TEST_RUN(testFromDouble);
     XP3_TEST_RUN(testLimits);
     XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testFromDoubleAllocationFailures);
 
     return(xp3TestDone());
 }
