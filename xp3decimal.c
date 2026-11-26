@@ -27,6 +27,7 @@
  * Author: Antonio Nešić <nesic.antonio@gmail.com>
  */
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -590,6 +591,130 @@ xp3DecimalFromInt64(int64_t value) {
     if (decimalMake(value < 0, 0, limbs, n, &dec) != XP3_ERR_OK)
         return(NULL);
     return(dec);
+}
+
+/*
+ * A finite, nonzero double as m * 2^e with an odd integer m below 2^53.
+ * Returns the magnitude of m and sets *exponent to e.
+ */
+static uint64_t
+doubleParts(double value, int *exponent) {
+    uint64_t mantissa;
+    int power;
+
+    /* frexp() gives at most 53 significant bits in [0.5, 1), also for a
+     * subnormal, so scaling them by 2^53 is exact */
+    mantissa = (uint64_t) ldexp(fabs(frexp(value, &power)), 53);
+    power -= 53;
+    while (mantissa % 2 == 0) {
+        mantissa /= 2;
+        power++;
+    }
+    *exponent = power;
+    return(mantissa);
+}
+
+/*
+ * Multiply a magnitude by factor^power, in place, for a factor of 2 or
+ * 5: by the largest power of the factor below the base at a time, then
+ * by the rest. mag has room for the result and one limb more.
+ */
+static size_t
+magMulPower(uint32_t *mag, size_t n, uint32_t factor, int power) {
+    uint32_t step = 1;
+    uint32_t rest = 1;
+    int stepPower = 0;
+    int i;
+
+    while (step < XP3_BASE / factor) {
+        step *= factor;
+        stepPower++;
+    }
+    while (power >= stepPower) {
+        n = magMulSmall(mag, n, step, 0, mag);
+        power -= stepPower;
+    }
+    for (i = 0; i < power; i++)
+        rest *= factor;
+    return(magMulSmall(mag, n, rest, 0, mag));
+}
+
+/**
+ * Count the digits after the point of the exact decimal value of a
+ * finite double: 0 for a whole number, and n for m * 2^-n with an odd
+ * m, because 2^-n is 5^n * 10^-n and m * 5^n is odd. At most 1074, for
+ * the smallest subnormal.
+ *
+ * @param value  the double, neither NaN nor infinite
+ * @returns the number of digits
+ */
+int
+xp3DecimalScaleOfDouble(double value) {
+    int exponent;
+
+    if (value == 0)
+        return(0);
+    doubleParts(value, &exponent);
+    if (exponent >= 0)
+        return(0);
+    return(-exponent);
+}
+
+/**
+ * Convert a finite double to the decimal of exactly its value, as
+ * casting xs:double or xs:float to xs:decimal does (F&O 3.1,
+ * 19.1.2.3): 0.1e0 is
+ * 0.1000000000000000055511151231257827021181583404541015625. A float
+ * is exact as the double it widens to, and negative zero is 0. The
+ * result has at most 309 digits before the point and 1074 after it,
+ * far below XP3_DECIMAL_MAX_DIGITS.
+ *
+ * @param value  the double, neither NaN nor infinite
+ * @param res    where to store the decimal
+ * @returns XP3_ERR_OK or XP3_ERR_NO_MEMORY
+ */
+xp3ErrCode
+xp3DecimalFromDouble(double value, xp3Decimal **res) {
+    uint32_t *limbs;
+    uint64_t mantissa;
+    size_t capacity;
+    size_t n = 0;
+    long scale = 0;
+    int exponent;
+    int power;
+    xp3ErrCode ret;
+
+    *res = NULL;
+    if (value == 0)
+        return(decimalMake(0, 0, NULL, 0, res));
+
+    /*
+     * m * 2^e is the integer m * 2^e for e >= 0, and m * 5^-e with -e
+     * digits after the point otherwise. Either is below 2^(53 + 3|e|),
+     * since 5 is below 2^3, and a limb holds more than 29 bits.
+     */
+    mantissa = doubleParts(value, &exponent);
+    if (exponent < 0)
+        power = -exponent;
+    else
+        power = exponent;
+    capacity = (size_t) (53 + 3 * power) / 29 + 2;
+    limbs = limbsAlloc(capacity);
+    if (limbs == NULL)
+        return(XP3_ERR_NO_MEMORY);
+    while (mantissa > 0) {
+        limbs[n++] = (uint32_t) (mantissa % XP3_BASE);
+        mantissa /= XP3_BASE;
+    }
+    if (exponent >= 0) {
+        n = magMulPower(limbs, n, 2, exponent);
+    } else {
+        n = magMulPower(limbs, n, 5, -exponent);
+        scale = -exponent;
+    }
+    ret = decimalMake(value < 0, scale, limbs, n, res);
+    xmlFree(limbs);
+    return(ret);
 }
 
 /**
