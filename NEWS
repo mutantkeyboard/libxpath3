@@ -1,5 +1,70 @@
 NEWS file for libxpath3
 
+v0.4.0: Nov 27 2026
+
+### Dates, times and durations
+
+libxpath3 0.4 adds the date, time and duration types, arithmetic on
+them, and their functions.
+
+- All nine date and time types and the three duration types, as XML
+  Schema 1.1 defines them: years from -2,147,483,647 to 2,147,483,647
+  with a year 0, seconds to the nanosecond, and timezones up to ±14:00.
+  They are cast, compared, and handled by `distinct-values`, `index-of`,
+  `deep-equal`, `min` and `max`.
+- Arithmetic on dates, times and durations, and `sum` and `avg` of
+  durations. Adding months pins the day to the end of a shorter month,
+  and a result beyond the limits raises FODT0001 or FODT0002.
+- The component functions (`year-from-date`, `seconds-from-duration` and
+  the rest), `dateTime`, `adjust-dateTime-to-timezone`,
+  `adjust-date-to-timezone` and `adjust-time-to-timezone`, and
+  `parse-ietf-date` at XPath 3.1.
+- `current-dateTime`, `current-date`, `current-time` and
+  `implicit-timezone`. An evaluation reads the system clock once. Two
+  new functions set them, for results that are the same on every
+  machine: `xp3SetCurrentDateTime()` and `xp3SetImplicitTimezone()`.
+
+### Tutorials
+
+`doc/tutorial/` has seven tutorials, from a first query to accepting
+expressions from users. Each walks through a complete program in
+`examples/` that is built and run as a test. The documents hold awkward
+input on purpose (mixed content, namespaces bound twice, `NaN` among
+prices, dates in every timezone), and the pages show the errors this
+causes and how to handle them.
+
+### Changed behaviour
+
+- Casting an `xs:double` or `xs:float` to `xs:decimal` gives the exact
+  value of the binary number, as F&O 3.1, 19.1.2.3 asks:
+  `xs:decimal(0.1e0)` is
+  `0.1000000000000000055511151231257827021181583404541015625`. It was
+  `0.1` before. Write a decimal literal or cast from a string for the
+  short form.
+- The default nesting limit is 2000, down from 5000, so that the deepest
+  expression accepted fits in 1 MB of stack with every compiler.
+
+### Windows
+
+libxpath3 is built and tested on Windows in CI, with MinGW (MSYS2
+UCRT64) and with MSVC.
+
+### Conformance
+
+Against the W3C QT3 test suite at commit 201a6e4, compiling passes all
+XPath 2.0 tests and all but one known failure at 3.0 and 3.1.
+Evaluating, XPath 3.1 has 17,163 tests passed, 59 failed and 4,809 not
+judged yet. 56 of the failures need UCA collations with real tailorings.
+
+### Not yet supported
+
+- `format-date`, `format-time`, `format-dateTime`, `format-number` and
+  `format-integer`.
+- The QName functions, `resolve-uri`, `doc` and `analyze-string`.
+- Maps, arrays, function items and the higher-order functions.
+
+The namespace axis is not supported by design (XPST0010).
+
 v0.3.0: Nov 20 2026
 
 ### Regular expressions and Unicode
