@@ -1,0 +1,44 @@
+register stock:level($sku as xs:string) -> ERROR XPST0081
+register inv:age($days as xs:days) -> ERROR XPST0051
+register inv:stock($code as xs:string) -> ERROR XQST0034
+inv:parse-price(()) -> ()
+inv:parse-price(//item[@sku = 'A6']/@price) -> ()
+//item[@sku = ('A1', 'A11')] ! inv:parse-price(@price) -> xs:decimal 12.5, xs:decimal 1250
+//item ! inv:parse-price(@price) -> ERROR Q{urn:example:inventory}BADPRICE: not a decimal number
+inv:decimal-places(//item[@sku = 'A1']/@price) -> xs:integer 1
+inv:decimal-places(//item[@sku = 'A7']/@price) -> xs:integer 30
+inv:decimal-places(12) -> xs:integer 0
+inv:decimal-places(//item[@sku = 'A2']/@price) -> ERROR FORG0001
+inv:decimal-places(//item[@sku = 'A6']/@price) -> ERROR XPTY0004
+inv:decimal-places('12.50') -> ERROR XPTY0004
+inv:decimal-places(1.5e0) -> ERROR XPTY0004
+inv:restock(3) -> xs:integer 2
+inv:restock(3, 10) -> xs:integer 7
+inv:restock(1, 2, 3) -> ERROR XPST0017 when compiling
+inv:restock(//item/@qty) -> ERROR XPTY0004
+//item ! inv:restock(@qty) -> xs:integer 2, xs:integer 4, xs:integer 5, xs:integer 3, xs:integer 4, xs:integer 0, xs:integer 4, xs:integer 0, xs:integer 1, xs:integer 1, xs:integer 4
+inv:broken() -> ERROR XPTY0004
+inv:untyped() -> xs:integer 7
+Q{urn:example:labels}tag('A1') -> xs:string "SKU-A1"
+inv:stock('A1') -> ERROR Q{urn:example:inventory}NOWAREHOUSE: the evaluation has no warehouse
+calls of inv:parse-price -> 6
+calls of inv:decimal-places -> 3
+calls of inv:restock -> 13
+Deterministic:
+calls after compiling inv:units-in('gross') * 2 -> 1
+first evaluation -> xs:integer 288
+second evaluation -> xs:integer 288
+calls after evaluating twice -> 1
+Not deterministic:
+calls after compiling inv:units-in('gross') * 2 -> 0
+first evaluation -> xs:integer 288
+second evaluation -> xs:integer 288
+calls after evaluating twice -> 2
+Deterministic, raising an error:
+calls after compiling inv:units-in('crate') -> 1
+first evaluation -> ERROR Q{urn:example:inventory}UNKNOWNPACK: no such pack
+second evaluation -> ERROR Q{urn:example:inventory}UNKNOWNPACK: no such pack
+calls after evaluating twice -> 3
+low stock in the north -> xs:string "A2", xs:string "A9"
+low stock in the south -> xs:string "A1"
+calls of inv:stock -> 7

@@ -15,6 +15,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(XP3_BUILD_DOCS "Build API documentation with Doxygen" OFF)
+option(XP3_BUILD_EXAMPLES "Build the tutorial programs and test them" ON)
 
 include(GNUInstallDirs)
 
@@ -210,6 +211,45 @@ if(BUILD_TESTING)
             add_test(NAME qt3-${spec} COMMAND qt3run -s ${spec}
                 -k ${CMAKE_CURRENT_SOURCE_DIR}/qt3/known-failures-${spec}.txt
                 ${XP3_QT3_DIR}/catalog.xml)
+        endforeach()
+    endif()
+endif()
+
+# The tutorial programs of doc/tutorial/, built against the library as
+# an application would build them. Each runs as a test that compares
+# its output with examples/expected/NAME.txt, and a second test checks
+# that the code shown on its page is taken from it (runexample.c).
+if(XP3_BUILD_EXAMPLES)
+    set(XP3_EXAMPLES
+        01-first-query
+        02-namespaces-variables
+        03-numbers
+        04-strings-regex
+        05-dates-times
+        06-extension-functions
+        07-untrusted-expressions
+    )
+    foreach(name ${XP3_EXAMPLES})
+        add_executable(example-${name} examples/${name}.c examples/common.c)
+        set_target_properties(example-${name} PROPERTIES OUTPUT_NAME ${name})
+        target_link_libraries(example-${name} PRIVATE xpath3)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(example-${name} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror=vla)
+        endif()
+    endforeach()
+
+    if(BUILD_TESTING)
+        add_executable(runexample examples/runexample.c)
+        foreach(name ${XP3_EXAMPLES})
+            add_test(NAME example-${name} COMMAND runexample output
+                $<TARGET_FILE:example-${name}>
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/data
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/expected/${name}.txt)
+            add_test(NAME example-${name}-page COMMAND runexample excerpts
+                ${CMAKE_CURRENT_SOURCE_DIR}/doc/tutorial/${name}.md
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/${name}.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/common.c)
         endforeach()
     endif()
 endif()

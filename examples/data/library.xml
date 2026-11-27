@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE library [
+  <!ENTITY press "Harbour &amp; Daughters">
+]>
+<!-- A small catalogue. The records are untidy on purpose. -->
+<library>
+  <book id="b1" year="1937">
+    <title>The <i>Art</i> of Fiction</title>
+    <author>Mara Quill</author>
+  </book>
+  <!-- b2 was copied from a damaged index card -->
+  <?catalogue status="checked"?>
+  <book id="b2" year="c. 1850">
+    <title>Tables &amp; <![CDATA[<Figures>]]></title>
+    <author>Osric Vale</author>
+  </book>
+  <book id="b3" year="1999">
+    <title>Three Hands</title>
+    <author>Ann Lee</author>
+    <author>Ben Ito</author>
+    <author>Cy Moss</author>
+  </book>
+  <book id="b4" year="">
+    <title>Caf&#xE9; Notes from &press;</title>
+    <isbn/>
+  </book>
+  <book id="b5">
+    <title>Undated</title>
+    <author>Dee Roe</author>
+    <isbn>0-00-000000-0</isbn>
+  </book>
+  <book id="b6" year="2004">
+    <title>Last &amp; Least</title>
+    <author>Eve Ng</author>
+  </book>
+</library>

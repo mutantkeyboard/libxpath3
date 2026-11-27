@@ -1,0 +1,44 @@
+No default element namespace:
+count(/feed/entry) -> xs:integer 0
+//title -> element(title) "not an Atom title"
+Default element namespace Atom:
+count(/feed/entry) -> xs:integer 4
+//title -> element(title) "Harbour notes", element(title) "Hafenbericht", element(title) "Tide tables", element(title) "Colour charts", element(title) "Raw import"
+//Q{}title -> element(title) "not an Atom title"
+//link/@href -> attribute(href) "tides.html"
+Prefixes a, media and x:
+count(/a:feed/a:entry) -> xs:integer 4
+count(/Q{http://www.w3.org/2005/Atom}feed/Q{http://www.w3.org/2005/Atom}entry) -> xs:integer 4
+count(/*:feed/*:entry) -> xs:integer 4
+count(//*:title) -> xs:integer 6
+//*:thumbnail/name() -> xs:string "media:thumbnail", xs:string "media:thumbnail"
+//*:thumbnail/namespace-uri() -> xs:anyURI "http://example.com/ns/media/1", xs:anyURI "http://example.com/ns/media/2"
+namespace-uri-for-prefix('media', (//*:thumbnail)[2]) -> xs:anyURI "http://example.com/ns/media/2"
+//*:payload/namespace-uri() -> xs:anyURI ""
+//media:thumbnail/@url -> attribute(url) "tide.png"
+//*:thumbnail/@media:width -> attribute(media:width) "120"
+//*:thumbnail/@*:width -> attribute(media:width) "120", attribute(media:width) "240"
+//a:link/@href -> attribute(href) "tides.html"
+//a:link/@a:href -> ()
+//x:rating/@x:scale -> attribute(x:scale) "5"
+//a:entry[lang('en')]/a:title/string() -> xs:string "Tide tables", xs:string "Colour charts", xs:string "Raw import"
+//a:entry[lang('de')]/a:title/string() -> xs:string "Hafenbericht"
+//*:payload/*:title/lang('en') -> xs:boolean true
+//dc:creator -> ERROR XPST0081 when compiling
+Variables:
+$limit > 2 -> ERROR XPST0008 when compiling
+$missing -> ERROR XPDY0002
+$ids bound to ():
+$ids = 2 -> xs:boolean false
+$ids != 2 -> xs:boolean false
+$ids eq 2 -> ()
+$ids bound to (1, 2, 3):
+$ids = 2 -> xs:boolean true
+$ids != 2 -> xs:boolean true
+$ids eq 2 -> ERROR XPTY0004
+x:rating + 1 on each entry:
+entry 1 -> xs:double 5
+entry 2 -> ()
+entry 3 -> ERROR XPTY0004
+entry 4 -> ()
+position(), last() -> xs:integer 1, xs:integer 1

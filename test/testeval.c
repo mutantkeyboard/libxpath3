@@ -551,17 +551,54 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1e300 cast as xs:integer) eq 1e300", "boolean:true" },
     { "(1e19 cast as xs:integer) eq 10000000000000000000",
       "boolean:true" },
+    /* A double or float cast to xs:decimal is its exact binary value
+     * (F&O 3.1, 19.1.2.3), as in Saxon-HE 12.5 */
     { "1e0 cast as xs:decimal", "decimal:1" },
-    { "0.1e0 cast as xs:decimal", "decimal:0.1" },
-    { "1.5e-7 cast as xs:decimal", "decimal:0.00000015" },
-    { "-1.5e-7 cast as xs:decimal", "decimal:-0.00000015" },
+    { "0.1e0 cast as xs:decimal",
+      "decimal:0.1000000000000000055511151231257827021181583404541015625" },
+    { "-0.1e0 cast as xs:decimal",
+      "decimal:-0.1000000000000000055511151231257827021181583404541015625" },
+    { "1.5e-7 cast as xs:decimal",
+      "decimal:0.00000014999999999999999321221677388293880284209080855362"
+      "117290496826171875" },
+    { "-1.5e-7 cast as xs:decimal",
+      "decimal:-0.00000014999999999999999321221677388293880284209080855362"
+      "117290496826171875" },
     { "1e20 cast as xs:decimal", "decimal:100000000000000000000" },
-    { "123.456e1 cast as xs:decimal", "decimal:1234.56" },
+    { "1e23 cast as xs:decimal", "decimal:99999999999999991611392" },
+    { "123.456e1 cast as xs:decimal",
+      "decimal:1234.55999999999994543031789362430572509765625" },
     { "1234567.5e0 cast as xs:decimal", "decimal:1234567.5" },
     { "-1234567.5e0 cast as xs:decimal", "decimal:-1234567.5" },
     { "xs:float('1234567.5') cast as xs:decimal", "decimal:1234567.5" },
-    { "xs:float('0.1') cast as xs:decimal", "decimal:0.1" },
+    { "xs:float('0.1') cast as xs:decimal",
+      "decimal:0.100000001490116119384765625" },
+    { "xs:decimal(xs:float('-0.1'))",
+      "decimal:-0.100000001490116119384765625" },
     { "-0e0 cast as xs:decimal", "decimal:0" },
+    { "xs:float('-0') cast as xs:decimal", "decimal:0" },
+    { "xs:decimal(0.1e0) eq 0.1, 0.1e0 eq 0.1, 0.1e0 castable as xs:decimal",
+      "boolean:false boolean:true boolean:true" },
+    { "xs:decimal(0.1e0) cast as xs:integer, xs:decimal(-2.5e0) cast as "
+      "xs:integer, xs:decimal(xs:float('1e10')) cast as xs:integer",
+      "integer:0 integer:-2 integer:10000000000" },
+    /* The smallest subnormal, 2^-1074: 1074 digits after the point,
+     * 323 zeros, then 5^1074, which starts 4940656458412465441765687 and
+     * ends 19718265533447265625 */
+    { "let $s := string(xs:decimal(4.9e-324)) return (string-length($s), "
+      "starts-with($s, '0.' || string-join((1 to 323) ! '0') || "
+      "'4940656458412465441765687'), ends-with($s, '19718265533447265625'))",
+      "integer:1076 boolean:true boolean:true" },
+    { "xs:decimal(-4.9e-324) lt 0, xs:decimal(4.9e-324) gt 0",
+      "boolean:true boolean:true" },
+    /* The largest double, (2^53 - 1) * 2^971: 309 digits */
+    { "xs:decimal(1.7976931348623157e308) eq 17976931348623157081452742373170"
+      "4356798070567525844996598917476803157260780028538760589558632766878171"
+      "5404589535143824642343213268894641827684675467035375169860499105765512"
+      "8207624549009038932894407586850845513394230458323690322294816580855933"
+      "2123348274797826204144723168738177180919299881250404026184124858368, "
+      "string-length(string(xs:decimal(-1.7976931348623157e308)))",
+      "boolean:true integer:310" },
     { "1 cast as xs:decimal", "decimal:1" },
     { "1.5 cast as xs:double", "double:1.5" },
     { "xs:double('-1.75e-3') cast as xs:float", "float:-0.00175" },
@@ -831,6 +868,25 @@ static const xp3EvalCase xp3Cases[] = {
       "round-half-to-even(xs:double('-INF'), 2)",
       "double:NaN double:-INF" },
     { "round-half-to-even(1, '1')", "error:XPTY0004" },
+    /* A double rounds as its cast to xs:decimal does, since both take
+     * the exact value: 35.425e0 and 2.675e0 are just below 35.425 and
+     * 2.675. Each pair of value and precision that disagrees is listed */
+    { "round(xs:decimal(35.425e0), 2), round(35.425e0, 2), "
+      "round-half-to-even(xs:decimal(2.675e0), 2), "
+      "round-half-to-even(2.675e0, 2)",
+      "decimal:35.42 double:35.42 decimal:2.67 double:2.67" },
+    { "for $x in (35.425e0, 2.675e0, 1.005e0, 0.285e0, 1.45e0, 8.345e0, "
+      "-0.125e0, 0.5e0, 2.5e0, -2.5e0, 1.15e0, -4.35e0, 0.1e0, 1e22, "
+      "123456.785e0, 4.9e-324, -2.2250738585072014e-308, "
+      "1.7976931348623157e308, -1.7976931348623157e308, xs:float('0.15'), "
+      "xs:float('2.675'), xs:float('-1.25'), xs:float('1.4e-45'), "
+      "xs:float('3.4028235e38')), "
+      "$p in (-308, -35, -3, -1, 0, 1, 2, 3, 15, 17, 30, 323, 324, 1073, "
+      "1074) "
+      "return (if ((round(xs:decimal($x), $p) eq round($x, $p)) and "
+      "(round-half-to-even(xs:decimal($x), $p) eq "
+      "round-half-to-even($x, $p))) then () else $x || ' ' || $p)",
+      "" },
 
     /* Trigonometric and exponential functions (4.8) */
     { "math:pi(), 2 * math:pi()",
@@ -1773,6 +1829,247 @@ testHugeNumbers(void) {
                   "rounding to a unit beyond the limit of digits");
     checkRepeated("floor(-0.", "9", XP3_DECIMAL_MAX_DIGITS - 1, ")",
                   "decimal:-1", "the floor of a long fraction");
+}
+
+/*
+ * Exact decimals of doubles and floats
+ *
+ * For random finite doubles and floats $d, xs:decimal($d) reads back
+ * as $d, its digits are those of an oracle, and xs:integer of it is
+ * xs:integer($d). The oracle works from the bits of the double with
+ * one decimal digit per byte, so it shares nothing with the library:
+ * not frexp(), not the base-10^9 limbs of xp3decimal.c, and not
+ * snprintf(), whose "%.1074f" is exact with glibc and macOS but not
+ * with every C library the tests run with.
+ */
+
+#define XP3_EXACT_SAMPLES 2000
+
+/* Digits of m * 5^1074, the longest coefficient: at most 16 + 751 */
+#define XP3_ORACLE_DIGITS 800
+
+/* "-0." and 1074 digits after the point, at most */
+#define XP3_ORACLE_SIZE 1100
+
+/* xorshift64, for repeatable random tests */
+static uint64_t exactRandomState = UINT64_C(0x9E3779B97F4A7C15);
+
+static uint64_t
+exactRandom(void) {
+    exactRandomState ^= exactRandomState << 13;
+    exactRandomState ^= exactRandomState >> 7;
+    exactRandomState ^= exactRandomState << 17;
+    return(exactRandomState);
+}
+
+/*
+ * A random finite double: a quarter with any exponent, a quarter
+ * subnormal or at the bottom of the normal range, and half between
+ * 2^-70 and 2^71, where most numbers in documents are.
+ */
+static double
+randomFiniteDouble(void) {
+    uint64_t bits = exactRandom();
+    uint64_t kind = exactRandom() % 4;
+    uint64_t biased;
+    double value;
+
+    if (kind == 0)
+        biased = exactRandom() % 2047;
+    else if (kind == 1)
+        biased = exactRandom() % 3;
+    else
+        biased = 1023 - 70 + exactRandom() % 141;
+    bits &= ~(UINT64_C(0x7FF) << 52);
+    bits |= biased << 52;
+    memcpy(&value, &bits, sizeof(value));
+    return(value);
+}
+
+/* A random finite float, widened to a double, chosen in the same way */
+static double
+randomFiniteFloat(void) {
+    uint32_t bits = (uint32_t) exactRandom();
+    uint64_t kind = exactRandom() % 4;
+    uint32_t biased;
+    float value;
+
+    if (kind == 0)
+        biased = (uint32_t) (exactRandom() % 255);
+    else if (kind == 1)
+        biased = (uint32_t) (exactRandom() % 3);
+    else
+        biased = (uint32_t) (127 - 30 + exactRandom() % 61);
+    bits &= ~((uint32_t) 0xFF << 23);
+    bits |= biased << 23;
+    memcpy(&value, &bits, sizeof(value));
+    return((double) value);
+}
+
+/*
+ * The canonical xs:decimal of the exact value of a finite double. The
+ * double is m * 2^e, read from its bits. For e >= 0, m is doubled e
+ * times. Otherwise it is multiplied by 5 -e times and has -e digits
+ * after the point, since 2^-1 is 5 * 10^-1.
+ */
+static void
+oracleExactDecimal(double value, char *out) {
+    unsigned char digits[XP3_ORACLE_DIGITS];    /* least significant first */
+    uint64_t bits;
+    uint64_t significand;
+    int biased;
+    int exponent;
+    int factor = 2;
+    int times;
+    int point = 0;                              /* digits after the point */
+    int first = 0;                              /* lowest digit kept */
+    int count = 0;
+    int i;
+    int j;
+
+    memcpy(&bits, &value, sizeof(bits));
+    biased = (int) ((bits >> 52) & 0x7FF);
+    significand = bits & ((UINT64_C(1) << 52) - 1);
+    if (biased == 0) {
+        exponent = -1074;
+    } else {
+        significand |= UINT64_C(1) << 52;
+        exponent = biased - 1075;
+    }
+    if (significand == 0) {
+        strcpy(out, "0");
+        return;
+    }
+    while (significand > 0) {
+        digits[count++] = (unsigned char) (significand % 10);
+        significand /= 10;
+    }
+
+    times = exponent;
+    if (exponent < 0) {
+        factor = 5;
+        times = -exponent;
+        point = -exponent;
+    }
+    for (i = 0; i < times; i++) {
+        int carry = 0;
+
+        for (j = 0; j < count; j++) {
+            int product = digits[j] * factor + carry;
+
+            digits[j] = (unsigned char) (product % 10);
+            carry = product / 10;
+        }
+        if (carry > 0)
+            digits[count++] = (unsigned char) carry;
+    }
+
+    /* Zeros at the end of the fraction carry no value */
+    while ((point > 0) && (digits[first] == 0)) {
+        first++;
+        point--;
+    }
+
+    if (bits >> 63)
+        *out++ = '-';
+    if (count - first <= point) {
+        *out++ = '0';
+    } else {
+        for (i = count - 1; i >= first + point; i--)
+            *out++ = (char) ('0' + digits[i]);
+    }
+    if (point > 0) {
+        *out++ = '.';
+        for (i = first + point - 1; i >= first; i--) {
+            if (i < count)
+                *out++ = (char) ('0' + digits[i]);
+            else
+                *out++ = '0';
+        }
+    }
+    *out = 0;
+}
+
+/* Whether item i of a result has the string value expected */
+static int
+itemIs(const xp3Sequence *result, size_t i, const char *expected) {
+    xmlChar *str = xp3SequenceStringValue(result, i);
+    int same = (str != NULL) && (strcmp((const char *) str, expected) == 0);
+
+    xmlFree(str);
+    return(same);
+}
+
+static void
+testExactDecimals(void) {
+    static const char doubleChecks[] =
+        "xs:double(xs:decimal($d)) eq $d, string(xs:decimal($d)), "
+        "xs:integer(xs:decimal($d)) eq xs:integer($d)";
+    static const char floatChecks[] =
+        "let $f := xs:float($d) return (xs:double(xs:decimal($f)) eq $f, "
+        "string(xs:decimal($f)), "
+        "xs:integer(xs:decimal($f)) eq xs:integer($f))";
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *doubleExpr = NULL;
+    xp3Expr *floatExpr = NULL;
+    char expected[XP3_ORACLE_SIZE];
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "d") < 0)) {
+        check(0, "exact decimal test set up");
+        goto done;
+    }
+    doubleExpr = xp3Compile(sctx, BAD_CAST doubleChecks, NULL);
+    floatExpr = xp3Compile(sctx, BAD_CAST floatChecks, NULL);
+    if ((doubleExpr == NULL) || (floatExpr == NULL)) {
+        check(0, "exact decimal checks compiled");
+        goto done;
+    }
+
+    for (i = 0; i < XP3_EXACT_SAMPLES; i++) {
+        const char *kind = "double";
+        xp3Expr *expr = doubleExpr;
+        xp3Sequence *bound;
+        xp3Sequence *result = NULL;
+        double value;
+        int ok;
+
+        if (i % 2 == 1) {
+            value = randomFiniteFloat();
+            expr = floatExpr;
+            kind = "float";
+        } else {
+            value = randomFiniteDouble();
+        }
+        bound = xp3NewDoubleSequence(&value, 1);
+        if ((bound != NULL) &&
+            (xp3BindVariable(ctx, NULL, BAD_CAST "d", bound) == 0))
+            result = xp3Evaluate(expr, ctx, NULL);
+        xp3FreeSequence(bound);
+
+        oracleExactDecimal(value, expected);
+        ok = (result != NULL) && (xp3SequenceLength(result) == 3) &&
+             itemIs(result, 0, "true") && itemIs(result, 1, expected) &&
+             itemIs(result, 2, "true");
+        if (!ok) {
+            bad++;
+            if (bad == 1)
+                fprintf(stderr, "first failing %s: %.17g, expected %.80s\n",
+                        kind, value, expected);
+        }
+        xp3FreeSequence(result);
+    }
+    check(bad == 0, "random doubles and floats cast to their exact "
+          "decimals, which read back and truncate as the numbers do");
+
+done:
+    xp3FreeExpr(doubleExpr);
+    xp3FreeExpr(floatExpr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
 }
 
 /*
@@ -5284,7 +5581,9 @@ static const char *const xp3AllocOperators =
 
 static const char *const xp3AllocOperatorsExpected =
     "decimal:3.5 integer:3 double:0.25 integer:9999999999800000000001 "
-    "decimal:-1.5 integer:12 decimal:0.1 integer:150000000000000000000 "
+    "decimal:-1.5 integer:12 "
+    "decimal:0.1000000000000000055511151231257827021181583404541015625 "
+    "integer:150000000000000000000 "
     "base64Binary:TQ== NMTOKEN:a NMTOKEN:b double:1 boolean:false "
     "boolean:true boolean:true e:x#x1 e:x#x2 e:x#x2 boolean:true "
     "boolean:true integer:1 integer:2 integer:18446744073709551616 "
@@ -5611,6 +5910,14 @@ testAllocationFailures(void) {
     checkAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     checkAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
     checkAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    /* The exact value of a double or float, with the most digits */
+    checkAllocationFailures("xs:decimal(4.9e-324) lt 1e-323, "
+                            "xs:decimal(-1.7976931348623157e308) lt -1e308, "
+                            "xs:decimal(xs:float('0.1')), "
+                            "round(xs:decimal(35.425e0), 2)",
+                            "boolean:true boolean:true "
+                            "decimal:0.100000001490116119384765625 "
+                            "decimal:35.42");
     checkAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     checkAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     checkAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
@@ -6536,6 +6843,7 @@ main(void) {
     XP3_TEST_RUN(testEffectiveBoolean);
     XP3_TEST_RUN(testHugeLiteral);
     XP3_TEST_RUN(testHugeNumbers);
+    XP3_TEST_RUN(testExactDecimals);
     XP3_TEST_RUN(testQNameComparison);
     XP3_TEST_RUN(testManyBindings);
     XP3_TEST_RUN(testFocus);

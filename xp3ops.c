@@ -9,10 +9,13 @@
  * atomizes the operands and handles the empty sequence; the functions
  * here take single atomic values.
  *
- * Two casts follow choices recorded in doc/DESIGN.md 4.2: xs:double
- * to xs:decimal gives the shortest decimal that reads back as the
- * double, as Saxon does, and xs:double to xs:float rounds to nearest,
- * as QT3 expects, although F&O 3.1, 19.1.2.1 describes truncation.
+ * xs:double and xs:float cast to xs:decimal give the exact value of
+ * the binary number, the decimal closest to it that F&O 3.1, 19.1.2.3
+ * asks for, as Saxon does: 0.1e0 becomes
+ * 0.1000000000000000055511151231257827021181583404541015625. One cast
+ * follows a choice recorded in doc/DESIGN.md 4.2: xs:double to
+ * xs:float rounds to nearest, as QT3 expects, although F&O 3.1,
+ * 19.1.2.1 describes truncation.
  *
  * Copyright (C) 2026 Antonio Nešić <nesic.antonio@gmail.com>
  * See COPYING for the status of this software.
@@ -178,10 +181,12 @@ numberToBinary(const xp3Atomic *atomic, int isFloat, double *value) {
 
 /*
  * A finite double or float as the shortest decimal that reads back as
- * it, from its canonical string: "123.5", "-0" or "1.5E-7".
+ * it, from its canonical string: "123.5", "-0" or "1.5E-7". Only a
+ * dayTimeDuration times or divided by a number uses it (D44); a cast
+ * to xs:decimal gives the exact value, xp3DecimalFromDouble().
  */
 static xp3ErrCode
-decimalFromBinary(double value, int isFloat, xp3Decimal **res) {
+shortestDecimal(double value, int isFloat, xp3Decimal **res) {
     xmlChar *str = isFloat ? xp3FloatToString((float) value) :
                              xp3DoubleToString(value);
     const xmlChar *mark;
@@ -578,11 +583,11 @@ done:
  * An xs:dayTimeDuration multiplied or divided by a number (F&O 3.1,
  * 8.4.8 and 8.4.9), as Saxon does it (doc/DESIGN.md 4.2, D44): the
  * number becomes the shortest decimal that reads back as the double,
- * as when it is cast to xs:decimal, so 0.7 is 0.7 and not the double's
- * exact value just below it. The nanoseconds of the duration are then
- * multiplied or divided by that decimal exactly, and the result is
- * truncated toward zero: PT1S * 0.7 is PT0.7S, PT2S div 3 is
- * PT0.666666666S.
+ * not its exact value as in a cast to xs:decimal, so 0.7 is 0.7 and
+ * not the double's value just below it. The nanoseconds of the
+ * duration are then multiplied or divided by that decimal exactly, and
+ * the result is truncated toward zero: PT1S * 0.7 is PT0.7S, PT2S div
+ * 3 is PT0.666666666S.
  *
  * Factors below 2^-93, and from 2^93 up, are settled without decimal
  * arithmetic. A duration that isn't zero has at least one nanosecond
@@ -627,7 +632,7 @@ scaleSeconds(const xp3Duration *duration, double factor, int divide,
 
     err = durationNanos(duration, &nanos);
     if (err == XP3_ERR_OK)
-        err = decimalFromBinary(factor, 0, &number);
+        err = shortestDecimal(factor, 0, &number);
     if (err != XP3_ERR_OK)
         goto done;
     if (divide) {
@@ -1714,7 +1719,7 @@ castToDecimal(const xp3Atomic *value, xp3TypeId target, xp3Atomic **res) {
             if (toInteger)
                 err = integerFromBinary(trunc(number), &dec);
             else
-                err = decimalFromBinary(number, isFloat, &dec);
+                err = xp3DecimalFromDouble(number, &dec);
             break;
         }
         case XP3_REP_BOOLEAN:

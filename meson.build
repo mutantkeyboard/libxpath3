@@ -112,6 +112,11 @@ subdir('test')
 subdir('qt3')
 subdir('fuzz')
 
+# The examples need nothing beyond the library, so auto builds them
+if not get_option('examples').disabled()
+    subdir('examples')
+endif
+
 doxygen = find_program('doxygen', required: get_option('docs'))
 if doxygen.found()
     subdir('doc')
@@ -120,4 +125,5 @@ endif
 summary({
     'libxml2': libxml2_dep.version(),
     'docs': doxygen.found(),
+    'examples': not get_option('examples').disabled(),
 }, section: 'Configuration')

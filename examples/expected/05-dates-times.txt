@@ -1,0 +1,74 @@
+Time of each trip, implicit timezone +01:00:
+t1 -> xs:dayTimeDuration PT1H
+t2 -> xs:dayTimeDuration PT4H30M
+t3 -> xs:dayTimeDuration PT45M
+t4 -> xs:dayTimeDuration PT1H
+t5 -> ERROR FORG0001
+t6 -> xs:dayTimeDuration PT0S
+t7 -> ERROR FORG0001
+t8 -> xs:dayTimeDuration PT2H
+Implicit timezone +01:00:
+implicit-timezone() -> xs:dayTimeDuration PT1H
+current-dateTime() -> xs:dateTimeStamp 2026-11-25T10:30:00+01:00
+xs:dateTime('2026-03-29T08:00:00') eq xs:dateTime('2026-03-29T07:00:00Z') -> xs:boolean true
+//trip[depart castable as xs:dateTime][xs:dateTime(arrive) lt xs:dateTime(depart)]/string(@id) -> ()
+adjust-dateTime-to-timezone(xs:dateTime('2026-03-29T08:00:00')) -> xs:dateTime 2026-03-29T08:00:00+01:00
+Implicit timezone -05:00:
+implicit-timezone() -> xs:dayTimeDuration -PT5H
+current-dateTime() -> xs:dateTimeStamp 2026-11-25T04:30:00-05:00
+xs:dateTime('2026-03-29T08:00:00') eq xs:dateTime('2026-03-29T07:00:00Z') -> xs:boolean false
+//trip[depart castable as xs:dateTime][xs:dateTime(arrive) lt xs:dateTime(depart)]/string(@id) -> xs:string "t3"
+adjust-dateTime-to-timezone(xs:dateTime('2026-03-29T08:00:00')) -> xs:dateTime 2026-03-29T08:00:00-05:00
+t1 -> xs:dayTimeDuration PT1H
+t2 -> xs:dayTimeDuration PT4H30M
+t3 -> xs:dayTimeDuration -PT5H15M
+t4 -> xs:dayTimeDuration PT1H
+t5 -> ERROR FORG0001
+t6 -> xs:dayTimeDuration PT0S
+t7 -> ERROR FORG0001
+t8 -> xs:dayTimeDuration PT2H
+Implicit timezone of the clock again:
+xs:date('2024-02-29') + xs:yearMonthDuration('P1Y') -> xs:date 2025-02-28
+xs:date('2026-01-31') + xs:yearMonthDuration('P1M') -> xs:date 2026-02-28
+xs:date('2026-01-31') + xs:yearMonthDuration('P1M') + xs:yearMonthDuration('P1M') -> xs:date 2026-03-28
+xs:date('2026-01-31') + xs:yearMonthDuration('P2M') -> xs:date 2026-03-31
+xs:dateTime('2026-03-28T11:30:00-12:00') - xs:dateTime('2026-03-29T09:00:00+14:00') -> xs:dayTimeDuration PT4H30M
+xs:time('23:30:00+14:00') lt xs:time('00:30:00-12:00') -> xs:boolean true
+distinct-values((xs:dateTime('2026-03-29T09:00:00+14:00'), xs:dateTime('2026-03-28T19:00:00Z'))) -> xs:dateTime 2026-03-29T09:00:00+14:00
+xs:date('2026-03-29') = xs:dateTime('2026-03-29T00:00:00') -> ERROR XPTY0004
+dateTime(xs:date('2026-03-29+01:00'), xs:time('08:00:00Z')) -> ERROR FORG0008
+xs:duration('P1M') lt xs:duration('P30D') -> ERROR XPTY0004
+xs:yearMonthDuration('P1M') lt xs:yearMonthDuration('P2M') -> xs:boolean true
+xs:dayTimeDuration('P30D') lt xs:dayTimeDuration('P31D') -> xs:boolean true
+xs:duration('P1M') + xs:duration('P1D') -> ERROR XPTY0004
+xs:dayTimeDuration('P1D') * 1.5 -> xs:dayTimeDuration P1DT12H
+xs:yearMonthDuration('P1Y') div xs:yearMonthDuration('P5M') -> xs:decimal 2.4
+xs:duration('P1M') = xs:duration('P30D') -> xs:boolean false
+xs:duration('P1Y') = xs:duration('P12M') -> xs:boolean true
+xs:yearMonthDuration(//grace/@standard) = xs:dayTimeDuration(//grace/@short) -> xs:boolean false
+xs:date('2025-02-30') -> ERROR FORG0001
+'2025-02-30' castable as xs:date -> xs:boolean false
+//trip[not(depart castable as xs:dateTime)]/string(@id) -> xs:string "t5", xs:string "t7"
+//trip[@id = 't7']/dateTime(xs:date(depart), xs:time('00:00:00')) -> xs:dateTime 2026-06-01T00:00:00
+xs:dateTime('2024-02-29T24:00:00Z') -> xs:dateTime 2024-03-01T00:00:00Z
+xs:time('24:00:00') -> xs:time 00:00:00
+xs:dateTime('2026-03-29T08:00:00+14:01') -> ERROR FORG0001
+adjust-dateTime-to-timezone(xs:dateTime('2026-03-29T08:00:00+14:00'), ()) -> xs:dateTime 2026-03-29T08:00:00
+adjust-dateTime-to-timezone(xs:dateTime('2026-03-29T08:00:00+14:00'), xs:dayTimeDuration('-PT12H')) -> xs:dateTime 2026-03-28T06:00:00-12:00
+adjust-dateTime-to-timezone(xs:dateTime('2026-03-29T08:00:00'), xs:dayTimeDuration('PT15H')) -> ERROR FODT0003
+max(//depart) -> ERROR FORG0001
+max(//depart[. castable as xs:dateTime] ! xs:dateTime(.)) -> xs:dateTime 2026-06-01T12:00:00.123456789Z
+min(//depart[. castable as xs:dateTime] ! xs:dateTime(.)) -> xs:dateTime -0001-12-31T23:00:00Z
+max((xs:date('2026-06-01'), xs:dateTime('2026-06-01T12:00:00Z'))) -> ERROR FORG0006
+day-from-dateTime(xs:dateTime('2026-03-28T23:30:00-12:00')) -> xs:integer 28
+day-from-dateTime(adjust-dateTime-to-timezone(xs:dateTime('2026-03-28T23:30:00-12:00'), xs:dayTimeDuration('PT0S'))) -> xs:integer 29
+day-from-date(xs:date('2026-03-29+14:00')) -> xs:integer 29
+timezone-from-date(xs:date('2026-03-29+14:00')) -> xs:dayTimeDuration PT14H
+timezone-from-dateTime(xs:dateTime('2026-03-29T08:00:00')) -> ()
+xs:dateTime(//trip[@id = 't6']/arrive) -> xs:dateTime 2026-06-01T12:00:00.123456789Z
+seconds-from-dateTime(xs:dateTime(//trip[@id = 't6']/arrive)) -> xs:decimal 0.123456789
+xs:dateTime(//trip[@id = 't6']/arrive) eq xs:dateTime(//trip[@id = 't6']/depart) -> xs:boolean true
+year-from-dateTime(xs:dateTime(//trip[@id = 't8']/arrive)) -> xs:integer 0
+xs:date('2147483647-12-31') + xs:yearMonthDuration('P1Y') -> ERROR FODT0001
+current-dateTime() eq current-dateTime() -> xs:boolean true
+current-date() -> xs:date 2026-11-25+01:00
