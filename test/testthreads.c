@@ -39,6 +39,10 @@
 #define XP3_THREADS 8
 #define XP3_EVALUATIONS 300
 
+/* 0.1e0 cast as xs:decimal */
+#define XP3_EXACT_TENTH \
+    "0.1000000000000000055511151231257827021181583404541015625"
+
 static const char xp3ThreadDoc[] =
     "<r><a id='i1'>one</a><a id='i2'><b>two</b><b>three</b></a>"
     "<c>4.5</c></r>";
@@ -264,14 +268,14 @@ testOneThread(void) {
     xp3FreeSequence(result);
     xp3FreeDynamicContext(ctx);
     /* For each $i: the item at ($i mod 3) + 1, $i * 2.5, then the same
-     * eight values */
+     * eight values, with the exact value of the double 0.1 */
     if (strcmp(expected,
-               "a 2.5 yes 0.1 4 5 two three shared 5.5 "
-               "2.5 5 yes 0.1 4 5 two three shared 5.5 "
-               "1 7.5 yes 0.1 4 5 two three shared 5.5 "
-               "a 10 yes 0.1 4 5 two three shared 5.5 "
-               "2.5 12.5 yes 0.1 4 5 two three shared 5.5 "
-               "1 15 yes 0.1 4 5 two three shared 5.5") != 0)
+               "a 2.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "2.5 5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "1 7.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "a 10 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "2.5 12.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "1 15 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5") != 0)
         xp3TestFail("unexpected result %s", expected);
 }
 
