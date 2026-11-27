@@ -1,0 +1,91 @@
+0.1 + 0.2 -> xs:decimal 0.3
+0.1e0 + 0.2e0 -> xs:double 0.30000000000000004
+0.1 + 0.2 = 0.3 -> xs:boolean true
+0.1e0 + 0.2e0 = 0.3e0 -> xs:boolean false
+sum(//item/@price) -> ERROR FORG0001
+sum(//item/@price[. castable as xs:decimal]) -> xs:double 23
+sum(//item/@price[. castable as xs:decimal] ! xs:decimal(.)) -> xs:decimal 23.000000000000000000000000000001
+sum(//item/@price[. castable as xs:double]) -> xs:double NaN
+sum(()) -> xs:integer 0
+avg(()) -> ()
+1 div 0 -> ERROR FOAR0001
+1e0 div 0 -> xs:double INF
+-1e0 div 0 -> xs:double -INF
+0e0 div 0 -> xs:double NaN
+1 idiv 0 -> ERROR FOAR0001
+1e0 idiv 0 -> ERROR FOAR0001
+xs:double('INF') idiv 1 -> ERROR FOAR0002
+1 div 3 -> xs:decimal 0.333333333333333333
+1 div 3 * 3 -> xs:decimal 0.999999999999999999
+-7 idiv 2 -> xs:integer -3
+-7 mod 2 -> xs:integer -1
+xs:double('NaN') = xs:double('NaN') -> xs:boolean false
+xs:double('NaN') != xs:double('NaN') -> xs:boolean true
+//item[@price != @price]/string(@sku) -> ()
+//item[number(@price) != number(@price)]/string(@sku) -> xs:string "A3", xs:string "A5", xs:string "A6", xs:string "A11"
+round(2.5) -> xs:decimal 3
+round(-2.5) -> xs:decimal -2
+round(-0.5) -> xs:decimal 0
+round(-0.5e0) -> xs:double -0
+round-half-to-even(-2.5) -> xs:decimal -2
+round-half-to-even(-3.5) -> xs:decimal -4
+round(35.425, 2) -> xs:decimal 35.43
+round(35.425e0, 2) -> xs:double 35.42
+floor(-0.5) -> xs:decimal -1
+ceiling(-0.5e0) -> xs:double -0
+9223372036854775807 + 1 -> xs:integer 9223372036854775808
+-9223372036854775808 idiv -1 -> xs:integer 9223372036854775808
+xs:long('9223372036854775807') + 1 -> xs:integer 9223372036854775808
+xs:integer(//item[@sku = 'A8']/@qty) * 2 -> xs:integer 2469135780246913578024691357802469135780
+xs:double(//item[@sku = 'A8']/@qty) -> xs:double 1.2345678901234568E39
+xs:decimal('1e3') -> ERROR FORG0001
+xs:double('1e3') -> xs:double 1000
+xs:integer('1.0') -> ERROR FORG0001
+xs:integer(1.0) -> xs:integer 1
+xs:decimal(' 12.50 ') -> xs:decimal 12.5
+xs:decimal('+5') -> xs:decimal 5
+xs:decimal('.5') -> xs:decimal 0.5
+xs:decimal('5.') -> xs:decimal 5
+xs:decimal('1,250.00') -> ERROR FORG0001
+xs:decimal(translate('1,250.00', ',', '')) -> xs:decimal 1250
+xs:double('-0') -> xs:double -0
+xs:decimal('-0') -> xs:decimal 0
+xs:decimal(//item[@sku = 'A7']/@price) * 1000000 -> xs:decimal 0.000000000000000000000001
+xs:double(//item[@sku = 'A7']/@price) -> xs:double 1.0E-30
+xs:double('1e309') -> xs:double INF
+xs:integer(xs:double('INF')) -> ERROR FOCA0002
+string(1e6) -> xs:string "1.0E6"
+string(1e-6) -> xs:string "0.000001"
+xs:decimal(0.1e0) -> xs:decimal 0.1000000000000000055511151231257827021181583404541015625
+round(xs:decimal(35.425e0), 2) -> xs:decimal 35.42
+9007199254740993 = 9007199254740992e0 -> xs:boolean true
+9007199254740993 = 9007199254740992 -> xs:boolean false
+Reading results in C:
+count(//item)
+  xp3SequenceInteger -> 11
+  xp3SequenceDouble -> 11
+  xp3SequenceStringValue -> "11"
+xs:integer(//item[@sku = 'A8']/@qty)
+  xp3SequenceInteger -> 1, outside int64_t
+  xp3SequenceDouble -> 1.2345678901234568e+39
+  xp3SequenceStringValue -> "1234567890123456789012345678901234567890"
+sum(//item/@price[. castable as xs:decimal] ! xs:decimal(.))
+  xp3SequenceInteger -> -1, not an integer
+  xp3SequenceDouble -> 23
+  xp3SequenceStringValue -> "23.000000000000000000000000000001"
+data(//item[@sku = 'A1']/@price)
+  xp3SequenceInteger -> -1, not an integer
+  xp3SequenceDouble -> -1, not a number
+  xp3SequenceStringValue -> " 12.50 "
+number(//item[@sku = 'A1']/@price)
+  xp3SequenceInteger -> -1, not an integer
+  xp3SequenceDouble -> 12.5
+  xp3SequenceStringValue -> "12.5"
+number(//item[@sku = 'A6']/@price)
+  xp3SequenceInteger -> -1, not an integer
+  xp3SequenceDouble -> NaN
+  xp3SequenceStringValue -> "NaN"
+xs:double('-0')
+  xp3SequenceInteger -> -1, not an integer
+  xp3SequenceDouble -> -0
+  xp3SequenceStringValue -> "-0"

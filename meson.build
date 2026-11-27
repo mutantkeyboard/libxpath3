@@ -17,6 +17,29 @@ cc = meson.get_compiler('c')
 # Variable-length arrays are not allowed.
 add_project_arguments(cc.get_supported_arguments('-Werror=vla'), language: 'c')
 
+# MinGW's own stdio is C99-conforming, with %zu and %lld, unlike the
+# Microsoft runtime's; the format checks of xp3ErrorNew() rely on it.
+if cc.get_define('__MINGW32__') != ''
+    add_project_arguments('-D__USE_MINGW_ANSI_STDIO=1', language: 'c')
+endif
+
+# The system clock and the local offset (xp3datetime.c), each from the
+# first of these that exists; Windows has its own. Without
+# localtime_r() and gmtime_r() the local offset is UTC, because
+# localtime() shares its result between threads.
+posix_time_prefix = '#define _POSIX_C_SOURCE 200809L\n#include <time.h>'
+if cc.has_function('clock_gettime', prefix: posix_time_prefix)
+    add_project_arguments('-DXP3_HAVE_CLOCK_GETTIME', language: 'c')
+endif
+if cc.has_function('gettimeofday',
+                   prefix: '#define _POSIX_C_SOURCE 200809L\n#include <sys/time.h>')
+    add_project_arguments('-DXP3_HAVE_GETTIMEOFDAY', language: 'c')
+endif
+if (cc.has_function('localtime_r', prefix: posix_time_prefix) and
+    cc.has_function('gmtime_r', prefix: posix_time_prefix))
+    add_project_arguments('-DXP3_HAVE_LOCALTIME_R', language: 'c')
+endif
+
 version = meson.project_version()
 version_parts = version.split('.')
 
@@ -30,10 +53,12 @@ xpath3_src = files(
     'xp3ast.c',
     'xp3chars.c',
     'xp3context.c',
+    'xp3datetime.c',
     'xp3decimal.c',
     'xp3double.c',
     'xp3error.c',
     'xp3eval.c',
+    'xp3fndatetime.c',
     'xp3fnnode.c',
     'xp3fnnumeric.c',
     'xp3fnregex.c',
@@ -87,6 +112,11 @@ subdir('test')
 subdir('qt3')
 subdir('fuzz')
 
+# The examples need nothing beyond the library, so auto builds them
+if not get_option('examples').disabled()
+    subdir('examples')
+endif
+
 doxygen = find_program('doxygen', required: get_option('docs'))
 if doxygen.found()
     subdir('doc')
@@ -95,4 +125,5 @@ endif
 summary({
     'libxml2': libxml2_dep.version(),
     'docs': doxygen.found(),
+    'examples': not get_option('examples').disabled(),
 }, section: 'Configuration')

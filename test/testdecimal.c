@@ -582,6 +582,72 @@ testRound(void) {
     xp3DecimalFree(five);
 }
 
+static const struct {
+    const char *a;
+    const char *b;
+    int precision;
+    xp3RoundingMode mode;
+    const char *expected;
+} divRoundCases[] = {
+    /* 20 digits, half to even, as for a duration divided by another */
+    { "10", "3", 20, XP3_ROUND_HALF_EVEN, "3.33333333333333333333" },
+    { "1", "2097152", 20, XP3_ROUND_HALF_EVEN, "0.00000047683715820312" },
+    { "3", "2097152", 20, XP3_ROUND_HALF_EVEN, "0.00000143051147460938" },
+    { "-1", "2097152", 20, XP3_ROUND_HALF_EVEN, "-0.00000047683715820312" },
+    { "1", "2097152", 20, XP3_ROUND_HALF_UP, "0.00000047683715820313" },
+    /* Exact quotients keep no trailing zeros */
+    { "1.5", "3", 20, XP3_ROUND_HALF_EVEN, "0.5" },
+    { "40", "1", 20, XP3_ROUND_HALF_EVEN, "40" },
+    { "0", "7", 20, XP3_ROUND_HALF_EVEN, "0" },
+    /* A dividend with more digits after the point than the precision */
+    { "0.123456", "1", 2, XP3_ROUND_HALF_EVEN, "0.12" },
+    { "0.125", "1", 2, XP3_ROUND_HALF_EVEN, "0.12" },
+    { "0.135", "1", 2, XP3_ROUND_HALF_EVEN, "0.14" },
+    { "2.5", "1", 0, XP3_ROUND_DOWN, "2" },
+    { "-7", "2", 0, XP3_ROUND_DOWN, "-3" }
+};
+
+/* Division rounded to a fixed number of digits */
+static void
+testDivRound(void) {
+    xp3Decimal *one = dec("1");
+    xp3Decimal *zero = dec("0");
+    xp3Decimal *res = NULL;
+    size_t i;
+
+    for (i = 0; i < sizeof(divRoundCases) / sizeof(divRoundCases[0]); i++) {
+        xp3Decimal *a = dec(divRoundCases[i].a);
+        xp3Decimal *b = dec(divRoundCases[i].b);
+        char what[128];
+
+        if ((a == NULL) || (b == NULL)) {
+            xp3DecimalFree(a);
+            xp3DecimalFree(b);
+            continue;
+        }
+        snprintf(what, sizeof(what), "%s div %s at %d digits in mode %d",
+                 divRoundCases[i].a, divRoundCases[i].b,
+                 divRoundCases[i].precision, (int) divRoundCases[i].mode);
+        res = NULL;
+        check(xp3DecimalDivRound(a, b, divRoundCases[i].precision,
+                                 divRoundCases[i].mode, &res) == XP3_ERR_OK,
+              what);
+        expectStr(res, divRoundCases[i].expected, what);
+        xp3DecimalFree(a);
+        xp3DecimalFree(b);
+    }
+    res = NULL;
+    check((xp3DecimalDivRound(one, zero, 20, XP3_ROUND_HALF_EVEN, &res) ==
+           XP3_ERR_FOAR0001) && (res == NULL), "division by zero");
+    check((xp3DecimalDivRound(one, one, -1, XP3_ROUND_HALF_EVEN, &res) ==
+           XP3_ERR_LIMIT) && (res == NULL), "a negative precision");
+    check((xp3DecimalDivRound(one, one, XP3_DECIMAL_MAX_DIGITS + 1,
+                              XP3_ROUND_HALF_EVEN, &res) == XP3_ERR_LIMIT) &&
+          (res == NULL), "a precision beyond the digit limit");
+    xp3DecimalFree(one);
+    xp3DecimalFree(zero);
+}
+
 static void
 testCompare(void) {
     static const struct {
@@ -661,6 +727,83 @@ testConversions(void) {
         check(isinf(xp3DecimalToDouble(d)), "huge decimal to infinity");
         xp3DecimalFree(d);
     }
+}
+
+/*
+ * The exact values of doubles, from Python's decimal.Decimal(float),
+ * which converts exactly, and the digits after their points
+ */
+static const struct {
+    double value;
+    const char *exact;
+    int scale;
+} fromDoubleCases[] = {
+    { 0.0, "0", 0 },
+    { -0.0, "0", 0 },
+    { 1.0, "1", 0 },
+    { 0.5, "0.5", 1 },
+    { -2.5, "-2.5", 1 },
+    { 0.1, "0.1000000000000000055511151231257827021181583404541015625", 55 },
+    { 35.425, "35.4249999999999971578290569595992565155029296875", 46 },
+    { 1.5e-7, "0.0000001499999999999999932122167738829388028420908085536211"
+              "7290496826171875", 74 },
+    { 3.0517578125e-05, "0.000030517578125", 15 },
+    { 1e23, "99999999999999991611392", 0 },
+    { 9007199254740993.0, "9007199254740992", 0 },
+    { -1e20, "-100000000000000000000", 0 }
+};
+
+static void
+testFromDouble(void) {
+    xp3Decimal *d;
+    xmlChar *str;
+    size_t i;
+
+    for (i = 0; i < sizeof(fromDoubleCases) / sizeof(fromDoubleCases[0]);
+         i++) {
+        char what[128];
+
+        snprintf(what, sizeof(what), "exact value of %.17g",
+                 fromDoubleCases[i].value);
+        d = NULL;
+        check(xp3DecimalFromDouble(fromDoubleCases[i].value, &d) ==
+              XP3_ERR_OK, what);
+        expectStr(d, fromDoubleCases[i].exact, what);
+        snprintf(what, sizeof(what), "digits after the point of %.17g",
+                 fromDoubleCases[i].value);
+        check(xp3DecimalScaleOfDouble(fromDoubleCases[i].value) ==
+              fromDoubleCases[i].scale, what);
+    }
+
+    /* The smallest subnormal, 2^-1074, is 5^1074 * 10^-1074: 323 zeros
+     * after the point, then the 751 digits of 5^1074 */
+    d = NULL;
+    check(xp3DecimalFromDouble(ldexp(1.0, -1074), &d) == XP3_ERR_OK,
+          "the smallest subnormal converts");
+    str = xp3DecimalToString(d);
+    check((str != NULL) && (strlen((const char *) str) == 1076) &&
+          (strspn((const char *) str + 2, "0") == 323) &&
+          (strncmp((const char *) str + 325, "4940656458412465441765687",
+                   25) == 0) &&
+          (strcmp((const char *) str + 1056, "19718265533447265625") == 0),
+          "the smallest subnormal has 1074 digits after the point");
+    check(xp3DecimalScaleOfDouble(ldexp(1.0, -1074)) == 1074,
+          "the smallest subnormal has scale 1074");
+    check(xp3DecimalScaleOfDouble(-ldexp(1.0, -1022)) == 1022,
+          "the smallest normal double has scale 1022");
+    xmlFree(str);
+    xp3DecimalFree(d);
+
+    /* The largest double, (2^53 - 1) * 2^971, has 309 digits */
+    d = NULL;
+    check(xp3DecimalFromDouble(1.7976931348623157e308, &d) == XP3_ERR_OK,
+          "the largest double converts");
+    expectStr(d, "1797693134862315708145274237317043567980705675258449965989"
+                 "1747680315726078002853876058955863276687817154045895351438"
+                 "2464234321326889464182768467546703537516986049910576551282"
+                 "0762454900903893289440758685084551339423045832369032229481"
+                 "6580855933212334827479782620414472316873817718091929988125"
+                 "0404026184124858368", "the largest double");
 }
 
 static void
@@ -786,6 +929,50 @@ testAllocationFailures(void) {
     xmlFree(expected);
 }
 
+/* The exact value of each double fails with NO_MEMORY, or not at all */
+static void
+testFromDoubleAllocationFailures(void) {
+    static const double values[] = {
+        0.1, -1e23, 1.7976931348623157e308, 4.9e-324
+    };
+    size_t v;
+
+    if (!xp3TestAllocInstall()) {
+        xp3TestSkip("this libxml2 ignores xmlMemSetup()");
+        xp3TestAllocRestore();
+        return;
+    }
+    for (v = 0; v < sizeof(values) / sizeof(values[0]); v++) {
+        xp3Decimal *reference = NULL;
+        int i;
+
+        xp3TestAllocFailAt(-1);
+        check(xp3DecimalFromDouble(values[v], &reference) == XP3_ERR_OK,
+              "reference conversion");
+        for (i = 0; i < 100; i++) {
+            xp3Decimal *d = NULL;
+            xp3ErrCode code;
+
+            xp3TestAllocFailAt(i);
+            code = xp3DecimalFromDouble(values[v], &d);
+            if (!xp3TestAllocFailed()) {
+                xp3TestAllocFailAt(-1);
+                check((code == XP3_ERR_OK) && (reference != NULL) &&
+                      (xp3DecimalCompare(d, reference) == 0),
+                      "conversion complete after allocation failures");
+                xp3DecimalFree(d);
+                break;
+            }
+            xp3TestAllocFailAt(-1);
+            check((code == XP3_ERR_NO_MEMORY) && (d == NULL),
+                  "failed allocation reported as NO_MEMORY");
+        }
+        check(i > 0 && i < 100, "allocation failure points exercised");
+        xp3DecimalFree(reference);
+    }
+    xp3TestAllocRestore();
+}
+
 int
 main(void) {
     xmlInitParser();
@@ -796,10 +983,13 @@ main(void) {
     XP3_TEST_RUN(testAddBack);
     XP3_TEST_RUN(testDivisionProperties);
     XP3_TEST_RUN(testRound);
+    XP3_TEST_RUN(testDivRound);
     XP3_TEST_RUN(testCompare);
     XP3_TEST_RUN(testConversions);
+    XP3_TEST_RUN(testFromDouble);
     XP3_TEST_RUN(testLimits);
     XP3_TEST_RUN(testAllocationFailures);
+    XP3_TEST_RUN(testFromDoubleAllocationFailures);
 
     return(xp3TestDone());
 }

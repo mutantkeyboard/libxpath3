@@ -4,6 +4,12 @@ option('docs',
   description: 'Build API documentation with Doxygen'
 )
 
+option('examples',
+  type: 'feature',
+  value: 'auto',
+  description: 'Build the tutorial programs and test them against their expected output'
+)
+
 option('fuzzer',
   type: 'boolean',
   value: false,

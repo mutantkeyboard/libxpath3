@@ -15,6 +15,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(XP3_BUILD_DOCS "Build API documentation with Doxygen" OFF)
+option(XP3_BUILD_EXAMPLES "Build the tutorial programs and test them" ON)
 
 include(GNUInstallDirs)
 
@@ -26,6 +27,12 @@ include(CTest)
 
 find_package(LibXml2 2.9.0 REQUIRED)
 
+# MinGW's own stdio is C99-conforming, with %zu and %lld, unlike the
+# Microsoft runtime's; the format checks of xp3ErrorNew() rely on it.
+if(MINGW)
+    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1)
+endif()
+
 configure_file(
     include/libxpath3/xp3version.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/include/libxpath3/xp3version.h
@@ -36,10 +43,12 @@ set(XP3_SOURCES
     xp3ast.c
     xp3chars.c
     xp3context.c
+    xp3datetime.c
     xp3decimal.c
     xp3double.c
     xp3error.c
     xp3eval.c
+    xp3fndatetime.c
     xp3fnnode.c
     xp3fnnumeric.c
     xp3fnregex.c
@@ -66,6 +75,28 @@ find_library(XP3_LIBM m)
 set(XP3_LIBM_LIBS "")
 if(XP3_LIBM)
     set(XP3_LIBM_LIBS ${XP3_LIBM})
+endif()
+
+# The system clock and the local offset (xp3datetime.c), each from the
+# first of these that exists; Windows has its own. Without
+# localtime_r() and gmtime_r() the local offset is UTC, because
+# localtime() shares its result between threads. Set for every target,
+# as the tests compile the sources too.
+include(CheckSymbolExists)
+set(CMAKE_REQUIRED_DEFINITIONS -D_POSIX_C_SOURCE=200809L)
+check_symbol_exists(clock_gettime "time.h" XP3_HAVE_CLOCK_GETTIME)
+check_symbol_exists(gettimeofday "sys/time.h" XP3_HAVE_GETTIMEOFDAY)
+check_symbol_exists(localtime_r "time.h" XP3_HAVE_LOCALTIME)
+check_symbol_exists(gmtime_r "time.h" XP3_HAVE_GMTIME_R)
+unset(CMAKE_REQUIRED_DEFINITIONS)
+if(XP3_HAVE_CLOCK_GETTIME)
+    add_compile_definitions(XP3_HAVE_CLOCK_GETTIME)
+endif()
+if(XP3_HAVE_GETTIMEOFDAY)
+    add_compile_definitions(XP3_HAVE_GETTIMEOFDAY)
+endif()
+if(XP3_HAVE_LOCALTIME AND XP3_HAVE_GMTIME_R)
+    add_compile_definitions(XP3_HAVE_LOCALTIME_R)
 endif()
 
 add_library(xpath3 ${XP3_SOURCES})
@@ -101,10 +132,21 @@ if(BUILD_TESTING)
         add_test(NAME threads COMMAND testthreads)
     endif()
 
+    # The deepest expressions that the default nesting limit accepts, in
+    # a thread with a small stack: Windows threads, or POSIX threads
+    # elsewhere; without them the test is skipped.
+    add_executable(teststack test/teststack.c test/testtap.c)
+    target_link_libraries(teststack PRIVATE xpath3)
+    if(CMAKE_USE_PTHREADS_INIT AND NOT WIN32)
+        target_compile_definitions(teststack PRIVATE XP3_HAVE_PTHREAD)
+        target_link_libraries(teststack PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME stack COMMAND teststack)
+
     # Tests of internal functions compile the library sources directly,
     # because the shared library only exports the public API.
     foreach(name error context lexer ast parser decimal value func static nodes eval
-            unicode regex)
+            unicode regex datetime fndatetime)
         add_executable(test${name} test/test${name}.c test/testalloc.c
             test/testtap.c ${XP3_SOURCES})
         target_compile_definitions(test${name} PRIVATE XP3_STATIC)
@@ -169,6 +211,45 @@ if(BUILD_TESTING)
             add_test(NAME qt3-${spec} COMMAND qt3run -s ${spec}
                 -k ${CMAKE_CURRENT_SOURCE_DIR}/qt3/known-failures-${spec}.txt
                 ${XP3_QT3_DIR}/catalog.xml)
+        endforeach()
+    endif()
+endif()
+
+# The tutorial programs of doc/tutorial/, built against the library as
+# an application would build them. Each runs as a test that compares
+# its output with examples/expected/NAME.txt, and a second test checks
+# that the code shown on its page is taken from it (runexample.c).
+if(XP3_BUILD_EXAMPLES)
+    set(XP3_EXAMPLES
+        01-first-query
+        02-namespaces-variables
+        03-numbers
+        04-strings-regex
+        05-dates-times
+        06-extension-functions
+        07-untrusted-expressions
+    )
+    foreach(name ${XP3_EXAMPLES})
+        add_executable(example-${name} examples/${name}.c examples/common.c)
+        set_target_properties(example-${name} PROPERTIES OUTPUT_NAME ${name})
+        target_link_libraries(example-${name} PRIVATE xpath3)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(example-${name} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror=vla)
+        endif()
+    endforeach()
+
+    if(BUILD_TESTING)
+        add_executable(runexample examples/runexample.c)
+        foreach(name ${XP3_EXAMPLES})
+            add_test(NAME example-${name} COMMAND runexample output
+                $<TARGET_FILE:example-${name}>
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/data
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/expected/${name}.txt)
+            add_test(NAME example-${name}-page COMMAND runexample excerpts
+                ${CMAKE_CURRENT_SOURCE_DIR}/doc/tutorial/${name}.md
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/${name}.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/common.c)
         endforeach()
     endif()
 endif()

@@ -10,8 +10,11 @@
  * on every evaluation with the user data of the thread's dynamic
  * context. A third calls the regular expression functions on the
  * document, in loops that reuse each compiled pattern, which every
- * evaluation keeps in a cache of its own. The test checks every
- * result; under ThreadSanitizer (the
+ * evaluation keeps in a cache of its own. A fourth reads the system
+ * clock and the local offset, which every evaluation does once for
+ * itself, through current-dateTime() and the forms of
+ * adjust-*-to-timezone that use the implicit timezone. The test checks
+ * every result; under ThreadSanitizer (the
  * clang:tsan CI job) it also checks that no two threads write the same
  * memory.
  *
@@ -35,6 +38,10 @@
 
 #define XP3_THREADS 8
 #define XP3_EVALUATIONS 300
+
+/* 0.1e0 cast as xs:decimal */
+#define XP3_EXACT_TENTH \
+    "0.1000000000000000055511151231257827021181583404541015625"
 
 static const char xp3ThreadDoc[] =
     "<r><a id='i1'>one</a><a id='i2'><b>two</b><b>three</b></a>"
@@ -61,10 +68,29 @@ static const char xp3ThreadRegexExpr[] =
 static const char xp3ThreadRegexExpected[] =
     "[t]wo [ht]ree true false true on twothr 4.5";
 
+/* The system clock, read once per evaluation: every call agrees with
+ * the others, and #1 of adjust-*-to-timezone with the implicit
+ * timezone */
+static const char xp3ThreadClockExpr[] =
+    "let $now := current-dateTime() return ("
+    "timezone-from-dateTime($now) eq implicit-timezone(), "
+    "adjust-dateTime-to-timezone(xs:dateTime('2026-01-01T00:00:00Z')) eq "
+    "xs:dateTime('2026-01-01T00:00:00Z'), "
+    "adjust-date-to-timezone(xs:date('2026-01-01')) eq "
+    "adjust-date-to-timezone(xs:date('2026-01-01'), implicit-timezone()), "
+    "adjust-time-to-timezone(xs:time('12:00:00')) eq "
+    "adjust-time-to-timezone(xs:time('12:00:00'), implicit-timezone()), "
+    "current-dateTime() eq $now, current-date() eq xs:date($now), "
+    "current-time() eq xs:time($now))";
+
+static const char xp3ThreadClockExpected[] =
+    "true true true true true true true";
+
 static xmlDocPtr threadDoc;
 static xp3Expr *threadExpr;
 static xp3Expr *threadExtExpr;
 static xp3Expr *threadRegexExpr;
+static xp3Expr *threadClockExpr;
 static char expected[4096];
 
 /* What one thread evaluates with and finds */
@@ -182,6 +208,13 @@ evaluateMany(void *arg) {
             (strcmp(actual, xp3ThreadRegexExpected) != 0))
             state->mismatches++;
         xp3FreeSequence(result);
+
+        result = xp3Evaluate(threadClockExpr, ctx, NULL);
+        describe(result, actual, sizeof(actual));
+        if ((result == NULL) ||
+            (strcmp(actual, xp3ThreadClockExpected) != 0))
+            state->mismatches++;
+        xp3FreeSequence(result);
     }
     xp3FreeDynamicContext(ctx);
     return(NULL);
@@ -212,9 +245,11 @@ testSetUp(void) {
     threadExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExpr, NULL);
     threadExtExpr = xp3Compile(sctx, BAD_CAST xp3ThreadExtExpr, NULL);
     threadRegexExpr = xp3Compile(sctx, BAD_CAST xp3ThreadRegexExpr, NULL);
+    threadClockExpr = xp3Compile(sctx, BAD_CAST xp3ThreadClockExpr, NULL);
     xp3FreeStaticContext(sctx);
     xp3TestCheck((threadExpr != NULL) && (threadExtExpr != NULL) &&
-                 (threadRegexExpr != NULL), "expression compiled");
+                 (threadRegexExpr != NULL) && (threadClockExpr != NULL),
+                 "expression compiled");
 }
 
 /* The expected result, from one thread first */
@@ -233,14 +268,14 @@ testOneThread(void) {
     xp3FreeSequence(result);
     xp3FreeDynamicContext(ctx);
     /* For each $i: the item at ($i mod 3) + 1, $i * 2.5, then the same
-     * eight values */
+     * eight values, with the exact value of the double 0.1 */
     if (strcmp(expected,
-               "a 2.5 yes 0.1 4 5 two three shared 5.5 "
-               "2.5 5 yes 0.1 4 5 two three shared 5.5 "
-               "1 7.5 yes 0.1 4 5 two three shared 5.5 "
-               "a 10 yes 0.1 4 5 two three shared 5.5 "
-               "2.5 12.5 yes 0.1 4 5 two three shared 5.5 "
-               "1 15 yes 0.1 4 5 two three shared 5.5") != 0)
+               "a 2.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "2.5 5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "1 7.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "a 10 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "2.5 12.5 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5 "
+               "1 15 yes " XP3_EXACT_TENTH " 4 5 two three shared 5.5") != 0)
         xp3TestFail("unexpected result %s", expected);
 }
 
@@ -283,6 +318,7 @@ main(void) {
     xp3FreeExpr(threadExpr);
     xp3FreeExpr(threadExtExpr);
     xp3FreeExpr(threadRegexExpr);
+    xp3FreeExpr(threadClockExpr);
     xmlFreeDoc(threadDoc);
     return(xp3TestDone());
 }

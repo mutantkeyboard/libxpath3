@@ -14,8 +14,9 @@
  * exact too. With a precision, F&O 3.1, 4.4.4 rounds a double or float
  * as if converted to an xs:decimal without limits on its digits, so
  * here it is converted to its exact decimal value, at most 1074 digits
- * after the point, rounded, and cast back. The shortest decimal that
- * reads back as the double would round 35.425e0 to 35.43, not 35.42.
+ * after the point, as a cast to xs:decimal does, rounded, and cast
+ * back. round(35.425e0, 2) is therefore 35.42, as is
+ * round(xs:decimal(35.425e0), 2): the double is just below 35.425.
  *
  * The math functions (F&O 3.1, 4.8) are those of IEEE 754-2008, which
  * C99 Annex F gives libm for the special values too: log(0) is -INF,
@@ -146,71 +147,6 @@ roundWhole(double value, xp3RoundingMode mode) {
 }
 
 /*
- * The exact value of a finite, nonzero double as a decimal. The double
- * is m * 2^e with an odd integer m of at most 53 bits, which is
- * m * 0.5^-e for a negative e: -e digits after the point. Sets
- * *fraction to that number of digits, 0 for a whole number, and
- * leaves *res NULL if precision is not below it, since rounding then
- * keeps the value.
- */
-static xp3ErrCode
-exactDecimal(double value, int precision, int *fraction, xp3Decimal **res) {
-    xp3Decimal *result;
-    xp3Decimal *power;
-    xp3ErrCode ret = XP3_ERR_OK;
-    int64_t mantissa;
-    int exponent;
-    int n;
-
-    *res = NULL;
-    mantissa = (int64_t) ldexp(frexp(value, &exponent), 53);
-    exponent -= 53;
-    while (mantissa % 2 == 0) {
-        mantissa /= 2;
-        exponent++;
-    }
-    *fraction = (exponent < 0) ? -exponent : 0;
-    if (precision >= *fraction)
-        return(XP3_ERR_OK);
-
-    result = xp3DecimalFromInt64(mantissa);
-    if (exponent >= 0)
-        power = xp3DecimalFromInt64(2);
-    else if (xp3DecimalParse(BAD_CAST "0.5", 3, 0, &power) != XP3_ERR_OK)
-        power = NULL;
-    if ((result == NULL) || (power == NULL)) {
-        xp3DecimalFree(result);
-        xp3DecimalFree(power);
-        return(XP3_ERR_NO_MEMORY);
-    }
-    for (n = (exponent < 0) ? -exponent : exponent; n > 0; n >>= 1) {
-        xp3Decimal *next;
-
-        if (n & 1) {
-            ret = xp3DecimalMul(result, power, &next);
-            if (ret != XP3_ERR_OK)
-                break;
-            xp3DecimalFree(result);
-            result = next;
-        }
-        if (n > 1) {
-            ret = xp3DecimalMul(power, power, &next);
-            if (ret != XP3_ERR_OK)
-                break;
-            xp3DecimalFree(power);
-            power = next;
-        }
-    }
-    xp3DecimalFree(power);
-    if (ret != XP3_ERR_OK) {
-        xp3DecimalFree(result);
-        return(ret);
-    }
-    *res = result;
-    return(XP3_ERR_OK);
-}
-
-/*
  * Round a double or float to a precision other than 0, through its
  * exact decimal value, and cast the result back to the type of the
  * argument (F&O 3.1, 4.4.4 and 4.4.5).
@@ -225,15 +161,16 @@ roundBinary(xp3FuncCall *call, xp3Value *arg, const xp3Atomic *atomic,
     xp3Atomic *decimal;
     xp3Atomic *result;
     xp3ErrCode err;
-    int fraction;
 
-    err = exactDecimal(value, precision, &fraction, &exact);
+    /* No more digits after the point than the precision: rounding keeps
+     * the value, so it isn't converted */
+    if (precision >= xp3DecimalScaleOfDouble(value))
+        return(xp3ValueRef(arg));
+    err = xp3DecimalFromDouble(value, &exact);
     if (err != XP3_ERR_OK) {
         xp3FuncError(call, XP3_ERR_NO_MEMORY, NULL);
         return(NULL);
     }
-    if (exact == NULL)
-        return(xp3ValueRef(arg));
     /* Rounding a value of at most 1074 + 309 digits stays far below
      * the limit on digits, whatever the precision */
     err = xp3DecimalRound(exact, precision, mode, &rounded);

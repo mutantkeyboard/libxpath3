@@ -46,6 +46,7 @@
 #include <libxml/xmlmemory.h>
 #include <libxml/xmlstring.h>
 
+#include "private/xp3compiler.h"
 #include "private/xp3context.h"
 #include "private/xp3eval.h"
 #include "private/xp3error.h"
@@ -342,7 +343,7 @@ analyzeAtomicType(xp3Analysis *st, xp3AstNode *node) {
  * The SEQUENCE_TYPE of a cast or castable expression, whose child is an
  * ATOMIC_TYPE [err:XQST0052, err:XPST0080].
  */
-static int
+static XP3_NOINLINE int
 analyzeCastTarget(xp3Analysis *st, xp3AstNode *seqType) {
     xp3AstNode *node = seqType->first;
     char name[XP3_NAME_BUF];
@@ -446,7 +447,7 @@ analyzeKindTest(xp3Analysis *st, xp3AstNode *test) {
 /*
  * A sequence type or item type, anywhere other than cast and castable.
  */
-static int
+static XP3_NOINLINE int
 analyzeType(xp3Analysis *st, xp3AstNode *node) {
     xp3AstNode *child;
 
@@ -554,7 +555,7 @@ bindVariable(xp3Analysis *st, xp3AstNode *node) {
 }
 
 /* A VARREF: find its slot [err:XPST0008]. */
-static int
+static XP3_NOINLINE int
 analyzeVarRef(xp3Analysis *st, xp3AstNode *node) {
     char name[XP3_NAME_BUF];
     int i;
@@ -584,7 +585,7 @@ analyzeVarRef(xp3Analysis *st, xp3AstNode *node) {
 }
 
 /* for, let, some and every: BINDING..., then the last expression */
-static int
+static XP3_NOINLINE int
 analyzeClauses(xp3Analysis *st, xp3AstNode *node) {
     int mark = st->scope.count;
     xp3AstNode *child;
@@ -606,14 +607,15 @@ analyzeClauses(xp3Analysis *st, xp3AstNode *node) {
     return(ret);
 }
 
-/* function(PARAM...) as T { body } [err:XQST0039] */
-static int
-analyzeInlineFunction(xp3Analysis *st, xp3AstNode *node) {
-    int mark = st->scope.count;
+/* The PARAMs of an inline function: names resolved, no name twice
+ * [err:XQST0039], types checked. Not inlined into
+ * analyzeInlineFunction(), so that its buffer is not on the stack
+ * while the body is analysed. */
+static XP3_NOINLINE int
+analyzeParams(xp3Analysis *st, xp3AstNode *node) {
     xp3AstNode *child;
     xp3AstNode *other;
     char name[XP3_NAME_BUF];
-    int ret = 0;
 
     for (child = node->first; child != NULL; child = child->next) {
         if (child->kind != XP3_AST_PARAM)
@@ -629,6 +631,18 @@ analyzeInlineFunction(xp3Analysis *st, xp3AstNode *node) {
         if ((child->first != NULL) && (analyzeType(st, child->first) < 0))
             return(-1);
     }
+    return(0);
+}
+
+/* function(PARAM...) as T { body } */
+static XP3_NOINLINE int
+analyzeInlineFunction(xp3Analysis *st, xp3AstNode *node) {
+    int mark = st->scope.count;
+    xp3AstNode *child;
+    int ret = 0;
+
+    if (analyzeParams(st, node) < 0)
+        return(-1);
 
     for (child = node->first; (child != NULL) && (ret == 0);
          child = child->next) {
@@ -762,7 +776,7 @@ hasPlaceholder(const xp3AstNode *node) {
  * ARROW with a name [err:XPST0017]: a built-in function, then an
  * extension function, which exists at every level.
  */
-static int
+static XP3_NOINLINE int
 resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
     const xp3ExtFunction *ext;
     const xp3FuncInfo *info;
@@ -812,7 +826,7 @@ resolveFunction(xp3Analysis *st, xp3AstNode *node, int arity) {
 }
 
 /* name#arity, where the arity may not fit in an int */
-static int
+static XP3_NOINLINE int
 analyzeFunctionRef(xp3Analysis *st, xp3AstNode *node) {
     char name[XP3_NAME_BUF];
 
@@ -846,7 +860,7 @@ analyzeChildren(xp3Analysis *st, xp3AstNode *node) {
     return(0);
 }
 
-static int
+static XP3_NOINLINE int
 analyzeStep(xp3Analysis *st, xp3AstNode *step) {
     xp3AstNode *child;
 
@@ -870,6 +884,8 @@ analyzeStep(xp3Analysis *st, xp3AstNode *step) {
     return(0);
 }
 
+/* The handlers are XP3_NOINLINE, so that each level of the recursion
+ * takes the frame of its own handler, not of all of them. */
 static int
 analyzeNode(xp3Analysis *st, xp3AstNode *node) {
     switch (node->kind) {
