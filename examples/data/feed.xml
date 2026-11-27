@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en"
+      xmlns:media="http://example.com/ns/media/1"
+      xmlns:x="http://example.com/ns/extra">
+  <title>Harbour notes</title>
+  <entry xml:lang="de">
+    <title>Hafenbericht</title>
+    <media:thumbnail url="tide.png" media:width="120"/>
+    <x:rating x:scale="5">4</x:rating>
+  </entry>
+  <entry>
+    <title>Tide tables</title>
+    <link href="tides.html" rel="alternate"/>
+  </entry>
+  <entry xml:lang="en-GB" xmlns:media="http://example.com/ns/media/2">
+    <title>Colour charts</title>
+    <media:thumbnail url="charts.png" media:width="240"/>
+    <x:rating>3</x:rating>
+    <x:rating>5</x:rating>
+  </entry>
+  <entry>
+    <title>Raw import</title>
+    <payload xmlns="">
+      <title>not an Atom title</title>
+    </payload>
+  </entry>
+</feed>

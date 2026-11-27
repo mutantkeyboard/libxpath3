@@ -19,6 +19,7 @@
 #include <libxml/xmlstring.h>
 
 #include <libxpath3/xpath3.h>
+#include "private/xp3datetime.h"
 #include "private/xp3decimal.h"
 #include "private/xp3error.h"
 #include "private/xp3types.h"
@@ -55,8 +56,7 @@ typedef struct {
 
 /*
  * An atomic value: a type and a payload, stored as the type's
- * representation says (xp3TypeRepresentation()). Durations and dates
- * come with Part 10.
+ * representation says (xp3TypeRepresentation()).
  */
 struct _xp3Atomic {
     int refs;
@@ -76,6 +76,8 @@ struct _xp3Atomic {
             xmlChar *prefix;    /* NULL for no prefix */
             xmlChar *local;
         } qname;                /* XP3_REP_QNAME */
+        xp3Duration dur;        /* XP3_REP_DURATION */
+        xp3DateTime dt;         /* XP3_REP_DATE_TIME */
     } u;
 };
 
@@ -163,6 +165,12 @@ xp3AtomicNewBinary(xp3TypeId type, const unsigned char *data, size_t len);
 xp3Atomic *
 xp3AtomicNewQName(const xmlChar *uri, const xmlChar *prefix,
                   const xmlChar *local);
+
+xp3Atomic *
+xp3AtomicNewDateTime(xp3TypeId type, const xp3DateTime *value);
+
+xp3Atomic *
+xp3AtomicNewDuration(xp3TypeId type, const xp3Duration *value);
 
 xp3Atomic *
 xp3AtomicRef(xp3Atomic *atomic);

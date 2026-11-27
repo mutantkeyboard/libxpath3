@@ -551,17 +551,54 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1e300 cast as xs:integer) eq 1e300", "boolean:true" },
     { "(1e19 cast as xs:integer) eq 10000000000000000000",
       "boolean:true" },
+    /* A double or float cast to xs:decimal is its exact binary value
+     * (F&O 3.1, 19.1.2.3), as in Saxon-HE 12.5 */
     { "1e0 cast as xs:decimal", "decimal:1" },
-    { "0.1e0 cast as xs:decimal", "decimal:0.1" },
-    { "1.5e-7 cast as xs:decimal", "decimal:0.00000015" },
-    { "-1.5e-7 cast as xs:decimal", "decimal:-0.00000015" },
+    { "0.1e0 cast as xs:decimal",
+      "decimal:0.1000000000000000055511151231257827021181583404541015625" },
+    { "-0.1e0 cast as xs:decimal",
+      "decimal:-0.1000000000000000055511151231257827021181583404541015625" },
+    { "1.5e-7 cast as xs:decimal",
+      "decimal:0.00000014999999999999999321221677388293880284209080855362"
+      "117290496826171875" },
+    { "-1.5e-7 cast as xs:decimal",
+      "decimal:-0.00000014999999999999999321221677388293880284209080855362"
+      "117290496826171875" },
     { "1e20 cast as xs:decimal", "decimal:100000000000000000000" },
-    { "123.456e1 cast as xs:decimal", "decimal:1234.56" },
+    { "1e23 cast as xs:decimal", "decimal:99999999999999991611392" },
+    { "123.456e1 cast as xs:decimal",
+      "decimal:1234.55999999999994543031789362430572509765625" },
     { "1234567.5e0 cast as xs:decimal", "decimal:1234567.5" },
     { "-1234567.5e0 cast as xs:decimal", "decimal:-1234567.5" },
     { "xs:float('1234567.5') cast as xs:decimal", "decimal:1234567.5" },
-    { "xs:float('0.1') cast as xs:decimal", "decimal:0.1" },
+    { "xs:float('0.1') cast as xs:decimal",
+      "decimal:0.100000001490116119384765625" },
+    { "xs:decimal(xs:float('-0.1'))",
+      "decimal:-0.100000001490116119384765625" },
     { "-0e0 cast as xs:decimal", "decimal:0" },
+    { "xs:float('-0') cast as xs:decimal", "decimal:0" },
+    { "xs:decimal(0.1e0) eq 0.1, 0.1e0 eq 0.1, 0.1e0 castable as xs:decimal",
+      "boolean:false boolean:true boolean:true" },
+    { "xs:decimal(0.1e0) cast as xs:integer, xs:decimal(-2.5e0) cast as "
+      "xs:integer, xs:decimal(xs:float('1e10')) cast as xs:integer",
+      "integer:0 integer:-2 integer:10000000000" },
+    /* The smallest subnormal, 2^-1074: 1074 digits after the point,
+     * 323 zeros, then 5^1074, which starts 4940656458412465441765687 and
+     * ends 19718265533447265625 */
+    { "let $s := string(xs:decimal(4.9e-324)) return (string-length($s), "
+      "starts-with($s, '0.' || string-join((1 to 323) ! '0') || "
+      "'4940656458412465441765687'), ends-with($s, '19718265533447265625'))",
+      "integer:1076 boolean:true boolean:true" },
+    { "xs:decimal(-4.9e-324) lt 0, xs:decimal(4.9e-324) gt 0",
+      "boolean:true boolean:true" },
+    /* The largest double, (2^53 - 1) * 2^971: 309 digits */
+    { "xs:decimal(1.7976931348623157e308) eq 17976931348623157081452742373170"
+      "4356798070567525844996598917476803157260780028538760589558632766878171"
+      "5404589535143824642343213268894641827684675467035375169860499105765512"
+      "8207624549009038932894407586850845513394230458323690322294816580855933"
+      "2123348274797826204144723168738177180919299881250404026184124858368, "
+      "string-length(string(xs:decimal(-1.7976931348623157e308)))",
+      "boolean:true integer:310" },
     { "1 cast as xs:decimal", "decimal:1" },
     { "1.5 cast as xs:double", "double:1.5" },
     { "xs:double('-1.75e-3') cast as xs:float", "float:-0.00175" },
@@ -675,7 +712,7 @@ static const xp3EvalCase xp3Cases[] = {
     { "1 cast as xs:anyURI", "error:XPTY0004" },
     { "xs:anyURI('1') cast as xs:integer", "error:XPTY0004" },
     { "'a' cast as xs:QName", "error:UNSUPPORTED" },
-    { "'2020-01-01' cast as xs:date", "error:UNSUPPORTED" },
+    { "'2020-01-01' cast as xs:date", "date:2020-01-01" },
     { "1 cast as xs:date", "error:XPTY0004" },
     { "() cast as xs:integer?", "" },
     { "() cast as xs:integer", "error:XPTY0004" },
@@ -689,7 +726,7 @@ static const xp3EvalCase xp3Cases[] = {
     { "(1, 2) castable as xs:integer", "boolean:false" },
     { "1 castable as xs:date", "boolean:false" },
     { "xs:double('NaN') castable as xs:integer", "boolean:false" },
-    { "'2020-01-01' castable as xs:date", "error:UNSUPPORTED" },
+    { "'2020-01-01' castable as xs:date", "boolean:true" },
     { "'1' cast as xs:numeric", "double:1" },
     { "1 cast as xs:numeric", "integer:1" },
     { "'a' cast as xs:numeric", "error:FORG0001" },
@@ -831,6 +868,25 @@ static const xp3EvalCase xp3Cases[] = {
       "round-half-to-even(xs:double('-INF'), 2)",
       "double:NaN double:-INF" },
     { "round-half-to-even(1, '1')", "error:XPTY0004" },
+    /* A double rounds as its cast to xs:decimal does, since both take
+     * the exact value: 35.425e0 and 2.675e0 are just below 35.425 and
+     * 2.675. Each pair of value and precision that disagrees is listed */
+    { "round(xs:decimal(35.425e0), 2), round(35.425e0, 2), "
+      "round-half-to-even(xs:decimal(2.675e0), 2), "
+      "round-half-to-even(2.675e0, 2)",
+      "decimal:35.42 double:35.42 decimal:2.67 double:2.67" },
+    { "for $x in (35.425e0, 2.675e0, 1.005e0, 0.285e0, 1.45e0, 8.345e0, "
+      "-0.125e0, 0.5e0, 2.5e0, -2.5e0, 1.15e0, -4.35e0, 0.1e0, 1e22, "
+      "123456.785e0, 4.9e-324, -2.2250738585072014e-308, "
+      "1.7976931348623157e308, -1.7976931348623157e308, xs:float('0.15'), "
+      "xs:float('2.675'), xs:float('-1.25'), xs:float('1.4e-45'), "
+      "xs:float('3.4028235e38')), "
+      "$p in (-308, -35, -3, -1, 0, 1, 2, 3, 15, 17, 30, 323, 324, 1073, "
+      "1074) "
+      "return (if ((round(xs:decimal($x), $p) eq round($x, $p)) and "
+      "(round-half-to-even(xs:decimal($x), $p) eq "
+      "round-half-to-even($x, $p))) then () else $x || ' ' || $p)",
+      "" },
 
     /* Trigonometric and exponential functions (4.8) */
     { "math:pi(), 2 * math:pi()",
@@ -1776,6 +1832,247 @@ testHugeNumbers(void) {
 }
 
 /*
+ * Exact decimals of doubles and floats
+ *
+ * For random finite doubles and floats $d, xs:decimal($d) reads back
+ * as $d, its digits are those of an oracle, and xs:integer of it is
+ * xs:integer($d). The oracle works from the bits of the double with
+ * one decimal digit per byte, so it shares nothing with the library:
+ * not frexp(), not the base-10^9 limbs of xp3decimal.c, and not
+ * snprintf(), whose "%.1074f" is exact with glibc and macOS but not
+ * with every C library the tests run with.
+ */
+
+#define XP3_EXACT_SAMPLES 2000
+
+/* Digits of m * 5^1074, the longest coefficient: at most 16 + 751 */
+#define XP3_ORACLE_DIGITS 800
+
+/* "-0." and 1074 digits after the point, at most */
+#define XP3_ORACLE_SIZE 1100
+
+/* xorshift64, for repeatable random tests */
+static uint64_t exactRandomState = UINT64_C(0x9E3779B97F4A7C15);
+
+static uint64_t
+exactRandom(void) {
+    exactRandomState ^= exactRandomState << 13;
+    exactRandomState ^= exactRandomState >> 7;
+    exactRandomState ^= exactRandomState << 17;
+    return(exactRandomState);
+}
+
+/*
+ * A random finite double: a quarter with any exponent, a quarter
+ * subnormal or at the bottom of the normal range, and half between
+ * 2^-70 and 2^71, where most numbers in documents are.
+ */
+static double
+randomFiniteDouble(void) {
+    uint64_t bits = exactRandom();
+    uint64_t kind = exactRandom() % 4;
+    uint64_t biased;
+    double value;
+
+    if (kind == 0)
+        biased = exactRandom() % 2047;
+    else if (kind == 1)
+        biased = exactRandom() % 3;
+    else
+        biased = 1023 - 70 + exactRandom() % 141;
+    bits &= ~(UINT64_C(0x7FF) << 52);
+    bits |= biased << 52;
+    memcpy(&value, &bits, sizeof(value));
+    return(value);
+}
+
+/* A random finite float, widened to a double, chosen in the same way */
+static double
+randomFiniteFloat(void) {
+    uint32_t bits = (uint32_t) exactRandom();
+    uint64_t kind = exactRandom() % 4;
+    uint32_t biased;
+    float value;
+
+    if (kind == 0)
+        biased = (uint32_t) (exactRandom() % 255);
+    else if (kind == 1)
+        biased = (uint32_t) (exactRandom() % 3);
+    else
+        biased = (uint32_t) (127 - 30 + exactRandom() % 61);
+    bits &= ~((uint32_t) 0xFF << 23);
+    bits |= biased << 23;
+    memcpy(&value, &bits, sizeof(value));
+    return((double) value);
+}
+
+/*
+ * The canonical xs:decimal of the exact value of a finite double. The
+ * double is m * 2^e, read from its bits. For e >= 0, m is doubled e
+ * times. Otherwise it is multiplied by 5 -e times and has -e digits
+ * after the point, since 2^-1 is 5 * 10^-1.
+ */
+static void
+oracleExactDecimal(double value, char *out) {
+    unsigned char digits[XP3_ORACLE_DIGITS];    /* least significant first */
+    uint64_t bits;
+    uint64_t significand;
+    int biased;
+    int exponent;
+    int factor = 2;
+    int times;
+    int point = 0;                              /* digits after the point */
+    int first = 0;                              /* lowest digit kept */
+    int count = 0;
+    int i;
+    int j;
+
+    memcpy(&bits, &value, sizeof(bits));
+    biased = (int) ((bits >> 52) & 0x7FF);
+    significand = bits & ((UINT64_C(1) << 52) - 1);
+    if (biased == 0) {
+        exponent = -1074;
+    } else {
+        significand |= UINT64_C(1) << 52;
+        exponent = biased - 1075;
+    }
+    if (significand == 0) {
+        strcpy(out, "0");
+        return;
+    }
+    while (significand > 0) {
+        digits[count++] = (unsigned char) (significand % 10);
+        significand /= 10;
+    }
+
+    times = exponent;
+    if (exponent < 0) {
+        factor = 5;
+        times = -exponent;
+        point = -exponent;
+    }
+    for (i = 0; i < times; i++) {
+        int carry = 0;
+
+        for (j = 0; j < count; j++) {
+            int product = digits[j] * factor + carry;
+
+            digits[j] = (unsigned char) (product % 10);
+            carry = product / 10;
+        }
+        if (carry > 0)
+            digits[count++] = (unsigned char) carry;
+    }
+
+    /* Zeros at the end of the fraction carry no value */
+    while ((point > 0) && (digits[first] == 0)) {
+        first++;
+        point--;
+    }
+
+    if (bits >> 63)
+        *out++ = '-';
+    if (count - first <= point) {
+        *out++ = '0';
+    } else {
+        for (i = count - 1; i >= first + point; i--)
+            *out++ = (char) ('0' + digits[i]);
+    }
+    if (point > 0) {
+        *out++ = '.';
+        for (i = first + point - 1; i >= first; i--) {
+            if (i < count)
+                *out++ = (char) ('0' + digits[i]);
+            else
+                *out++ = '0';
+        }
+    }
+    *out = 0;
+}
+
+/* Whether item i of a result has the string value expected */
+static int
+itemIs(const xp3Sequence *result, size_t i, const char *expected) {
+    xmlChar *str = xp3SequenceStringValue(result, i);
+    int same = (str != NULL) && (strcmp((const char *) str, expected) == 0);
+
+    xmlFree(str);
+    return(same);
+}
+
+static void
+testExactDecimals(void) {
+    static const char doubleChecks[] =
+        "xs:double(xs:decimal($d)) eq $d, string(xs:decimal($d)), "
+        "xs:integer(xs:decimal($d)) eq xs:integer($d)";
+    static const char floatChecks[] =
+        "let $f := xs:float($d) return (xs:double(xs:decimal($f)) eq $f, "
+        "string(xs:decimal($f)), "
+        "xs:integer(xs:decimal($f)) eq xs:integer($f))";
+    xp3StaticContext *sctx = xp3NewStaticContext();
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *doubleExpr = NULL;
+    xp3Expr *floatExpr = NULL;
+    char expected[XP3_ORACLE_SIZE];
+    int bad = 0;
+    int i;
+
+    if ((sctx == NULL) || (ctx == NULL) ||
+        (xp3DeclareVariable(sctx, NULL, BAD_CAST "d") < 0)) {
+        check(0, "exact decimal test set up");
+        goto done;
+    }
+    doubleExpr = xp3Compile(sctx, BAD_CAST doubleChecks, NULL);
+    floatExpr = xp3Compile(sctx, BAD_CAST floatChecks, NULL);
+    if ((doubleExpr == NULL) || (floatExpr == NULL)) {
+        check(0, "exact decimal checks compiled");
+        goto done;
+    }
+
+    for (i = 0; i < XP3_EXACT_SAMPLES; i++) {
+        const char *kind = "double";
+        xp3Expr *expr = doubleExpr;
+        xp3Sequence *bound;
+        xp3Sequence *result = NULL;
+        double value;
+        int ok;
+
+        if (i % 2 == 1) {
+            value = randomFiniteFloat();
+            expr = floatExpr;
+            kind = "float";
+        } else {
+            value = randomFiniteDouble();
+        }
+        bound = xp3NewDoubleSequence(&value, 1);
+        if ((bound != NULL) &&
+            (xp3BindVariable(ctx, NULL, BAD_CAST "d", bound) == 0))
+            result = xp3Evaluate(expr, ctx, NULL);
+        xp3FreeSequence(bound);
+
+        oracleExactDecimal(value, expected);
+        ok = (result != NULL) && (xp3SequenceLength(result) == 3) &&
+             itemIs(result, 0, "true") && itemIs(result, 1, expected) &&
+             itemIs(result, 2, "true");
+        if (!ok) {
+            bad++;
+            if (bad == 1)
+                fprintf(stderr, "first failing %s: %.17g, expected %.80s\n",
+                        kind, value, expected);
+        }
+        xp3FreeSequence(result);
+    }
+    check(bad == 0, "random doubles and floats cast to their exact "
+          "decimals, which read back and truncate as the numbers do");
+
+done:
+    xp3FreeExpr(doubleExpr);
+    xp3FreeExpr(floatExpr);
+    xp3FreeDynamicContext(ctx);
+    xp3FreeStaticContext(sctx);
+}
+
+/*
  * Operations on values no expression can make yet
  */
 static void
@@ -1792,13 +2089,15 @@ testQNameComparison(void) {
         check(0, "QNames created");
     } else {
         check((xp3CompareAtomics(XP3_OP_VAL_EQ, first, same, XP3_XPATH_31,
-                                 &result) == XP3_ERR_OK) && (result == 1),
+                                 NULL, &result) == XP3_ERR_OK) &&
+              (result == 1),
               "QNames with the same URI and local name are equal");
         check((xp3CompareAtomics(XP3_OP_GEN_NE, first, other, XP3_XPATH_31,
-                                 &result) == XP3_ERR_OK) && (result == 1),
+                                 NULL, &result) == XP3_ERR_OK) &&
+              (result == 1),
               "QNames in different namespaces differ");
         check(xp3CompareAtomics(XP3_OP_VAL_LT, first, same, XP3_XPATH_31,
-                                &result) == XP3_ERR_XPTY0004,
+                                NULL, &result) == XP3_ERR_XPTY0004,
               "QNames have no order");
         check((xp3NegateNumber(first, &negated) == XP3_ERR_XPTY0004) &&
               (negated == NULL), "a QName can't be negated");
@@ -3937,6 +4236,314 @@ done:
 }
 
 /*
+ * Dates, times and durations, evaluated with an implicit timezone of
+ * -05:00, as in the examples of F&O 3.1, 9.4
+ */
+static const xp3EvalCase xp3DateTimeCases[] = {
+    /* Casts */
+    { "xs:date(' 2026-01-01 ')", "date:2026-01-01" },
+    { "xs:untypedAtomic('2026-01-01Z') cast as xs:date", "date:2026-01-01Z" },
+    { "xs:dateTime('2026-11-19T11:25:47.5+01:00') cast as xs:gMonthDay",
+      "gMonthDay:--11-19+01:00" },
+    { "xs:date('2026-11-19') cast as xs:dateTime",
+      "dateTime:2026-11-19T00:00:00" },
+    { "xs:duration('P1Y2M3D') cast as xs:yearMonthDuration",
+      "yearMonthDuration:P1Y2M" },
+    { "string(xs:dayTimeDuration('PT36H'))", "string:P1DT12H" },
+    { "xs:time('24:00:00') || ''", "string:00:00:00" },
+    { "xs:dateTimeStamp('2026-01-01T00:00:00Z') instance of xs:dateTime",
+      "boolean:true" },
+    { "xs:date('2026-02-29')", "error:FORG0001" },
+    { "xs:date('2147483648-01-01')", "error:FODT0001" },
+    { "'2147483648-01-01' castable as xs:date", "boolean:false" },
+    { "xs:duration('PT9223372036854775808S')", "error:FODT0002" },
+    { "'PT9223372036854775808S' castable as xs:duration", "boolean:false" },
+    { "xs:dateTimeStamp('2026-01-01T00:00:00')", "error:FORG0001" },
+    { "xs:dateTime('2026-01-01T00:00:00') cast as xs:dateTimeStamp",
+      "error:FORG0001" },
+    { "xs:time('12:00:00') cast as xs:date", "error:XPTY0004" },
+    { "xs:time('12:00:00') castable as xs:date", "boolean:false" },
+    { "if (xs:date('2026-01-01')) then 1 else 2", "error:FORG0006" },
+    /* Value comparisons */
+    { "xs:date('2026-01-01') eq xs:date('2026-01-01Z')", "boolean:false" },
+    { "xs:date('2026-01-01') eq xs:date('2026-01-01-05:00')",
+      "boolean:true" },
+    { "xs:dateTime('2002-04-02T12:00:00') eq "
+      "xs:dateTime('2002-04-02T23:00:00+06:00')", "boolean:true" },
+    { "xs:time('08:00:00+09:00') lt xs:time('17:00:00-06:00')",
+      "boolean:true" },
+    { "xs:gYear('2026') ne xs:gYear('2027')", "boolean:true" },
+    { "xs:gYear('1976-05:00') eq xs:gYear('1976')", "boolean:true" },
+    { "xs:gYear('2026') lt xs:gYear('2027')", "error:XPTY0004" },
+    { "xs:duration('P1Y') lt xs:duration('P2Y')", "error:XPTY0004" },
+    { "xs:yearMonthDuration('P1Y') eq xs:duration('P12M')", "boolean:true" },
+    { "xs:yearMonthDuration('P0M') eq xs:dayTimeDuration('PT0S')",
+      "boolean:true" },
+    { "xs:dayTimeDuration('PT1H') ge xs:dayTimeDuration('PT60M')",
+      "boolean:true" },
+    { "xs:date('2026-01-01') eq xs:dateTime('2026-01-01T00:00:00')",
+      "error:XPTY0004" },
+    /* General comparisons cast untyped values to the other type */
+    { "xs:untypedAtomic('P1Y') < xs:yearMonthDuration('P13M')",
+      "boolean:true" },
+    { "xs:untypedAtomic('2026-01-01') = xs:date('2026-01-01-05:00')",
+      "boolean:true" },
+    { "(xs:date('2026-01-01'), xs:date('2026-01-03')) > "
+      "xs:date('2026-01-02Z')", "boolean:true" },
+    { "xs:untypedAtomic('x') = xs:date('2026-01-01')", "error:FORG0001" },
+    { "xs:untypedAtomic('2026-01-01T00:00:00') = "
+      "xs:dateTimeStamp('2026-01-01T00:00:00Z')", "error:FORG0001" },
+    /* Sequence functions */
+    { "distinct-values((xs:date('2026-01-01'), "
+      "xs:date('2026-01-01-05:00'), xs:dateTime('2026-01-01T00:00:00')))",
+      "date:2026-01-01 dateTime:2026-01-01T00:00:00" },
+    { "count(distinct-values((xs:yearMonthDuration('P1Y'), "
+      "xs:duration('P12M'), xs:dayTimeDuration('PT0S'), "
+      "xs:yearMonthDuration('P0M'))))", "integer:2" },
+    { "index-of((xs:time('24:00:00'), xs:time('00:00:00Z'), "
+      "xs:time('19:00:00')), xs:time('00:00:00'))", "integer:1" },
+    { "index-of((xs:gDay('---01'), 1, 'a'), xs:gDay('---01-05:00'))",
+      "integer:1" },
+    { "deep-equal((xs:gDay('---12'), xs:dayTimeDuration('P1D')), "
+      "(xs:gDay('---12-05:00'), xs:duration('PT24H')))", "boolean:true" },
+    { "deep-equal(xs:date('2026-01-01'), xs:dateTime('2026-01-01T00:00:00'))",
+      "boolean:false" },
+    { "min((xs:date('2026-01-02'), xs:date('2026-01-01Z')))",
+      "date:2026-01-01Z" },
+    { "max((xs:dayTimeDuration('PT1H'), xs:dayTimeDuration('PT61M')))",
+      "dayTimeDuration:PT1H1M" },
+    { "max((xs:time('23:00:00'), xs:time('23:30:00+14:00')))",
+      "time:23:00:00" },
+    { "min(xs:yearMonthDuration('P1M'))", "yearMonthDuration:P1M" },
+    { "max((xs:date('2026-01-02'), xs:dateTime('2026-01-01T00:00:00')))",
+      "error:FORG0006" },
+    { "min((xs:yearMonthDuration('P1Y'), xs:dayTimeDuration('P1D')))",
+      "error:FORG0006" },
+    { "min(xs:duration('P1D'))", "error:FORG0006" },
+    { "max((xs:gYear('2026'), xs:gYear('2027')))", "error:FORG0006" },
+    { "sum((xs:dayTimeDuration('P1D'), xs:dayTimeDuration('P1D')))",
+      "dayTimeDuration:P2D" },
+    { "avg((xs:yearMonthDuration('P1M'), xs:yearMonthDuration('P2M')))",
+      "yearMonthDuration:P2M" },
+    { "sum((xs:yearMonthDuration('P1M'), xs:dayTimeDuration('P1D')))",
+      "error:FORG0006" },
+    { "sum((xs:dayTimeDuration('P1D'), 1))", "error:FORG0006" },
+    { "avg(xs:duration('P1D'))", "error:FORG0006" },
+    /* Arithmetic */
+    { "xs:date('2026-01-01') + xs:dayTimeDuration('P1D')",
+      "date:2026-01-02" },
+    { "xs:yearMonthDuration('P1M') * 2", "yearMonthDuration:P2M" },
+    { "xs:time('12:00:00') - xs:time('11:00:00')", "dayTimeDuration:PT1H" },
+    { "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+      "dayTimeDuration:P1DT5H" },
+    { "xs:dayTimeDuration('P1D') div xs:dayTimeDuration('PT7S')",
+      "decimal:12342.85714285714285714286" },
+    { "'P1D' + xs:dayTimeDuration('P1D')", "error:XPTY0004" },
+    { "xs:date('2026-01-01') + xs:date('2026-01-01')", "error:XPTY0004" },
+    { "xs:date('2026-01-01') - xs:dateTime('2026-01-01T00:00:00')",
+      "error:XPTY0004" },
+    { "xs:duration('P1D') + xs:duration('P1D')", "error:XPTY0004" },
+    { "xs:yearMonthDuration('P1M') + xs:dayTimeDuration('P1D')",
+      "error:XPTY0004" },
+    { "xs:dayTimeDuration('P1D') idiv xs:dayTimeDuration('P1D')",
+      "error:XPTY0004" },
+    { "2 div xs:dayTimeDuration('P1D')", "error:XPTY0004" },
+    { "xs:gYear('2026') + xs:yearMonthDuration('P1Y')", "error:XPTY0004" },
+    { "-xs:dayTimeDuration('P1D')", "error:XPTY0004" }
+};
+
+static void
+testDateTimes(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3StaticContext *plain = xp3NewStaticContext();
+    size_t i;
+
+    if ((ctx == NULL) || (plain == NULL) ||
+        (xp3SetImplicitTimezone(ctx, -300) < 0)) {
+        check(0, "contexts set up");
+    } else {
+        plain->noOptimize = 1;
+        for (i = 0; i < sizeof(xp3DateTimeCases) /
+                        sizeof(xp3DateTimeCases[0]); i++) {
+            checkEval(NULL, ctx, xp3DateTimeCases[i].expr,
+                      xp3DateTimeCases[i].expected);
+            checkEval(plain, ctx, xp3DateTimeCases[i].expr,
+                      xp3DateTimeCases[i].expected);
+        }
+    }
+    xp3FreeStaticContext(plain);
+    xp3FreeDynamicContext(ctx);
+}
+
+static int clockReads;
+
+/* 2026-11-19T10:25:47Z, at +05:30 */
+static void
+countingClock(xp3ClockReading *reading) {
+    clockReads++;
+    reading->seconds = INT64_C(1795083947);
+    reading->nanoseconds = 0;
+    reading->offset = 330;
+}
+
+/* Evaluate an expression and count the clock readings */
+static int
+readingsOf(xp3DynamicContext *ctx, const char *expr, const char *expected) {
+    clockReads = 0;
+    checkEval(NULL, ctx, expr, expected);
+    return(clockReads);
+}
+
+/* Comparisons that need the implicit timezone, three times */
+#define XP3_NEEDS_TIMEZONE \
+    "xs:time('10:00:00') lt xs:time('04:30:01Z'), " \
+    "xs:date('2026-01-01') eq xs:date('2026-01-01+05:30'), " \
+    "count(distinct-values((xs:date('2026-01-01'), " \
+    "xs:date('2026-01-01Z'))))"
+
+static void
+testDateTimeContext(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+
+    if (ctx == NULL) {
+        check(0, "context created");
+        return;
+    }
+    check(xp3SetImplicitTimezone(NULL, 0) < 0, "no context, no timezone");
+    check(xp3SetImplicitTimezone(ctx, 841) < 0, "+14:01 is out of range");
+    check(xp3SetImplicitTimezone(ctx, -841) < 0, "-14:01 is out of range");
+    check(xp3SetCurrentDateTime(NULL, BAD_CAST "2026-01-01T00:00:00Z") < 0,
+          "no context, no current dateTime");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST "2026-01-01T00:00:00") < 0,
+          "a current dateTime needs a timezone");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST "2026-01-01Z") < 0,
+          "a date is no current dateTime");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST " 2026-01-01T00:00:00Z") < 0,
+          "the current dateTime is a lexical form without spaces");
+
+    /* By default, the clock is read once per evaluation that needs it,
+     * and its local offset is the implicit timezone */
+    ctx->clockSource = countingClock;
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "the clock is read once per evaluation");
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "and again for the next evaluation");
+    check(readingsOf(ctx, "xs:date('2026-01-01Z') eq xs:date('2026-01-01Z')",
+                     "boolean:true") == 0,
+          "values with timezones don't read the clock");
+
+    /* An implicit timezone set */
+    check(xp3SetImplicitTimezone(ctx, 840) == 0, "+14:00 is set");
+    check(readingsOf(ctx, "xs:date('2026-01-01') eq "
+                     "xs:date('2026-01-01+14:00')", "boolean:true") == 0,
+          "the implicit timezone set, without reading the clock");
+    check(xp3SetImplicitTimezone(ctx, -840) == 0, "-14:00 is set");
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq "
+              "xs:date('2026-01-01-14:00')", "boolean:true");
+
+    /* A current dateTime set gives the implicit timezone */
+    check(xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL) == 0,
+          "back to the default implicit timezone");
+    check(xp3SetCurrentDateTime(ctx, BAD_CAST
+                                "2026-01-01T00:00:00.5-03:00") == 0,
+          "a current dateTime is set");
+    check(readingsOf(ctx, "xs:date('2026-01-01') eq "
+                     "xs:date('2026-01-01-03:00')", "boolean:true") == 0,
+          "the timezone of the current dateTime, without the clock");
+    check(xp3SetImplicitTimezone(ctx, 0) == 0, "UTC is set");
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq xs:date('2026-01-01Z')",
+              "boolean:true");
+    check(xp3SetCurrentDateTime(ctx, NULL) == 0,
+          "back to the system clock");
+    check(xp3SetImplicitTimezone(ctx, XP3_TIMEZONE_LOCAL) == 0,
+          "and the local offset");
+    check(readingsOf(ctx, XP3_NEEDS_TIMEZONE,
+                     "boolean:true boolean:true integer:2") == 1,
+          "the clock is read again");
+
+    /* The system clock, whatever the local offset */
+    ctx->clockSource = NULL;
+    checkEval(NULL, ctx, "xs:date('2026-01-01') eq xs:date('2026-01-01')",
+              "boolean:true");
+    xp3FreeDynamicContext(ctx);
+}
+
+/*
+ * Folding has no implicit timezone: a comparison or a subtraction that
+ * needs one stays for the evaluation, while values with timezones,
+ * casts and adding a duration to a date fold
+ */
+static void
+testDateTimeFolding(void) {
+    xp3DynamicContext *ctx = xp3NewDynamicContext();
+    xp3Expr *open = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01') eq "
+                               "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *closed = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01Z') eq "
+                                 "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *cast = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-01')",
+                               NULL);
+    xp3Expr *openDifference = xp3Compile(NULL, BAD_CAST
+                                         "xs:date('2026-01-02') - "
+                                         "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *closedDifference = xp3Compile(NULL, BAD_CAST
+                                           "xs:date('2026-01-02Z') - "
+                                           "xs:date('2026-01-01Z')", NULL);
+    xp3Expr *moved = xp3Compile(NULL, BAD_CAST "xs:date('2026-01-31') + "
+                                "xs:yearMonthDuration('P1M')", NULL);
+    int utc;
+    int ahead;
+
+    if ((ctx == NULL) || (open == NULL) || (closed == NULL) ||
+        (cast == NULL) || (openDifference == NULL) ||
+        (closedDifference == NULL) || (moved == NULL)) {
+        check(0, "expressions compiled");
+        goto done;
+    }
+    check(open->ast->root->kind != XP3_AST_CONSTANT,
+          "a comparison that needs the implicit timezone is not folded");
+    check((open->ast->root->first->kind == XP3_AST_CONSTANT) &&
+          (open->ast->root->last->kind == XP3_AST_CONSTANT),
+          "its casts are");
+    check(closed->ast->root->kind == XP3_AST_CONSTANT,
+          "a comparison of values with timezones is folded");
+    check(cast->ast->root->kind == XP3_AST_CONSTANT, "a cast is folded");
+    check(openDifference->ast->root->kind != XP3_AST_CONSTANT,
+          "a subtraction that needs the implicit timezone is not folded");
+    check(closedDifference->ast->root->kind == XP3_AST_CONSTANT,
+          "a subtraction of values with timezones is folded");
+    check(moved->ast->root->kind == XP3_AST_CONSTANT,
+          "adding a duration to a date without a timezone is folded");
+
+    xp3SetImplicitTimezone(ctx, 0);
+    utc = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
+    xp3SetImplicitTimezone(ctx, 60);
+    ahead = xp3EvaluateBoolean(open, ctx, NULL);
+    checkEval(NULL, ctx, "xs:date('2026-01-02') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:PT23H");
+    check((utc == 1) && (ahead == 0),
+          "the result depends on the implicit timezone of the evaluation");
+    check(xp3EvaluateBoolean(closed, ctx, NULL) == 1,
+          "the folded comparison");
+    checkEval(NULL, ctx, "xs:date('2026-01-02Z') - xs:date('2026-01-01Z')",
+              "dayTimeDuration:P1D");
+    checkEval(NULL, ctx, "xs:date('2026-01-31') + "
+              "xs:yearMonthDuration('P1M')", "date:2026-02-28");
+
+done:
+    xp3FreeExpr(open);
+    xp3FreeExpr(closed);
+    xp3FreeExpr(cast);
+    xp3FreeExpr(openDifference);
+    xp3FreeExpr(closedDifference);
+    xp3FreeExpr(moved);
+    xp3FreeDynamicContext(ctx);
+}
+
+/*
  * Constant folding runs the regular expression functions, and an
  * error in the pattern stays an error of the evaluation
  */
@@ -4418,9 +5025,12 @@ testAtomicSequences(void) {
     checkAtomicSequence(XP3_TYPE_DECIMAL, "1.5", "x", "error:FORG0001");
     checkAtomicSequence(XP3_TYPE_POSITIVE_INTEGER, "0", NULL,
                         "error:FORG0001");
-    /* Casting to the date and time types comes with Part 10 */
-    checkAtomicSequence(XP3_TYPE_DATE, "2026-11-05", NULL,
-                        "error:UNSUPPORTED");
+    checkAtomicSequence(XP3_TYPE_DATE, " 2026-11-05 ", "-0001-02-28Z",
+                        "date:2026-11-05 date:-0001-02-28Z");
+    checkAtomicSequence(XP3_TYPE_DAY_TIME_DURATION, "PT36H", NULL,
+                        "dayTimeDuration:P1DT12H");
+    checkAtomicSequence(XP3_TYPE_DATE, "2026-02-29", NULL,
+                        "error:FORG0001");
 
     /* The message names the value and the type */
     lexicals[0] = BAD_CAST "x";
@@ -4971,7 +5581,9 @@ static const char *const xp3AllocOperators =
 
 static const char *const xp3AllocOperatorsExpected =
     "decimal:3.5 integer:3 double:0.25 integer:9999999999800000000001 "
-    "decimal:-1.5 integer:12 decimal:0.1 integer:150000000000000000000 "
+    "decimal:-1.5 integer:12 "
+    "decimal:0.1000000000000000055511151231257827021181583404541015625 "
+    "integer:150000000000000000000 "
     "base64Binary:TQ== NMTOKEN:a NMTOKEN:b double:1 boolean:false "
     "boolean:true boolean:true e:x#x1 e:x#x2 e:x#x2 boolean:true "
     "boolean:true integer:1 integer:2 integer:18446744073709551616 "
@@ -5298,6 +5910,14 @@ testAllocationFailures(void) {
     checkAllocationFailures(xp3AllocOperators, xp3AllocOperatorsExpected);
     checkAllocationFailures(xp3AllocFunctions, xp3AllocFunctionsExpected);
     checkAllocationFailures(xp3AllocNumeric, xp3AllocNumericExpected);
+    /* The exact value of a double or float, with the most digits */
+    checkAllocationFailures("xs:decimal(4.9e-324) lt 1e-323, "
+                            "xs:decimal(-1.7976931348623157e308) lt -1e308, "
+                            "xs:decimal(xs:float('0.1')), "
+                            "round(xs:decimal(35.425e0), 2)",
+                            "boolean:true boolean:true "
+                            "decimal:0.100000001490116119384765625 "
+                            "decimal:35.42");
     checkAllocationFailures(xp3AllocMath, xp3AllocMathExpected);
     checkAllocationFailures(xp3AllocAggregate, xp3AllocAggregateExpected);
     checkAllocationFailures(xp3AllocStrings, xp3AllocStringsExpected);
@@ -6223,6 +6843,7 @@ main(void) {
     XP3_TEST_RUN(testEffectiveBoolean);
     XP3_TEST_RUN(testHugeLiteral);
     XP3_TEST_RUN(testHugeNumbers);
+    XP3_TEST_RUN(testExactDecimals);
     XP3_TEST_RUN(testQNameComparison);
     XP3_TEST_RUN(testManyBindings);
     XP3_TEST_RUN(testFocus);
@@ -6270,6 +6891,9 @@ main(void) {
     XP3_TEST_RUN(testExtensionKeep);
     XP3_TEST_RUN(testSequenceRefAllocationFailures);
     XP3_TEST_RUN(testExtensionAllocationFailures);
+    XP3_TEST_RUN(testDateTimes);
+    XP3_TEST_RUN(testDateTimeContext);
+    XP3_TEST_RUN(testDateTimeFolding);
     XP3_TEST_RUN(testLocale);
 
     return(xp3TestDone());

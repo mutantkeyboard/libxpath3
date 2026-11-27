@@ -27,6 +27,10 @@
  * compiled and evaluated, and the failure must end in NO_MEMORY,
  * never in a result and never in silence.
  *
+ * Both evaluations get the same fixed current dateTime, whose timezone
+ * is also the implicit timezone: with the system clock, two
+ * evaluations of fn:current-dateTime() would differ.
+ *
  * Built with -DXP3_FUZZ_DRIVER, the file gets a main() that replays
  * files given as arguments, as xp3parse.c does.
  *
@@ -57,6 +61,9 @@
 #include "../test/testalloc.h"
 
 #define XP3_FUZZ_MAX_SIZE 10000
+
+/* The current dateTime of every evaluation */
+#define XP3_FUZZ_NOW "2026-11-24T10:20:30.123456+01:00"
 
 /* Limits that keep each evaluation short */
 #define XP3_FUZZ_OPERATIONS 200000
@@ -172,6 +179,7 @@ newDynamicContext(xmlNodePtr contextNode) {
     ctx->maxOperations = XP3_FUZZ_OPERATIONS;
     if ((xp3SetMaxSequenceLength(ctx, XP3_FUZZ_ITEMS) < 0) ||
         (xp3SetContextNode(ctx, contextNode) < 0) ||
+        (xp3SetCurrentDateTime(ctx, BAD_CAST XP3_FUZZ_NOW) < 0) ||
         (xp3BindVariable(ctx, NULL, BAD_CAST "v", fuzzVariable) < 0) ||
         (xp3BindVariable(ctx, BAD_CAST "urn:example", BAD_CAST "w",
                          fuzzString) < 0)) {

@@ -1,0 +1,63 @@
+//contact[@id = 'c1']/name = //contact[@id = 'c2']/name -> xs:boolean false
+normalize-unicode(//contact[@id = 'c1']/name) = normalize-unicode(//contact[@id = 'c2']/name) -> xs:boolean true
+//contact[@id = ('c1', 'c2')]/string-length(name) -> xs:integer 10, xs:integer 13
+string-to-codepoints(//contact[@id = 'c2']/name) -> xs:integer 74, xs:integer 111, xs:integer 115, xs:integer 101, xs:integer 769, xs:integer 32, xs:integer 78, xs:integer 117, xs:integer 769, xs:integer 110, xs:integer 771, xs:integer 101, xs:integer 122
+starts-with(//contact[@id = 'c2']/name, 'José') -> xs:boolean false
+string-length(//contact[@id = 'c3']/name) -> xs:integer 8
+substring(//contact[@id = 'c3']/name, 1, 1) -> xs:string "𠮷"
+string-to-codepoints(substring(//contact[@id = 'c3']/name, 1, 2)) -> xs:integer 134071, xs:integer 37326
+string-length(//contact[@id = 'c7']/name) -> xs:integer 7
+substring(//contact[@id = 'c7']/name, 1, 3) -> xs:string "שרה"
+upper-case(//contact[@id = 'c5']/city) -> xs:string "STRASSE DES 17. JUNI"
+upper-case('ß') = 'SS' -> xs:boolean true
+upper-case(//contact[@id = 'c4']/name) -> xs:string "IŞIL YILDIZ"
+lower-case(//contact[@id = 'c4']/city) -> xs:string "i̇stanbul"
+string-length(lower-case(//contact[@id = 'c4']/city)) -> xs:integer 9
+matches('STRASSE', 'straße', 'i') -> xs:boolean false
+matches('ıstanbul', 'ISTANBUL', 'i') -> xs:boolean true
+matches(//contact[@id = 'c4']/city, '^istanbul$', 'i') -> xs:boolean false
+matches(//contact[@id = 'c5']/name, 'GROẞ', 'i') -> xs:boolean true
+translate(//contact[@id = 'c5']/city, 'ß', 'ss') -> xs:string "Strase des 17. Juni"
+normalize-space(//contact[@id = 'c6']/name) -> xs:string "Ann Marie Lee"
+string-to-codepoints(normalize-space(//contact[@id = 'c6']/name))[4] -> xs:integer 160
+normalize-space(replace(//contact[@id = 'c6']/name, '\p{Zs}', ' ')) -> xs:string "Ann Marie Lee"
+tokenize('a,b,,c', ',*') -> ERROR FORX0003
+tokenize('a,b,,c', ',+') -> xs:string "a", xs:string "b", xs:string "c"
+tokenize('a,b,,c', ',') -> xs:string "a", xs:string "b", xs:string "", xs:string "c"
+replace('abc', 'x*', '-') -> ERROR FORX0003
+matches('abc', '(') -> ERROR FORX0002
+matches('abc', 'a', 'g') -> ERROR FORX0001
+matches('abab', '^(ab)\1$') -> xs:boolean true
+replace('2026-11-25', '(\d+)-(\d+)-(\d+)', '$3.$2.$1') -> xs:string "25.11.2026"
+replace('<b>x</b> and <b>y</b>', '<b>(.*)</b>', '[$1]') -> xs:string "[x</b> and <b>y]"
+replace('<b>x</b> and <b>y</b>', '<b>(.*?)</b>', '[$1]') -> xs:string "[x] and [y]"
+matches('2026-11-25', '^ \d{4} - \d{2} - \d{2} $', 'x') -> xs:boolean true
+matches(//contact[@id = 'c6']/name, 'Lee.+') -> xs:boolean false
+matches(//contact[@id = 'c6']/name, 'Lee.+', 's') -> xs:boolean true
+matches(//contact[@id = 'c6']/name, '^\s*$') -> xs:boolean false
+matches(//contact[@id = 'c6']/name, '^\s*$', 'm') -> xs:boolean true
+matches(//contact[@id = 'c7']/note, 'C++ (v2.0)?') -> ERROR FORX0002
+matches(//contact[@id = 'c7']/note, 'C++ (v2.0)?', 'q') -> xs:boolean true
+replace(//contact[@id = 'c7']/note, '$5+', 'five', 'q') -> xs:string "Uses C++ (v2.0)? [beta] *only* five plan"
+replace('price: 5', '\d', '$') -> ERROR FORX0004
+replace('price: 5', '\d', '\$') -> xs:string "price: $"
+//phone ! replace(., '[^0-9+]', '') -> xs:string "+34912345678", xs:string "03012345678", xs:string "03012345678", xs:string "+902125550143", xs:string "00493012345678", xs:string "+440207946095812", xs:string ""
+matches(//contact[@id = 'c7']/phone, '^[\d ]+$') -> xs:boolean true
+matches(//contact[@id = 'c7']/phone, '^[0-9 ]+$') -> xs:boolean false
+xs:integer(substring-before(//contact[@id = 'c7']/phone, ' ')) -> ERROR FORG0001
+substring-before(//contact[@id = 'c2']/email, '@') -> xs:string ""office"
+replace(//contact[@id = 'c2']/email, '^(.*)@[^@]*$', '$1') -> xs:string ""office@home""
+compare('Zebra', 'apple') -> xs:integer -1
+compare('zoo', 'ábaco') -> xs:integer -1
+min(('b', 'B', 'á', 'a', 'Z')) -> xs:string "B"
+max(('b', 'B', 'á', 'a', 'Z')) -> xs:string "á"
+contains('abc', '') -> xs:boolean true
+contains((), '') -> xs:boolean true
+substring-before('abc', '') -> xs:string ""
+string-length(//contact[@id = 'c3']/email) -> xs:integer 0
+matches(//contact[@id = 'c4']/email, '^$') -> xs:boolean true
+tokenize(//contact[@id = 'c4']/email, ',') -> ()
+With at most 1,000,000 steps:
+matches(string-join((1 to 100000) ! 'a') || 'b', '(a+)+$') -> xs:boolean false
+matches(string-join((1 to 30) ! 'a') || 'b', '^(a+)+\1$') -> ERROR LIMIT
+count(//contact) -> xs:integer 7

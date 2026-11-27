@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Contacts merged from several address books. Invisible or easily
+     confused characters are written as character references. -->
+<contacts>
+  <contact id="c1">
+    <name>José Núñez</name>
+    <phone>+34 912 345 678</phone>
+    <email>jose@example.com</email>
+  </contact>
+  <contact id="c2">
+    <name>Jose&#x301; Nu&#x301;n&#x303;ez</name>
+    <phone>(030) 1234-5678</phone>
+    <email>"office@home"@example.org</email>
+  </contact>
+  <contact id="c3">
+    <name>&#x20BB7;野 Kenji</name>
+    <phone>030/12345678</phone>
+    <email/>
+  </contact>
+  <contact id="c4">
+    <name>Işıl Yıldız</name>
+    <city>İstanbul</city>
+    <phone>+90-212-555-0143</phone>
+  </contact>
+  <contact id="c5">
+    <name>Jürgen Groß</name>
+    <city>Straße des 17. Juni</city>
+    <phone>0049 30 1234 5678</phone>
+  </contact>
+  <contact id="c6">
+    <name>  Ann&#xA0;Marie&#9; Lee
+    </name>
+    <phone>+44 (0)20 7946 0958 ext. 12</phone>
+  </contact>
+  <contact id="c7">
+    <name>שרה כהן</name>
+    <phone>٠٣٠ ١٢٣٤٥٦٧٨</phone>
+    <note>Uses C++ (v2.0)? [beta] *only* $5+ plan</note>
+  </contact>
+</contacts>

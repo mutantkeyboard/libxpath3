@@ -1,0 +1,35 @@
+count(//book) -> xs:integer 6
+//author[1] -> element(author) "Mara Quill", element(author) "Osric Vale", element(author) "Ann Lee", element(author) "Dee Roe", element(author) "Eve Ng"
+(//author)[1] -> element(author) "Mara Quill"
+//book[1]/title -> element(title) "The Art of Fiction"
+//book[1]/title/text() -> text() "The ", text() " of Fiction"
+string(//book[1]/title) -> xs:string "The Art of Fiction"
+//book[@id = 'b2']/title/text() -> text() "Tables & <Figures>"
+//book[title = 'Tables & <Figures>']/string(@id) -> xs:string "b2"
+string(//book[@id = 'b4']/title) -> xs:string "Café Notes from Harbour & Daughters"
+count(//book/text()) -> xs:integer 21
+//book[1]/text() -> text() "\n    ", text() "\n    ", text() "\n  "
+//comment() -> comment() " A small catalogue. The records are untidy on purpose. ", comment() " b2 was copied from a damaged index card "
+//processing-instruction() -> processing-instruction(catalogue) "status="checked""
+//book[@year > 1900]/string(@id) -> ERROR FORG0001: the untyped value "c. 1850" is not a valid xs:double
+//book[@year castable as xs:integer][xs:integer(@year) > 1900]/string(@id) -> xs:string "b1", xs:string "b3", xs:string "b6"
+//book[@year > '1990']/string(@id) -> xs:string "b2", xs:string "b3", xs:string "b6"
+//book[not(@year)]/string(@id) -> xs:string "b5"
+//book[@year = '']/string(@id) -> xs:string "b4"
+string-length(//book[3]/author) -> ERROR XPTY0004: argument 1 of string-length#1 is a sequence of more than one item, where xs:string? is expected
+//book[3]/author/string-length() -> xs:integer 7, xs:integer 7, xs:integer 7
+string-join(//book[3]/author, '; ') -> xs:string "Ann Lee; Ben Ito; Cy Moss"
+//book[not(author)]/string(@id) -> xs:string "b4"
+//book[isbn]/string(@id) -> xs:string "b4", xs:string "b5"
+//book[isbn = '']/string(@id) -> xs:string "b4"
+//book[1]/isbn -> ()
+string(//book[1]/isbn) -> xs:string ""
+(//book[1]/title, count(//book[3]/author), 'done') -> element(title) "The Art of Fiction", xs:integer 3, xs:string "done"
+//book[1]/(title, 1) -> ERROR XPTY0018: the last step of a path returns both nodes and other items
+//book[@year = '1066'] -> ()
+//book[\n  @year >= ] -> ERROR XPST0003 at line 2, column 12 when compiling: expected an expression, found ']'
+count(//book) -> xs:integer 6
+string value of the XPath text node -> "Tables & <Figures>"
+libxml2 nodes from there -> text "Tables & " CDATA "<Figures>"
+Without XML_PARSE_NOENT:
+string(//book[@id = 'b4']/title) -> xs:string "Café Notes from "

@@ -135,6 +135,40 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     [XP3_FN_FALSE_0] = xp3FnFalse,
     [XP3_FN_BOOLEAN_1] = xp3FnBoolean,
     [XP3_FN_NOT_1] = xp3FnNot,
+    /* Components of durations (8.3) */
+    [XP3_FN_YEARS_FROM_DURATION_1] = xp3FnYearsFromDuration,
+    [XP3_FN_MONTHS_FROM_DURATION_1] = xp3FnMonthsFromDuration,
+    [XP3_FN_DAYS_FROM_DURATION_1] = xp3FnDaysFromDuration,
+    [XP3_FN_HOURS_FROM_DURATION_1] = xp3FnHoursFromDuration,
+    [XP3_FN_MINUTES_FROM_DURATION_1] = xp3FnMinutesFromDuration,
+    [XP3_FN_SECONDS_FROM_DURATION_1] = xp3FnSecondsFromDuration,
+    /* Constructing a dateTime (9.3) */
+    [XP3_FN_DATETIME_2] = xp3FnDateTime,
+    /* Components of dates and times (9.5) */
+    [XP3_FN_YEAR_FROM_DATETIME_1] = xp3FnYearFrom,
+    [XP3_FN_MONTH_FROM_DATETIME_1] = xp3FnMonthFrom,
+    [XP3_FN_DAY_FROM_DATETIME_1] = xp3FnDayFrom,
+    [XP3_FN_HOURS_FROM_DATETIME_1] = xp3FnHoursFrom,
+    [XP3_FN_MINUTES_FROM_DATETIME_1] = xp3FnMinutesFrom,
+    [XP3_FN_SECONDS_FROM_DATETIME_1] = xp3FnSecondsFrom,
+    [XP3_FN_TIMEZONE_FROM_DATETIME_1] = xp3FnTimezoneFrom,
+    [XP3_FN_YEAR_FROM_DATE_1] = xp3FnYearFrom,
+    [XP3_FN_MONTH_FROM_DATE_1] = xp3FnMonthFrom,
+    [XP3_FN_DAY_FROM_DATE_1] = xp3FnDayFrom,
+    [XP3_FN_TIMEZONE_FROM_DATE_1] = xp3FnTimezoneFrom,
+    [XP3_FN_HOURS_FROM_TIME_1] = xp3FnHoursFrom,
+    [XP3_FN_MINUTES_FROM_TIME_1] = xp3FnMinutesFrom,
+    [XP3_FN_SECONDS_FROM_TIME_1] = xp3FnSecondsFrom,
+    [XP3_FN_TIMEZONE_FROM_TIME_1] = xp3FnTimezoneFrom,
+    /* Adjusting to a timezone (9.6) */
+    [XP3_FN_ADJUST_DATETIME_TO_TIMEZONE_1] = xp3FnAdjustDateTimeToTimezone,
+    [XP3_FN_ADJUST_DATETIME_TO_TIMEZONE_2] = xp3FnAdjustDateTimeToTimezone,
+    [XP3_FN_ADJUST_DATE_TO_TIMEZONE_1] = xp3FnAdjustDateToTimezone,
+    [XP3_FN_ADJUST_DATE_TO_TIMEZONE_2] = xp3FnAdjustDateToTimezone,
+    [XP3_FN_ADJUST_TIME_TO_TIMEZONE_1] = xp3FnAdjustTimeToTimezone,
+    [XP3_FN_ADJUST_TIME_TO_TIMEZONE_2] = xp3FnAdjustTimeToTimezone,
+    /* Parsing dates (9.9) */
+    [XP3_FN_PARSE_IETF_DATE_1] = xp3FnParseIetfDate,
     /* Namespaces of elements (10.2) */
     [XP3_FN_NAMESPACE_URI_FOR_PREFIX_2] = xp3FnNamespaceUriForPrefix,
     [XP3_FN_IN_SCOPE_PREFIXES_1] = xp3FnInScopePrefixes,
@@ -188,6 +222,10 @@ static const xp3FuncImpl xp3FuncImpls[XP3_FUNC_ID_COUNT] = {
     /* Context functions (15) */
     [XP3_FN_POSITION_0] = xp3FnPosition,
     [XP3_FN_LAST_0] = xp3FnLast,
+    [XP3_FN_CURRENT_DATETIME_0] = xp3FnCurrentDateTime,
+    [XP3_FN_CURRENT_DATE_0] = xp3FnCurrentDate,
+    [XP3_FN_CURRENT_TIME_0] = xp3FnCurrentTime,
+    [XP3_FN_IMPLICIT_TIMEZONE_0] = xp3FnImplicitTimezone,
     [XP3_FN_DEFAULT_COLLATION_0] = xp3FnDefaultCollation
 };
 

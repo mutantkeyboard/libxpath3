@@ -14,7 +14,7 @@ internal_test_args = ['-DXP3_STATIC']
 
 foreach name : ['error', 'context', 'lexer', 'ast', 'parser', 'decimal',
                 'value', 'func', 'static', 'nodes', 'eval', 'unicode',
-                'regex']
+                'regex', 'datetime', 'fndatetime']
     exe = executable(
         'test' + name,
         'test' + name + '.c',
@@ -47,3 +47,25 @@ if threads_dep.found() and host_machine.system() != 'windows'
     )
     test('threads', testthreads, protocol: 'tap')
 endif
+
+# The deepest expressions that the default nesting limit accepts, in a
+# thread with a small stack (doc/DESIGN.md 7.3): Windows threads, or
+# POSIX threads elsewhere; without them the test is skipped.
+teststack_args = []
+teststack_deps = [xpath3_dep]
+if threads_dep.found() and host_machine.system() != 'windows'
+    teststack_args += '-DXP3_HAVE_PTHREAD'
+    teststack_deps += threads_dep
+endif
+# Coverage counters make the frames larger, see teststack.c
+if get_option('b_coverage')
+    teststack_args += '-DXP3_COVERAGE'
+endif
+teststack = executable(
+    'teststack',
+    'teststack.c',
+    'testtap.c',
+    dependencies: teststack_deps,
+    c_args: teststack_args,
+)
+test('stack', teststack, protocol: 'tap')

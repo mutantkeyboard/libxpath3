@@ -948,13 +948,13 @@ testLimits(void) {
 
     /* The default limit stops deep nesting long before the stack runs
      * out. */
-    expectLimit(defaultCtx, repeat("(", 100000, "1"), 501,
+    expectLimit(defaultCtx, repeat("(", 100000, "1"), 201,
                 "deeply nested parentheses");
-    expectLimit(defaultCtx, repeat("a[", 100000, "1"), 1001,
+    expectLimit(defaultCtx, repeat("a[", 100000, "1"), 401,
                 "deeply nested predicates");
-    expectLimit(defaultCtx, repeat("-", 100000, "1"), 1665,
+    expectLimit(defaultCtx, repeat("-", 100000, "1"), 665,
                 "many unary signs");
-    expectLimit(defaultCtx, repeat("1+", 100000, "1"), 3330,
+    expectLimit(defaultCtx, repeat("1+", 100000, "1"), 1330,
                 "many additions");
 }
 

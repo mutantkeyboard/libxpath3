@@ -45,6 +45,12 @@ struct _xp3DynamicContext {
     uint64_t maxOperations;     /* steps an evaluation may take, 0 for
                                  * no limit (xp3SetMaxSteps()) */
     void *userData;             /* for extension functions, never freed */
+    int hasCurrentDateTime;     /* set by xp3SetCurrentDateTime() */
+    xp3DateTime currentDateTime; /* an xs:dateTime with a timezone */
+    int hasImplicitTimezone;    /* set by xp3SetImplicitTimezone() */
+    int implicitTimezone;       /* minutes east of UTC */
+    xp3ClockSource clockSource; /* internal, for tests: read instead of
+                                 * the system clock; NULL for it */
 };
 
 xp3ErrCode

@@ -3,8 +3,7 @@
 # All jobs use the public Fedora image, so no project-specific image is needed.
 # glibc-langpack-de provides a locale with a decimal comma, so testvalue checks
 # that number formatting ignores the locale.
-# Windows jobs (MSVC, MinGW) are added once it is clear whether this project
-# can use GNOME's Windows runners (tag "win32-ps").
+# The mingw and msvc jobs build on Windows, on GNOME's Windows runners.
 
 stages:
   - build
@@ -218,6 +217,61 @@ fuzz:long:
   when: manual
   trigger:
     include: .gitlab-ci/fuzz-long.yml
+
+# Windows: MSYS2 UCRT64 with libxml2 from MSYS2, built and tested as the
+# README describes. GNOME's Windows runners are shared and every run
+# installs its packages first, so the job runs by itself on test and
+# main, before a release, and is started by hand on other branches.
+# The runners use PowerShell; the build runs in the MSYS2 shell.
+mingw:
+  stage: build
+  needs: []
+  tags:
+    - win32-ps
+  variables:
+    MSYSTEM: UCRT64
+    CHERE_INVOKING: "yes"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"
+    - when: manual
+      allow_failure: true
+  before_script:
+    - $Env:Path="C:\msys64\usr\bin;$Env:Path"
+    - bash -lc 'sh .gitlab-ci/setup-mingw.sh'
+  script:
+    - bash -lc 'meson setup build --werror'
+    - bash -lc 'meson compile -C build'
+    - bash -lc 'meson test -C build --print-errorlogs'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - build/meson-logs/
+    reports:
+      junit: build/meson-logs/testlog.junit.xml
+
+# Windows with MSVC: Visual Studio 2019 and CMake, warnings as errors,
+# against a libxml2 release built with the same compiler
+# (.gitlab-ci/test-msvc.ps1). The libxml2 build is cached per version.
+# It runs when mingw does.
+msvc:
+  stage: build
+  needs: []
+  tags:
+    - win32-ps
+  variables:
+    LIBXML2_VERSION: v2.15.4
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "test"
+    - when: manual
+      allow_failure: true
+  before_script: []
+  script:
+    - .gitlab-ci/test-msvc.ps1
+  cache:
+    key: "msvc-libxml2-$LIBXML2_VERSION"
+    paths:
+      - libxml2-install/
 
 docs:
   stage: docs

@@ -238,6 +238,44 @@ xp3AtomicNewQName(const xmlChar *uri, const xmlChar *prefix,
 }
 
 /**
+ * Create a value of a date or time type: xs:dateTime,
+ * xs:dateTimeStamp, xs:date, xs:time or a g* type. The value is
+ * copied and not checked; parsing and casting do that.
+ *
+ * @param type   the type
+ * @param value  the properties, those the type lacks 0
+ * @returns the value with one reference, or NULL if memory allocation
+ *          failed or the type is not a date or time type
+ */
+xp3Atomic *
+xp3AtomicNewDateTime(xp3TypeId type, const xp3DateTime *value) {
+    xp3Atomic *atomic = atomicAlloc(type, XP3_REP_DATE_TIME);
+
+    if (atomic != NULL)
+        atomic->u.dt = *value;
+    return(atomic);
+}
+
+/**
+ * Create a value of a duration type: xs:duration,
+ * xs:yearMonthDuration or xs:dayTimeDuration. The value is copied and
+ * not checked; parsing and casting do that.
+ *
+ * @param type   the type
+ * @param value  the months and seconds, with the same sign
+ * @returns the value with one reference, or NULL if memory allocation
+ *          failed or the type is not a duration type
+ */
+xp3Atomic *
+xp3AtomicNewDuration(xp3TypeId type, const xp3Duration *value) {
+    xp3Atomic *atomic = atomicAlloc(type, XP3_REP_DURATION);
+
+    if (atomic != NULL)
+        atomic->u.dur = *value;
+    return(atomic);
+}
+
+/**
  * Add a reference to an atomic value.
  *
  * @param atomic  the value, may be NULL
@@ -268,8 +306,10 @@ boundedLength(const xmlChar *str, size_t max) {
 /**
  * Measure the payload of an atomic value: the bytes of a string, a
  * binary value or a QName, and the digits of a decimal. Values of the
- * other types have a fixed size and measure 0. Strings are counted
- * only up to max, so measuring one costs at most max + 1 steps.
+ * other types have a fixed size and measure 0: booleans, floats,
+ * doubles, and dates, times and durations, which are stored in the
+ * atomic value itself. Strings are counted only up to max, so
+ * measuring one costs at most max + 1 steps.
  *
  * @param atomic  the value
  * @param max     the size that matters
@@ -293,6 +333,9 @@ xp3AtomicSize(const xp3Atomic *atomic, size_t max) {
             if (size <= max)
                 size += boundedLength(atomic->u.qname.local, max - size);
             return(size);
+        case XP3_REP_DURATION:
+        case XP3_REP_DATE_TIME:
+            return(0);
         default:
             return(0);
     }
@@ -824,12 +867,12 @@ qnameToString(const xp3Atomic *atomic) {
  * Convert an atomic value to its canonical string, as casting to
  * xs:string does (F&O 3.1, 19.1.2): "true" or "false", the shortest
  * form of numbers, uppercase hex digits, padded base64, and
- * "prefix:local" for QNames.
+ * "prefix:local" for QNames, and for dates, times and durations the
+ * forms of xp3DateTimeToString() and xp3DurationToString().
  *
  * @param atomic  the value
  * @returns the string, to be freed with xmlFree(), or NULL if memory
- *          allocation failed or the type has no strings yet (dates,
- *          times and durations come with Part 10)
+ *          allocation failed
  */
 xmlChar *
 xp3AtomicToString(const xp3Atomic *atomic) {
@@ -851,6 +894,10 @@ xp3AtomicToString(const xp3Atomic *atomic) {
             return(binaryToString(atomic));
         case XP3_REP_QNAME:
             return(qnameToString(atomic));
+        case XP3_REP_DURATION:
+            return(xp3DurationToString(atomic->type, &atomic->u.dur));
+        case XP3_REP_DATE_TIME:
+            return(xp3DateTimeToString(atomic->type, &atomic->u.dt));
         default:
             return(NULL);
     }
@@ -892,6 +939,10 @@ atomicCopy(const xp3Atomic *atomic) {
             return(xp3AtomicNewQName(atomic->u.qname.uri,
                                      atomic->u.qname.prefix,
                                      atomic->u.qname.local));
+        case XP3_REP_DURATION:
+            return(xp3AtomicNewDuration(atomic->type, &atomic->u.dur));
+        case XP3_REP_DATE_TIME:
+            return(xp3AtomicNewDateTime(atomic->type, &atomic->u.dt));
         default:
             return(NULL);
     }
